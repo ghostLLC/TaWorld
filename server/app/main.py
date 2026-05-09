@@ -162,3 +162,33 @@ async def root():
 async def health_check():
     """健康检查接口"""
     return {"status": "ok"}
+
+
+@app.get("/api/v1/config", tags=["系统"])
+async def app_config():
+    """客户端配置接口 — 返回Flutter App需要的启动配置"""
+    settings = get_settings()
+    return {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "app_name": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "features": {
+                "ai_chat": bool(settings.LLM_API_KEY),
+                "weather_reminder": bool(settings.QWEATHER_API_KEY),
+                "push_notifications": bool(settings.FCM_SERVER_KEY),
+            },
+            "reminder_categories": [
+                {"key": "weather", "label": "天气提醒", "icon": "🌦️"},
+                {"key": "sleep", "label": "睡觉提醒", "icon": "🌙"},
+                {"key": "meal", "label": "吃饭提醒", "icon": "🍚"},
+                {"key": "custom", "label": "自定义提醒", "icon": "💝"},
+            ],
+            "relationship_types": [
+                {"key": "couple", "label": "情侣", "icon": "💑"},
+                {"key": "family", "label": "家人", "icon": "👨‍👩‍👧"},
+                {"key": "friend", "label": "朋友", "icon": "🤝"},
+            ],
+        },
+    }
