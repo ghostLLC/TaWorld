@@ -30,6 +30,9 @@ apscheduler==3.10.4
 # ==================== Utilities ====================
 python-dotenv==1.0.1
 
+# ==================== Object Storage ====================
+minio==7.2.20
+
 # ==================== Development ====================
 pytest==8.3.4
 pytest-asyncio==0.25.0

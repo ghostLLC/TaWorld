@@ -1,12 +1,12 @@
 """
 用户模块 — API 路由
 
-提供用户信息查询、更新、位置上报、设备注册接口。
+提供用户信息查询、更新、位置上报、设备注册、头像上传接口。
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.response import success_response
@@ -100,3 +100,56 @@ async def get_my_stats(
         "total_relationships": len(relationships),
         "reminder_stats": reminder_stats,
     })
+
+
+@router.post("/me/avatar", summary="上传头像")
+async def upload_avatar(
+    file: Annotated[UploadFile, File(description="头像图片，支持 JPEG/PNG/WebP，最大 2MB")],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    上传用户头像图片
+
+    - 支持格式: JPEG, PNG, WebP
+    - 最大大小: 2MB
+    - 上传后自动更新用户 avatar_url
+    """
+    from app.core.storage import StorageService
+
+    content = await file.read()
+    old_url = current_user.avatar_url
+
+    url = await StorageService.upload_avatar(content, file.content_type or "image/jpeg")
+
+    # Delete old avatar if it exists
+    if old_url:
+        await StorageService.delete_avatar(old_url)
+
+    # Update user
+    current_user.avatar_url = url
+    await db.flush()
+    await db.refresh(current_user)
+
+    return success_response(
+        data={"avatar_url": url},
+        message="头像上传成功",
+    )
+
+
+@router.delete("/me/avatar", summary="删除头像")
+async def delete_avatar(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """删除当前用户头像，恢复默认"""
+    from app.core.storage import StorageService
+
+    if current_user.avatar_url:
+        await StorageService.delete_avatar(current_user.avatar_url)
+
+    current_user.avatar_url = None
+    await db.flush()
+    await db.refresh(current_user)
+
+    return success_response(message="头像已删除")
