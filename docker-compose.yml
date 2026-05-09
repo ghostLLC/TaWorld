@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+  # ==================== FastAPI 后端 ====================
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: taworld-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./server/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./server:/app
+    restart: unless-stopped
+    networks:
+      - taworld-net
+
+  # ==================== PostgreSQL 数据库 ====================
+  postgres:
+    image: postgres:16-alpine
+    container_name: taworld-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taworld
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - taworld-net
+
+  # ==================== Redis 缓存/队列 ====================
+  redis:
+    image: redis:7-alpine
+    container_name: taworld-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - taworld-net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  taworld-net:
+    driver: bridge
