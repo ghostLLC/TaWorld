@@ -40,3 +40,4 @@ class WeatherCheckResult(BaseModel):
     should_remind: bool = Field(default=False, description="是否需要提醒")
     condition: str = Field(default="", description="触发条件")
     message: str = Field(default="", description="提醒消息")
+    error: str | None = Field(default=None, description="错误信息")

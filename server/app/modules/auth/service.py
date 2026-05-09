@@ -121,7 +121,8 @@ class AuthService:
             )
 
         # 验证用户是否存在
-        user = await UserService.get_user_by_id(db, user_id)
+        from uuid import UUID
+        user = await UserService.get_user_by_id(db, UUID(user_id))
         return AuthService._create_tokens(str(user.id))
 
     @staticmethod

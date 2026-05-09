@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import redis.asyncio as aioredis
 
+from app.common.exceptions import SystemException
 from app.core.config import get_settings
 from app.modules.weather.schemas import (
     WeatherCheckResult,
@@ -107,7 +108,7 @@ class WeatherService:
             )
         except Exception as e:
             logger.error(f"天气查询失败: {e}")
-            return WeatherCheckResult(should_remind=False)
+            return WeatherCheckResult(should_remind=False, error=str(e))
 
         current = weather.current
 
@@ -157,7 +158,13 @@ class WeatherService:
 
         Returns:
             解析后的天气响应
+
+        Raises:
+            ValueError: API Key 未配置
         """
+        if not settings.QWEATHER_API_KEY:
+            raise ValueError("QWeather API Key 未配置，请在 .env 中设置 QWEATHER_API_KEY")
+
         url = f"{settings.QWEATHER_BASE_URL}/weather/now"
         params = {
             "location": location,
@@ -167,20 +174,16 @@ class WeatherService:
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(url, params=params)
-            response.raise_for_status()
             data = response.json()
 
-        if data.get("code") != "200":
-            logger.error(f"和风天气 API 错误: {data}")
-            # 返回默认数据
-            return WeatherResponse(
-                city="未知",
-                current=WeatherCondition(
-                    text="未知",
-                    temp=0,
-                    feels_like=0,
-                    humidity=0,
-                ),
+        if response.status_code != 200 or data.get("code") != "200":
+            logger.error(
+                f"和风天气 API 错误 | status={response.status_code} | "
+                f"code={data.get('code')} | location={location}"
+            )
+            raise SystemException(
+                code=SystemException.EXTERNAL_SERVICE_ERROR,
+                message=f"天气服务暂不可用",
             )
 
         now = data.get("now", {})

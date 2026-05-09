@@ -8,8 +8,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, ForeignKey, String, Text, DateTime, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Boolean, Enum, ForeignKey, String, Text, DateTime, JSON, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, UUIDMixin, TimestampMixin
@@ -36,7 +35,7 @@ class ReminderConfig(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "reminder_configs"
 
     relationship_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("relationships.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -51,10 +50,10 @@ class ReminderConfig(Base, UUIDMixin, TimestampMixin):
         Boolean, default=True, nullable=False, comment="是否启用"
     )
     config: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict, comment="灵活配置项（JSON）"
+        JSON, nullable=False, default=dict, comment="灵活配置项（JSON）"
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("users.id"),
         nullable=False,
         comment="创建者用户ID",
@@ -76,20 +75,20 @@ class ReminderLog(Base, UUIDMixin):
     __tablename__ = "reminder_logs"
 
     config_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("reminder_configs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="提醒配置ID",
     )
     sender_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("users.id"),
         nullable=False,
         comment="提醒发送者（用户A）",
     )
     receiver_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("users.id"),
         nullable=False,
         comment="提醒接收者（用户B）",

@@ -107,7 +107,22 @@ async def _process_timed_config(
                     f"类型={config.category.value}, 时间={reminder_time}"
                 )
 
-                # TODO: 通过 FCM 推送通知给 A
+                # 通过 FCM 推送通知给 A
+                from app.core.push_service import PushService
+                await PushService.send(
+                    user_id=str(relationship.user_a_id),
+                    title={
+                        "sleep": "睡觉时间到 🌙",
+                        "meal": "吃饭时间到 🍚",
+                    }.get(config.category.value, "关怀提醒 💝"),
+                    body=message,
+                    data={
+                        "type": "timed_reminder",
+                        "log_id": str(log.id),
+                        "config_id": str(config.id),
+                        "category": config.category.value,
+                    },
+                )
 
     except Exception as e:
         logger.error(f"处理定时配置 {config.id} 失败: {e}")

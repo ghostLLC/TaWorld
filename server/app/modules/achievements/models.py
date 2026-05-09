@@ -7,8 +7,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, DateTime, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Boolean, ForeignKey, Integer, String, DateTime, JSON, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, UUIDMixin
@@ -32,7 +31,7 @@ class Achievement(Base, UUIDMixin):
         String(50), nullable=False, default="general", comment="成就分类"
     )
     unlock_condition: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict, comment="解锁条件（JSON）"
+        JSON, nullable=False, default=dict, comment="解锁条件（JSON）"
     )
     points: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, comment="成就积分"
@@ -48,14 +47,14 @@ class UserAchievement(Base, UUIDMixin):
     __tablename__ = "user_achievements"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="用户ID",
     )
     achievement_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("achievements.id", ondelete="CASCADE"),
         nullable=False,
         comment="成就ID",

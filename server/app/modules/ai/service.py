@@ -69,12 +69,11 @@ class AIService:
         """
         生成关怀建议
 
-        Args:
-            data: 建议请求（场景 + 上下文）
-
-        Returns:
-            AI 生成的建议和备选项
+        如果LLM API Key未配置或调用失败，自动降级为预设模板。
         """
+        if not settings.LLM_API_KEY:
+            return AIService._get_fallback_suggestion(data.scene, data.context)
+
         prompt_template = SUGGEST_PROMPTS.get(data.scene, SUGGEST_PROMPTS["custom"])
         prompt = prompt_template.format(context=str(data.context))
 
@@ -84,13 +83,18 @@ class AIService:
                 temperature=0.8,
             )
 
-            # 尝试解析 JSON 响应
             import json
-            parsed = json.loads(result)
-            return SuggestResponse(
-                suggestion=parsed.get("suggestion", result),
-                alternatives=parsed.get("alternatives", []),
-            )
+            try:
+                parsed = json.loads(result)
+                return SuggestResponse(
+                    suggestion=parsed.get("suggestion", result),
+                    alternatives=parsed.get("alternatives", []),
+                )
+            except (json.JSONDecodeError, KeyError):
+                return SuggestResponse(
+                    suggestion=result.strip(),
+                    alternatives=[],
+                )
         except Exception as e:
             logger.warning(f"AI 建议生成失败，使用默认模板: {e}")
             return AIService._get_fallback_suggestion(data.scene, data.context)
@@ -100,18 +104,16 @@ class AIService:
         """
         AI 对话交互
 
-        Args:
-            data: 对话请求（消息 + 历史）
-
-        Returns:
-            AI 回复
+        如果LLM不可用，返回友好的降级消息。
         """
+        if not settings.LLM_API_KEY:
+            return ChatResponse(
+                reply="我是Ta世界的AI关怀助手 💝 目前AI服务尚未配置，但你可以正常使用提醒、关系管理等功能。如需AI功能，请先配置LLM API Key。"
+            )
+
         messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
-
-        # 添加对话历史
-        for msg in data.history[-10:]:  # 保留最近10条历史
+        for msg in data.history[-10:]:
             messages.append(msg)
-
         messages.append({"role": "user", "content": data.message})
 
         try:
@@ -131,6 +133,10 @@ class AIService:
         调用 LLM API
 
         支持 OpenAI 兼容接口（OpenAI / 通义千问等）。
+
+        Raises:
+            ValueError: API Key 未配置
+            RuntimeError: API 返回非200状态码
         """
         if not settings.LLM_API_KEY:
             raise ValueError("LLM API Key 未配置")
@@ -149,9 +155,16 @@ class AIService:
 
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
 
+        if response.status_code != 200:
+            error_detail = response.text[:500]
+            logger.error(
+                f"LLM API 错误 | status={response.status_code} | "
+                f"model={settings.LLM_MODEL} | detail={error_detail}"
+            )
+            raise RuntimeError(f"LLM API returned {response.status_code}")
+
+        data = response.json()
         return data["choices"][0]["message"]["content"].strip()
 
     @staticmethod

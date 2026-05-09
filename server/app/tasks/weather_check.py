@@ -125,7 +125,19 @@ async def _process_weather_config(db, config: ReminderConfig, redis_client) -> N
                 f"条件={check_result.condition}, 消息={message}"
             )
 
-            # TODO: 通过 FCM 推送通知给 A
+            # 通过 FCM 推送通知给 A
+            from app.core.push_service import PushService
+            await PushService.send(
+                user_id=str(user_a_id),
+                title="天气提醒 🌦️",
+                body=message,
+                data={
+                    "type": "weather_reminder",
+                    "log_id": str(log.id),
+                    "config_id": str(config.id),
+                    "condition": check_result.condition,
+                },
+            )
 
     except Exception as e:
         logger.error(f"处理天气配置 {config.id} 失败: {e}")

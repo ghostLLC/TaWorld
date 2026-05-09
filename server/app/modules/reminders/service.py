@@ -146,7 +146,18 @@ class ReminderService:
         await db.flush()
         await db.refresh(log)
 
-        # TODO: 触发 FCM 推送
+        # 触发 FCM 推送通知给接收者B
+        from app.core.push_service import PushService
+        await PushService.send(
+            user_id=str(receiver_id),
+            title="你收到一条关怀提醒 💝",
+            body=data.message or "有人提醒你啦",
+            data={
+                "type": "reminder",
+                "log_id": str(log.id),
+                "config_id": str(config_id),
+            },
+        )
 
         return log
 
@@ -189,7 +200,23 @@ class ReminderService:
         await db.flush()
         await db.refresh(log)
 
-        # TODO: 推送确认通知给 A，更新成就进度
+        # 推送确认通知给发送者A
+        from app.core.push_service import PushService
+        await PushService.send(
+            user_id=str(log.sender_id),
+            title="Ta已收到你的关怀 💚",
+            body="你的提醒已被确认收到",
+            data={
+                "type": "confirmation",
+                "log_id": str(log.id),
+            },
+        )
+
+        # 更新成就进度
+        from app.modules.achievements.service import AchievementService
+        await AchievementService.update_progress(
+            db, log.sender_id, "初次守护", increment=1
+        )
 
         return log
 

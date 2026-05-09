@@ -3,9 +3,9 @@
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.achievements.models import Achievement, UserAchievement
@@ -33,10 +33,8 @@ class AchievementService:
 
         已解锁和未解锁的成就都会返回。
         """
-        # 获取所有成就定义
         all_achievements = await AchievementService.get_all_achievements(db)
 
-        # 获取用户的成就进度
         result = await db.execute(
             select(UserAchievement).where(UserAchievement.user_id == user_id)
         )
@@ -44,7 +42,6 @@ class AchievementService:
             ua.achievement_id: ua for ua in result.scalars().all()
         }
 
-        # 合并数据
         items = []
         for achievement in all_achievements:
             ua = user_achievements_map.get(achievement.id)
@@ -70,22 +67,27 @@ class AchievementService:
         user_id: uuid.UUID,
         achievement_name: str,
         increment: int = 1,
+        context: dict | None = None,
     ) -> UserAchievement | None:
         """
         更新成就进度（内部调用）
 
-        如果满足解锁条件，自动解锁成就。
+        根据成就的 unlock_condition.type 使用不同的判断逻辑：
+        - count 型: 简单递增计数
+        - streak_days: 检查连续N天活跃
+        - mutual_reminder_count: 检查双向互动次数
+        - relationship_days: 检查关系天数
 
         Args:
             db: 数据库 Session
             user_id: 用户 ID
             achievement_name: 成就名称
-            increment: 进度增量
+            increment: 进度增量（count型使用）
+            context: 额外上下文（partner_id 等，mutual/relationship型需要）
 
         Returns:
-            更新后的用户成就记录，如果成就不存在则返回 None
+            更新后的用户成就记录
         """
-        # 查找成就定义
         result = await db.execute(
             select(Achievement).where(Achievement.name == achievement_name)
         )
@@ -93,7 +95,38 @@ class AchievementService:
         if not achievement:
             return None
 
-        # 查找或创建用户成就记录
+        unlock_type = achievement.unlock_condition.get("type", "count")
+
+        # 根据类型计算进度值
+        if unlock_type == "streak_days":
+            progress = await AchievementService._calc_streak_progress(db, user_id)
+        elif unlock_type == "mutual_reminder_count":
+            partner_id = (context or {}).get("partner_id")
+            progress = await AchievementService._calc_mutual_progress(
+                db, user_id, partner_id
+            ) if partner_id else 0
+        elif unlock_type == "relationship_days":
+            partner_id = (context or {}).get("partner_id")
+            progress = await AchievementService._calc_relationship_days(
+                db, user_id, partner_id
+            ) if partner_id else 0
+        else:
+            # count / reminder_complete / sleep_reminder_count 等简单计数型
+            progress = None  # 使用增量模式
+
+        return await AchievementService._apply_progress(
+            db, user_id, achievement, increment, progress
+        )
+
+    @staticmethod
+    async def _apply_progress(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        achievement: Achievement,
+        increment: int,
+        absolute_progress: int | None,
+    ) -> UserAchievement:
+        """应用进度更新并检查解锁"""
         result = await db.execute(
             select(UserAchievement).where(
                 UserAchievement.user_id == user_id,
@@ -111,14 +144,15 @@ class AchievementService:
             )
             db.add(user_achievement)
 
-        # 已解锁则不再更新
         if user_achievement.unlocked:
             return user_achievement
 
-        # 更新进度
-        user_achievement.progress += increment
+        # 更新进度：绝对进度优先，否则增量
+        if absolute_progress is not None:
+            user_achievement.progress = max(user_achievement.progress, absolute_progress)
+        else:
+            user_achievement.progress += increment
 
-        # 检查是否满足解锁条件
         target = achievement.unlock_condition.get("target", 1)
         if user_achievement.progress >= target:
             user_achievement.unlocked = True
@@ -126,6 +160,102 @@ class AchievementService:
 
         await db.flush()
         return user_achievement
+
+    @staticmethod
+    async def _calc_streak_progress(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+    ) -> int:
+        """计算用户连续活跃天数（有提醒记录的天数）"""
+        from app.modules.reminders.models import ReminderLog
+
+        today = datetime.now(timezone.utc).date()
+        streak = 0
+
+        for day_offset in range(30):  # 最多回溯30天
+            check_date = today - timedelta(days=day_offset)
+            day_start = datetime(check_date.year, check_date.month, check_date.day, tzinfo=timezone.utc)
+            day_end = day_start + timedelta(days=1)
+
+            result = await db.execute(
+                select(func.count(ReminderLog.id)).where(
+                    ReminderLog.sender_id == user_id,
+                    ReminderLog.triggered_at >= day_start,
+                    ReminderLog.triggered_at < day_end,
+                )
+            )
+            count = result.scalar() or 0
+
+            if count > 0:
+                streak += 1
+            else:
+                break  # 连续中断
+
+        return streak
+
+    @staticmethod
+    async def _calc_mutual_progress(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        partner_id: uuid.UUID,
+    ) -> int:
+        """计算双向互动次数（A和B互相发送提醒的次数）"""
+        from app.modules.reminders.models import ReminderLog, ReminderLogStatus
+
+        # A→B 已发送的提醒数
+        result = await db.execute(
+            select(func.count(ReminderLog.id)).where(
+                ReminderLog.sender_id == user_id,
+                ReminderLog.receiver_id == partner_id,
+                ReminderLog.status.in_([
+                    ReminderLogStatus.SENT, ReminderLogStatus.CONFIRMED,
+                ]),
+            )
+        )
+        a_to_b = result.scalar() or 0
+
+        # B→A 已发送的提醒数
+        result = await db.execute(
+            select(func.count(ReminderLog.id)).where(
+                ReminderLog.sender_id == partner_id,
+                ReminderLog.receiver_id == user_id,
+                ReminderLog.status.in_([
+                    ReminderLogStatus.SENT, ReminderLogStatus.CONFIRMED,
+                ]),
+            )
+        )
+        b_to_a = result.scalar() or 0
+
+        # 双向奔赴取较小值（双方都需要达到）
+        return min(a_to_b, b_to_a)
+
+    @staticmethod
+    async def _calc_relationship_days(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        partner_id: uuid.UUID,
+    ) -> int:
+        """计算关系建立天数"""
+        from app.modules.relationships.models import Relationship, RelationshipStatus
+
+        result = await db.execute(
+            select(Relationship.created_at).where(
+                Relationship.status == RelationshipStatus.ACTIVE,
+                (
+                    (Relationship.user_a_id == user_id) & (Relationship.user_b_id == partner_id)
+                ) | (
+                    (Relationship.user_a_id == partner_id) & (Relationship.user_b_id == user_id)
+                ),
+            )
+        )
+        created_at = result.scalar_one_or_none()
+
+        if not created_at:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        delta = now - created_at.replace(tzinfo=timezone.utc)
+        return max(0, delta.days)
 
     @staticmethod
     async def seed_achievements(db: AsyncSession) -> None:
@@ -136,7 +266,7 @@ class AchievementService:
         """
         result = await db.execute(select(Achievement).limit(1))
         if result.scalar_one_or_none():
-            return  # 已有数据，跳过
+            return
 
         default_achievements = [
             Achievement(

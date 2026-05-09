@@ -8,8 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from sqlalchemy import DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, Uuid, func
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -63,7 +62,7 @@ class UUIDMixin:
     """UUID 主键 Mixin"""
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid,
         primary_key=True,
         default=uuid.uuid4,
     )
