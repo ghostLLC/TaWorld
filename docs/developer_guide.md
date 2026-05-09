@@ -11,10 +11,11 @@
 
 | 指标 | 数据 |
 |------|------|
-| 文件总数 | 62 个 |
-| API 路由 | 31 个（27 业务 + 4 系统） |
+| 文件总数 | 80+ 个 |
+| API 路由 | 35 个（30 业务 + 5 系统） |
 | 数据库表 | 8 张（与 architecture.md ER 图一致） |
 | 业务模块 | 7 个（auth/users/relationships/reminders/weather/achievements/ai） |
+| 测试用例 | 33 个（覆盖 8 个测试文件） |
 | Python 依赖 | 已全部安装到 `server/venv/` |
 
 ---
@@ -314,30 +315,26 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ---
 
-## 八、待实现的 TODO 清单
+## 八、当前开发状态
 
-以下是骨架代码中标记了 `# TODO` 的位置，需要后续开发者完善：
+骨架代码中的 `# TODO` 已全部清除。以下为各模块实现状态：
 
-| 文件 | TODO 内容 | 优先级 |
-|------|----------|--------|
-| `modules/reminders/service.py` | `send_reminder()` 中的 FCM 推送集成 | 🔴 P0 |
-| `modules/reminders/service.py` | `confirm_reminder()` 中推送确认通知给 A + 更新成就进度 | 🟡 P1 |
-| `tasks/weather_check.py` | 天气提醒触发后通过 FCM 推送通知给用户 A | 🔴 P0 |
-| `tasks/reminder_trigger.py` | 定时提醒触发后通过 FCM 推送通知给用户 A | 🔴 P0 |
-| `modules/weather/service.py` | 需要在 `.env` 中配置真实的和风天气 API Key | 🔴 P0 |
-| `modules/ai/service.py` | 需要在 `.env` 中配置 LLM API Key（OpenAI/通义千问） | 🟡 P1 |
-| `modules/achievements/service.py` | 完善不同类型成就的解锁判定逻辑（目前仅基于 target 数量） | 🟢 P2 |
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| FCM 推送 | ✅ 完成 | PushService 已集成到 send_reminder / confirm_reminder / weather_check / reminder_trigger，未配置 Key 时优雅降级 |
+| 成就解锁 | ✅ 完成 | 支持 4 种类型：count / streak_days / mutual_reminder_count / relationship_days |
+| 天气服务 | ✅ 完成 | API Key 验证、详细错误日志、WeatherCheckResult.error 字段 |
+| AI 服务 | ✅ 完成 | LLM 未配置时直接降级到预设模板，JSON 解析容错 |
+| 频率限制 | ✅ 完成 | 认证接口 10req/60s，localhost 豁免 |
+| 头像上传 | ✅ 完成 | MinIO 存储，POST/DELETE /users/me/avatar |
+| 提醒统计 | ✅ 完成 | GET /reminders/stats 和 GET /users/me/stats |
+| 客户端配置 | ✅ 完成 | GET /api/v1/config 返回功能开关和 UI 常量 |
 
-### 建议开发顺序
+### 下一步开发
 
-1. **配置环境** — 填写 `.env`，启动数据库，执行迁移
-2. **验证认证流程** — 注册 → 登录 → Token刷新 → 访问受保护接口
-3. **完善关系模块** — 邀请 → 加入 → 验证
-4. **集成 FCM 推送** — 这是所有提醒功能的前提
-5. **接入天气 API** — 配置 API Key，验证天气查询
-6. **完善提醒闭环** — 触发 → 推送 → A提醒B → B确认 → 成就更新
-7. **AI 集成** — 配置 LLM，验证建议生成
-8. **Flutter 前端** — 开始移动端开发
+1. **配置 API Key** — 在 `.env` 中填入 QWEATHER_API_KEY / LLM_API_KEY / FCM_SERVER_KEY
+2. **Flutter 前端** — SDK 已安装，开始移动端开发
+3. **启动 MinIO** — `docker-compose up -d minio` 激活头像上传功能
 
 ---
 
