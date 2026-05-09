@@ -98,6 +98,11 @@ def create_app() -> FastAPI:
     )
 
     # ==================== 中间件 ====================
+
+    # 频率限制（认证接口）
+    from app.common.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],  # 开发阶段允许所有来源，生产环境需限制
