@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # ---- Backend (from server/) ----
 venv\Scripts\activate                          # activate venv
 uvicorn app.main:app --reload --port 8000      # dev server
-pytest                                         # all tests (26)
+pytest                                         # all tests (33)
 pytest tests/test_auth.py -k test_login        # single test
 
 # Database (from server/ — Chinese Windows MUST set PYTHONUTF8=1)
@@ -35,13 +35,13 @@ models.py  →  schemas.py  →  service.py  →  router.py
   (DB)         (validation)    (logic)        (HTTP)
 ```
 
-**Core layer** (`server/app/core/`): `config.py` (pydantic-settings), `database.py` (async engine + `UUIDMixin`/`TimestampMixin`), `security.py` (JWT + bcrypt), `dependencies.py` (auth deps + Redis pool), `push_service.py` (FCM with graceful degradation).
+**Core layer** (`server/app/core/`): `config.py` (pydantic-settings), `database.py` (async engine + `UUIDMixin`/`TimestampMixin`), `security.py` (JWT + bcrypt), `dependencies.py` (auth deps + Redis pool), `push_service.py` (FCM with graceful degradation), `storage.py` (MinIO avatar upload, degrades gracefully when MinIO unreachable).
 
 **Common layer** (`server/app/common/`): `response.py` (unified `{code, message, data}`), `exceptions.py` (hierarchy: `1xxx` Auth, `2xxx` User, `3xxx` Relationship, `4xxx` Reminder, `5xxx` System), `pagination.py`, `rate_limit.py` (auth endpoints: 10req/60s, localhost exempt).
 
 **Tasks** (`server/app/tasks/`): APScheduler — weather check (hourly), timed reminder (per minute). Started in FastAPI `lifespan`, use `async_session_factory()` directly (must commit/rollback manually).
 
-**Infrastructure**: PostgreSQL 16 + Redis 7 via Docker Compose. Both containers are running and healthy. Database has 9 tables (8 business + `alembic_version`) at migration `0001`.
+**Infrastructure**: PostgreSQL 16 + Redis 7 via Docker Compose (both healthy). MinIO service defined in `docker-compose.yml` for avatar storage (image pull may fail on mainland China networks — code degrades gracefully). Database has 9 tables at migration `0001`.
 
 **Flutter**: SDK 3.41.9 installed at `C:\flutter\`. Android toolchain ready (SDK 36). PATH includes `C:\flutter\bin`.
 
@@ -70,7 +70,7 @@ Use `Base, UUIDMixin, TimestampMixin` from `database.py`. Types use cross-DB SQL
 | Module | Key endpoints |
 |--------|--------------|
 | Auth | `POST register/login/refresh` |
-| Users | `GET/PUT /me`, `PUT /me/location`, `POST /me/devices`, `GET /me/stats` |
+| Users | `GET/PUT /me`, `PUT /me/location`, `POST /me/devices`, `GET /me/stats`, `POST/DELETE /me/avatar` |
 | Relationships | `POST invite/join`, `GET/PUT/DELETE /{id}`, `GET ""` (list with partner info) |
 | Reminders | CRUD configs, `POST send/confirm`, `GET logs/stats` |
 | Weather | `GET /current` |
@@ -87,3 +87,4 @@ Use `Base, UUIDMixin, TimestampMixin` from `database.py`. Types use cross-DB SQL
 - **AI and Push degrade gracefully**: if API keys are missing, AI returns preset fallback templates and PushService just logs. No errors thrown.
 - **Achievement unlock logic** supports 4 types: `count` (simple increment), `streak_days` (consecutive days with reminders), `mutual_reminder_count` (min of A→B and B→A), `relationship_days` (days since relationship created). Pass `context={"partner_id": ...}` for mutual/relationship types.
 - **Test database** at `server/test.db` is gitignored (`*.db` in `.gitignore`).
+- **Avatar upload** uses `StorageService` from `app/core/storage.py`. Accepts JPEG/PNG/WebP (max 2MB). When MinIO is unreachable, raises `SystemException(503)`. Old avatar is auto-deleted on new upload.
