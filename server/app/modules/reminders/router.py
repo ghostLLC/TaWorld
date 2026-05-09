@@ -147,3 +147,15 @@ async def get_reminder_logs(
             for log in logs
         ]
     )
+
+
+# ==================== 提醒统计 ====================
+
+@router.get("/reminders/stats", summary="获取提醒统计")
+async def get_reminder_stats(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取当前用户的提醒统计数据：总数、连续天数、分类汇总"""
+    stats = await ReminderService.get_user_stats(db, current_user.id)
+    return success_response(data=stats)

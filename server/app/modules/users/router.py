@@ -77,3 +77,26 @@ async def register_device(
     return success_response(
         data=DeviceResponse.model_validate(device).model_dump(mode="json")
     )
+
+
+@router.get("/me/stats", summary="获取用户概览统计")
+async def get_my_stats(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取当前用户的概览统计：关系数、提醒统计等"""
+    from app.modules.reminders.service import ReminderService
+    from app.modules.relationships.service import RelationshipService
+
+    relationships = await RelationshipService.get_user_relationships(
+        db, current_user.id
+    )
+    reminder_stats = await ReminderService.get_user_stats(db, current_user.id)
+
+    return success_response(data={
+        "nickname": current_user.nickname,
+        "avatar_url": current_user.avatar_url,
+        "relationship_count": len([r for r in relationships if r.status.value == "active"]),
+        "total_relationships": len(relationships),
+        "reminder_stats": reminder_stats,
+    })

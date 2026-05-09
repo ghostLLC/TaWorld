@@ -57,11 +57,18 @@ class RelationshipResponse(BaseModel):
 
 
 class RelationshipListItem(BaseModel):
-    """关系列表项"""
+    """关系列表项（含对方信息）"""
     id: uuid.UUID
     type: RelationshipType
     status: RelationshipStatus
+    partner_id: uuid.UUID | None = None
     partner_nickname: str | None = None
-    partner_name: str | None = None
-    my_nickname: str | None = None
+    partner_avatar_url: str | None = None
+    my_nickname_for_them: str | None = None
     created_at: datetime
+
+
+class RelationshipDetailResponse(RelationshipResponse):
+    """关系详情（含双方简要信息）"""
+    user_a_name: str | None = None
+    user_b_name: str | None = None

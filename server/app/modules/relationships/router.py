@@ -17,6 +17,7 @@ from app.modules.relationships.schemas import (
     InviteRequest,
     InviteResponse,
     JoinRequest,
+    RelationshipListItem,
     RelationshipResponse,
     RelationshipUpdate,
 )
@@ -61,16 +62,28 @@ async def get_my_relationships(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """获取当前用户的所有关系列表"""
+    """获取当前用户的所有关系列表（含对方信息）"""
     relationships = await RelationshipService.get_user_relationships(
         db, current_user.id
     )
-    return success_response(
-        data=[
-            RelationshipResponse.model_validate(r).model_dump(mode="json")
-            for r in relationships
-        ]
-    )
+    items = []
+    for r in relationships:
+        is_a = r.user_a_id == current_user.id
+        partner = r.user_b if is_a else r.user_a
+        my_nickname = r.nickname_a_for_b if is_a else r.nickname_b_for_a
+        items.append(
+            RelationshipListItem(
+                id=r.id,
+                type=r.type,
+                status=r.status,
+                partner_id=partner.id if partner else None,
+                partner_nickname=partner.nickname if partner else None,
+                partner_avatar_url=partner.avatar_url if partner else None,
+                my_nickname_for_them=my_nickname,
+                created_at=r.created_at,
+            ).model_dump(mode="json")
+        )
+    return success_response(data=items)
 
 
 @router.get("/{relationship_id}", summary="获取关系详情")

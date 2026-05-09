@@ -5,7 +5,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.exceptions import ReminderException
@@ -234,3 +234,69 @@ class ReminderService:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_user_stats(
+        db: AsyncSession,
+        user_id: uuid.UUID,
+    ) -> dict:
+        """获取用户提醒统计"""
+        from datetime import timedelta
+
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        week_ago = today - timedelta(days=7)
+
+        # 总提醒数（发送+接收）
+        sent_count = await db.scalar(
+            select(func.count(ReminderLog.id)).where(ReminderLog.sender_id == user_id)
+        ) or 0
+        received_count = await db.scalar(
+            select(func.count(ReminderLog.id)).where(ReminderLog.receiver_id == user_id)
+        ) or 0
+
+        # 本周提醒数
+        week_sent = await db.scalar(
+            select(func.count(ReminderLog.id)).where(
+                ReminderLog.sender_id == user_id,
+                ReminderLog.triggered_at >= week_ago,
+            )
+        ) or 0
+
+        # 连续活跃天数
+        streak = 0
+        for day_offset in range(30):
+            check_date = (today - timedelta(days=day_offset)).date()
+            day_start = datetime(check_date.year, check_date.month, check_date.day, tzinfo=timezone.utc)
+            day_end = day_start + timedelta(days=1)
+            day_count = await db.scalar(
+                select(func.count(ReminderLog.id)).where(
+                    ReminderLog.sender_id == user_id,
+                    ReminderLog.triggered_at >= day_start,
+                    ReminderLog.triggered_at < day_end,
+                )
+            ) or 0
+            if day_count > 0:
+                streak += 1
+            else:
+                break
+
+        # 分类统计
+        from app.modules.reminders.models import ReminderConfig, ReminderCategory
+        cat_result = await db.execute(
+            select(
+                ReminderConfig.category,
+                func.count(ReminderLog.id),
+            )
+            .join(ReminderLog, ReminderLog.config_id == ReminderConfig.id)
+            .where(ReminderLog.sender_id == user_id)
+            .group_by(ReminderConfig.category)
+        )
+        by_category = {row[0].value: row[1] for row in cat_result.all()}
+
+        return {
+            "total_sent": sent_count,
+            "total_received": received_count,
+            "week_sent": week_sent,
+            "active_streak_days": streak,
+            "by_category": by_category,
+        }

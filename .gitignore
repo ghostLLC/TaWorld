@@ -33,6 +33,7 @@ ENV/
 .coverage
 htmlcov/
 .tox/
+*.db
 
 # MyPy
 .mypy_cache/
