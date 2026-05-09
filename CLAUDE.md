@@ -5,25 +5,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Common Commands
 
 ```bash
-# Activate virtual environment (Windows)
-server\venv\Scripts\activate
+# ---- Backend (from server/) ----
+venv\Scripts\activate                          # activate venv
+uvicorn app.main:app --reload --port 8000      # dev server
+pytest                                         # all tests (26)
+pytest tests/test_auth.py -k test_login        # single test
 
-# Run dev server (from server/)
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# Run tests (from server/)
-pytest                                    # all tests
-pytest tests/test_auth.py                 # single file
-pytest tests/test_auth.py -k test_login   # specific test
-
-# Database migrations (from server/)
-alembic revision --autogenerate -m "description"   # generate
-alembic upgrade head                                # apply
-alembic downgrade -1                                # rollback
+# Database (from server/ — Chinese Windows MUST set PYTHONUTF8=1)
+$env:PYTHONUTF8=1; alembic upgrade head        # apply migrations
+$env:PYTHONUTF8=1; alembic revision --autogenerate -m "desc"  # generate new migration
+$env:PYTHONUTF8=1; alembic downgrade -1        # rollback
 
 # Infrastructure (from repo root)
-docker-compose up -d postgres redis       # just DB + cache
-docker-compose up -d                      # full stack
+docker-compose up -d postgres redis            # start DB + cache
+docker-compose ps                              # check status
+
+# ---- Flutter (when frontend is created) ----
+flutter doctor                                 # verify environment
+flutter create app                             # create Flutter project in app/
+cd app; flutter run -d chrome                  # run in browser
 ```
 
 ## Architecture
@@ -35,57 +35,55 @@ models.py  →  schemas.py  →  service.py  →  router.py
   (DB)         (validation)    (logic)        (HTTP)
 ```
 
-Modules are in `server/app/modules/`: `auth`, `users`, `relationships`, `reminders`, `weather`, `achievements`, `ai`.
+**Core layer** (`server/app/core/`): `config.py` (pydantic-settings), `database.py` (async engine + `UUIDMixin`/`TimestampMixin`), `security.py` (JWT + bcrypt), `dependencies.py` (auth deps + Redis pool), `push_service.py` (FCM with graceful degradation).
 
-**Core layer** (`server/app/core/`): config, database engine/session/mixins, JWT/password security, and FastAPI dependencies (`get_current_user`, `get_current_active_user`, `get_redis`).
+**Common layer** (`server/app/common/`): `response.py` (unified `{code, message, data}`), `exceptions.py` (hierarchy: `1xxx` Auth, `2xxx` User, `3xxx` Relationship, `4xxx` Reminder, `5xxx` System), `pagination.py`, `rate_limit.py` (auth endpoints: 10req/60s, localhost exempt).
 
-**Common layer** (`server/app/common/`): unified response helpers, custom exception hierarchy with error codes, and pagination utility.
+**Tasks** (`server/app/tasks/`): APScheduler — weather check (hourly), timed reminder (per minute). Started in FastAPI `lifespan`, use `async_session_factory()` directly (must commit/rollback manually).
 
-**Tasks** (`server/app/tasks/`): APScheduler jobs — weather check runs hourly, timed reminder check runs every minute. Scheduler starts/stops in the FastAPI `lifespan`.
+**Infrastructure**: PostgreSQL 16 + Redis 7 via Docker Compose. Both containers are running and healthy. Database has 9 tables (8 business + `alembic_version`) at migration `0001`.
+
+**Flutter**: SDK 3.41.9 installed at `C:\flutter\`. Android toolchain ready (SDK 36). PATH includes `C:\flutter\bin`.
 
 ## Key Conventions
 
 ### Response format
-All endpoints must return `{code, message, data}` via helpers in `app/common/response.py`. Never return raw dicts.
+All endpoints return `{code: 0, message: "success", data: {...}}`. Use helpers: `success_response()`, `paginated_response()`. Never return raw dicts.
 
 ### Error handling
-Use custom exceptions from `app/common/exceptions.py`, never `raise HTTPException` directly. Each module has its own exception class with predefined error codes:
-- `1xxx` AuthException
-- `2xxx` UserException
-- `3xxx` RelationshipException
-- `4xxx` ReminderException
-- `5xxx` SystemException
-
-The global exception handler in `exceptions.py` catches `AppException` and converts it to the unified response format.
+Use custom exceptions from `app/common/exceptions.py`. Never `raise HTTPException` directly. The global handler converts `AppException` to unified response format.
 
 ### Authentication
-Protected routes use `current_user: Annotated[User, Depends(get_current_active_user)]`. The `get_current_user` dependency validates the JWT and fetches the User from DB. `get_current_active_user` wraps it (extension point for user-status checks).
+Protected routes use `current_user: Annotated[User, Depends(get_current_active_user)]`. The `get_current_user` dep validates JWT + fetches User. `get_current_active_user` wraps it (extension point for status checks).
 
 ### Database session
-`get_db()` is an async generator dependency — it auto-commits on success and auto-rollbacks on exception. No need for explicit `await db.commit()` in services called from routes. However, scheduled tasks that create their own sessions via `async_session_factory()` must commit/rollback manually.
+`get_db()` auto-commits on success, auto-rollbacks on exception. Services called from routes don't need explicit `commit()`. Tasks using `async_session_factory()` directly MUST commit/rollback manually.
 
 ### Models
-Use `Base, UUIDMixin, TimestampMixin` from `app/core/database.py`. UUIDMixin provides `id: UUID` PK. TimestampMixin provides `created_at`/`updated_at` (auto-maintained by the DB).
+Use `Base, UUIDMixin, TimestampMixin` from `database.py`. Types use cross-DB SQLAlchemy 2.0: `sa.Uuid` (not `postgresql.UUID`), `sa.JSON` (not `postgresql.JSONB`). This allows SQLite for tests and PostgreSQL for production.
+
+### Push notifications
+`PushService.send()` from `app/core/push_service.py`. When `FCM_SERVER_KEY` is not configured, it logs the message and returns (no error). This means all TODO locations (reminders, weather_check, reminder_trigger) are wired and working — they just need a real key to actually deliver.
+
+## API Overview (35 routes)
+
+| Module | Key endpoints |
+|--------|--------------|
+| Auth | `POST register/login/refresh` |
+| Users | `GET/PUT /me`, `PUT /me/location`, `POST /me/devices`, `GET /me/stats` |
+| Relationships | `POST invite/join`, `GET/PUT/DELETE /{id}`, `GET ""` (list with partner info) |
+| Reminders | CRUD configs, `POST send/confirm`, `GET logs/stats` |
+| Weather | `GET /current` |
+| Achievements | `GET /achievements`, `GET /users/me/achievements` |
+| AI | `POST /suggest`, `POST /chat` |
+| System | `GET /`, `GET /health`, `GET /api/v1/config` |
 
 ## Gotchas
 
-- **Tests use SQLite** (`sqlite+aiosqlite:///./test.db`) not PostgreSQL. The `auth_client` fixture registers a new user on every call — tests sharing the same phone number will fail with duplicate errors.
-- **Weather module has no DB models** — all weather data is cached in Redis (TTL 30 min). The module only has `schemas.py`, `service.py`, `router.py`.
-- **Reminder direction**: the system reminds user A to care about user B. In `weather_check.py`, the `receiver_id` on the log is set to `user_a_id` (the person receiving the nudge to care). `send_reminder` marks A→B communication; `confirm_reminder` is B acknowledging.
-- **JSONB flexibility**: `reminder_configs.config` and `achievements.unlock_condition` are JSONB. The reminder config structure differs by category (weather vs sleep vs meal vs custom). See `docs/architecture.md` for examples.
-- **Enum types**: `RelationshipType`, `RelationshipStatus`, `ReminderCategory`, `ReminderLogStatus` are PostgreSQL native enums (not varchar). Alembic must detect these.
-- **No migration files yet**: `alembic/versions/` is empty. First `alembic revision --autogenerate` will generate the initial schema.
-
-## TODO Hotspots
-
-These are the marked `# TODO` items in the codebase that need implementation:
-
-| Priority | Location | What |
-|----------|----------|------|
-| P0 | `reminders/service.py` L149, L192 | FCM push integration for send & confirm |
-| P0 | `tasks/weather_check.py` L128 | FCM push after weather trigger |
-| P0 | `tasks/reminder_trigger.py` L110 | FCM push after timed trigger |
-| P0 | `.env` | Real QWeather API key |
-| P1 | `.env` | Real LLM API key |
-| P1 | `reminders/service.py` L192 | Update achievement progress on confirm |
-| P2 | `achievements/service.py` | Full unlock logic for different achievement types (currently only checks `target` count) |
+- **`PYTHONUTF8=1` required** for Alembic on Chinese Windows (alembic reads config with `encoding="locale"` which is GBK, failing on ASCII-incompatible bytes).
+- **Tests use SQLite** (`sqlite+aiosqlite:///./test.db`) with an `autouse` fixture that creates/drops tables per test and seeds achievement data. The `auth_client` fixture generates unique phone numbers per call.
+- **Weather module has no DB models** — all data is Redis-cached (TTL 30 min). It only has `schemas.py`, `service.py`, `router.py`.
+- **Reminder direction**: the system notifies `config.created_by` (the person being prompted to care) about the partner (the other user in the relationship). Both `weather_check.py` and `reminder_trigger.py` now respect `created_by` — not hardcoded `user_a`.
+- **AI and Push degrade gracefully**: if API keys are missing, AI returns preset fallback templates and PushService just logs. No errors thrown.
+- **Achievement unlock logic** supports 4 types: `count` (simple increment), `streak_days` (consecutive days with reminders), `mutual_reminder_count` (min of A→B and B→A), `relationship_days` (days since relationship created). Pass `context={"partner_id": ...}` for mutual/relationship types.
+- **Test database** at `server/test.db` is gitignored (`*.db` in `.gitignore`).
