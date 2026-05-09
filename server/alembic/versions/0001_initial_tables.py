@@ -11,38 +11,29 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-# revision identifiers, used by Alembic.
+# revision identifiers
 revision: str = '0001'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _create_enum_safe(name: str, values: list[str]) -> None:
+    """Safely create a PostgreSQL enum type, ignoring if already exists."""
+    try:
+        bind = op.get_bind()
+        enum_type = postgresql.ENUM(*values, name=name, create_type=True)
+        enum_type.create(bind, checkfirst=True)
+    except Exception:
+        pass  # type already exists
+
+
 def upgrade() -> None:
     # ---- Enum types ----
-    relationshiptype = postgresql.ENUM(
-        'couple', 'family', 'friend',
-        name='relationshiptype', create_type=True,
-    )
-    relationshiptype.create(op.get_bind(), checkfirst=True)
-
-    relationshipstatus = postgresql.ENUM(
-        'pending', 'active', 'dissolved',
-        name='relationshipstatus', create_type=True,
-    )
-    relationshipstatus.create(op.get_bind(), checkfirst=True)
-
-    remindercategory = postgresql.ENUM(
-        'weather', 'sleep', 'meal', 'custom',
-        name='remindercategory', create_type=True,
-    )
-    remindercategory.create(op.get_bind(), checkfirst=True)
-
-    reminderlogstatus = postgresql.ENUM(
-        'triggered', 'sent', 'confirmed',
-        name='reminderlogstatus', create_type=True,
-    )
-    reminderlogstatus.create(op.get_bind(), checkfirst=True)
+    _create_enum_safe('relationshiptype', ['couple', 'family', 'friend'])
+    _create_enum_safe('relationshipstatus', ['pending', 'active', 'dissolved'])
+    _create_enum_safe('remindercategory', ['weather', 'sleep', 'meal', 'custom'])
+    _create_enum_safe('reminderlogstatus', ['triggered', 'sent', 'confirmed'])
 
     # ---- users ----
     op.create_table(
@@ -83,8 +74,8 @@ def upgrade() -> None:
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('user_a_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
         sa.Column('user_b_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=True),
-        sa.Column('type', sa.Enum('couple', 'family', 'friend', name='relationshiptype', create_type=False), nullable=False, server_default='couple'),
-        sa.Column('status', sa.Enum('pending', 'active', 'dissolved', name='relationshipstatus', create_type=False), nullable=False, server_default='pending'),
+        sa.Column('type', postgresql.ENUM('couple', 'family', 'friend', name='relationshiptype', create_type=False), nullable=False, server_default='couple'),
+        sa.Column('status', postgresql.ENUM('pending', 'active', 'dissolved', name='relationshipstatus', create_type=False), nullable=False, server_default='pending'),
         sa.Column('invite_code', sa.String(20), unique=True, index=True, nullable=False),
         sa.Column('nickname_a_for_b', sa.String(50), nullable=True),
         sa.Column('nickname_b_for_a', sa.String(50), nullable=True),
@@ -96,7 +87,7 @@ def upgrade() -> None:
         'reminder_configs',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('relationship_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('relationships.id', ondelete='CASCADE'), nullable=False, index=True),
-        sa.Column('category', sa.Enum('weather', 'sleep', 'meal', 'custom', name='remindercategory', create_type=False), nullable=False),
+        sa.Column('category', postgresql.ENUM('weather', 'sleep', 'meal', 'custom', name='remindercategory', create_type=False), nullable=False),
         sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.text('true')),
         sa.Column('config', postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column('created_by', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
@@ -112,7 +103,7 @@ def upgrade() -> None:
         sa.Column('sender_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
         sa.Column('receiver_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
         sa.Column('message', sa.Text(), nullable=True),
-        sa.Column('status', sa.Enum('triggered', 'sent', 'confirmed', name='reminderlogstatus', create_type=False), nullable=False, server_default='triggered'),
+        sa.Column('status', postgresql.ENUM('triggered', 'sent', 'confirmed', name='reminderlogstatus', create_type=False), nullable=False, server_default='triggered'),
         sa.Column('triggered_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column('sent_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('confirmed_at', sa.DateTime(timezone=True), nullable=True),
@@ -152,8 +143,5 @@ def downgrade() -> None:
     op.drop_table('user_locations')
     op.drop_table('users')
 
-    # Drop enum types
-    postgresql.ENUM(name='reminderlogstatus').drop(op.get_bind(), checkfirst=True)
-    postgresql.ENUM(name='remindercategory').drop(op.get_bind(), checkfirst=True)
-    postgresql.ENUM(name='relationshipstatus').drop(op.get_bind(), checkfirst=True)
-    postgresql.ENUM(name='relationshiptype').drop(op.get_bind(), checkfirst=True)
+    for name in ['reminderlogstatus', 'remindercategory', 'relationshipstatus', 'relationshiptype']:
+        postgresql.ENUM(name=name).drop(op.get_bind(), checkfirst=True)
