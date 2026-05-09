@@ -78,20 +78,23 @@ async def _process_weather_config(db, config: ReminderConfig, redis_client) -> N
         if not relationship:
             return
 
-        # 确定需要查询天气的用户（对方）
-        # A 创建了提醒，查询 B 的位置天气来提醒 A
-        user_a_id = relationship.user_a_id
-        user_b_id = relationship.user_b_id
+        # 确定通知对象（创建配置的人）和天气目标（对方的城市）
+        notifier_id = config.created_by
+        target_id = (
+            relationship.user_b_id
+            if relationship.user_a_id == notifier_id
+            else relationship.user_a_id
+        )
 
-        if not user_b_id:
+        if not target_id:
             return
 
-        # 获取 B 的位置
+        # 获取对方的位置
         result = await db.execute(
-            select(UserLocation).where(UserLocation.user_id == user_b_id)
+            select(UserLocation).where(UserLocation.user_id == target_id)
         )
-        location_b = result.scalar_one_or_none()
-        if not location_b:
+        location_target = result.scalar_one_or_none()
+        if not location_target:
             return
 
         # 获取提醒条件
@@ -99,8 +102,8 @@ async def _process_weather_config(db, config: ReminderConfig, redis_client) -> N
 
         # 检查天气
         check_result = await WeatherService.check_weather_condition(
-            latitude=location_b.latitude,
-            longitude=location_b.longitude,
+            latitude=location_target.latitude,
+            longitude=location_target.longitude,
             notify_conditions=notify_conditions,
             redis_client=redis_client,
         )
@@ -113,8 +116,8 @@ async def _process_weather_config(db, config: ReminderConfig, redis_client) -> N
             # 创建提醒日志
             log = ReminderLog(
                 config_id=config.id,
-                sender_id=user_a_id,
-                receiver_id=user_a_id,  # 先提醒 A 去关心 B
+                sender_id=notifier_id,
+                receiver_id=target_id,
                 message=message,
                 status=ReminderLogStatus.TRIGGERED,
             )
@@ -125,10 +128,9 @@ async def _process_weather_config(db, config: ReminderConfig, redis_client) -> N
                 f"条件={check_result.condition}, 消息={message}"
             )
 
-            # 通过 FCM 推送通知给 A
             from app.core.push_service import PushService
             await PushService.send(
-                user_id=str(user_a_id),
+                user_id=str(notifier_id),
                 title="天气提醒 🌦️",
                 body=message,
                 data={

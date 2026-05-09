@@ -75,11 +75,18 @@ async def _process_timed_config(
         if not relationship or not relationship.user_b_id:
             return
 
-        reminder_times = _get_reminder_times(config)
+        # 确定通知对象（创建配置的人）和关怀目标（对方）
+        notifier_id = config.created_by  # 被提醒去关心的人
+        target_id = (
+            relationship.user_b_id
+            if relationship.user_a_id == notifier_id
+            else relationship.user_a_id
+        )
+
+        reminder_times = _get_reminder_times(config, target_id)
 
         for reminder_time, message in reminder_times:
             if current_time == reminder_time:
-                # 检查今天是否已经触发过（避免重复）
                 today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
                 existing = await db.execute(
@@ -90,13 +97,13 @@ async def _process_timed_config(
                     )
                 )
                 if existing.scalar_one_or_none():
-                    continue  # 今天已触发，跳过
+                    continue
 
-                # 创建提醒日志 — 提醒 A 去关心 B
+                # 创建提醒日志
                 log = ReminderLog(
                     config_id=config.id,
-                    sender_id=relationship.user_a_id,
-                    receiver_id=relationship.user_a_id,
+                    sender_id=notifier_id,
+                    receiver_id=target_id,
                     message=message,
                     status=ReminderLogStatus.TRIGGERED,
                 )
@@ -104,13 +111,13 @@ async def _process_timed_config(
 
                 logger.info(
                     f"定时提醒触发: 关系={relationship.id}, "
-                    f"类型={config.category.value}, 时间={reminder_time}"
+                    f"类型={config.category.value}, 时间={reminder_time}, "
+                    f"通知={notifier_id}"
                 )
 
-                # 通过 FCM 推送通知给 A
                 from app.core.push_service import PushService
                 await PushService.send(
-                    user_id=str(relationship.user_a_id),
+                    user_id=str(notifier_id),
                     title={
                         "sleep": "睡觉时间到 🌙",
                         "meal": "吃饭时间到 🍚",
@@ -128,9 +135,14 @@ async def _process_timed_config(
         logger.error(f"处理定时配置 {config.id} 失败: {e}")
 
 
-def _get_reminder_times(config: ReminderConfig) -> list[tuple[str, str]]:
+def _get_reminder_times(
+    config: ReminderConfig,
+    target_user_id: str,
+) -> list[tuple[str, str]]:
     """
     解析配置中的提醒时间
+
+    使用配置中目标用户的作息时间来计算提醒时刻。
 
     Returns:
         [(提醒时间, 消息)] 列表
@@ -139,11 +151,9 @@ def _get_reminder_times(config: ReminderConfig) -> list[tuple[str, str]]:
     conf = config.config
 
     if config.category == ReminderCategory.SLEEP:
-        # 睡觉提醒：在对方睡觉时间之前 N 分钟提醒
-        sleep_time = conf.get("user_b_sleep_time", "23:00")
+        sleep_time = conf.get("target_sleep_time", "23:00")
         advance = conf.get("advance_minutes", 30)
 
-        # 计算提前提醒时间
         hour, minute = map(int, sleep_time.split(":"))
         remind_dt = datetime(2000, 1, 1, hour, minute) - timedelta(minutes=advance)
         remind_time = remind_dt.strftime("%H:%M")
@@ -151,11 +161,10 @@ def _get_reminder_times(config: ReminderConfig) -> list[tuple[str, str]]:
         times.append((remind_time, f"Ta快到睡觉时间了（{sleep_time}），提醒Ta早点休息吧 🌙"))
 
     elif config.category == ReminderCategory.MEAL:
-        # 吃饭提醒：支持多餐
         meals = conf.get("meals", [])
         for meal in meals:
             meal_name = meal.get("name", "吃饭")
-            meal_time = meal.get("user_b_time", "12:00")
+            meal_time = meal.get("target_time", "12:00")
             advance = meal.get("advance_minutes", 15)
 
             hour, minute = map(int, meal_time.split(":"))
