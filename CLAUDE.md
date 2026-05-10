@@ -17,7 +17,7 @@ $env:PYTHONUTF8=1; alembic revision --autogenerate -m "desc"  # generate new mig
 $env:PYTHONUTF8=1; alembic downgrade -1        # rollback
 
 # Infrastructure (from repo root)
-docker-compose up -d postgres redis            # start DB + cache
+docker-compose up -d postgres redis minio      # start all infrastructure
 docker-compose ps                              # check status
 
 # ---- Flutter (when frontend is created) ----
@@ -41,7 +41,7 @@ models.py  →  schemas.py  →  service.py  →  router.py
 
 **Tasks** (`server/app/tasks/`): APScheduler — weather check (hourly), timed reminder (per minute). Started in FastAPI `lifespan`, use `async_session_factory()` directly (must commit/rollback manually).
 
-**Infrastructure**: PostgreSQL 16 + Redis 7 via Docker Compose (both healthy). MinIO service defined in `docker-compose.yml` for avatar storage (image pull may fail on mainland China networks — code degrades gracefully). Database has 9 tables at migration `0001`.
+**Infrastructure**: PostgreSQL 16 + Redis 7 + MinIO via Docker Compose (all healthy). If Docker Hub is unreachable, pull images via `docker pull docker.m.daocloud.io/<image>:<tag>` then tag to the expected name. Database has 9 tables at migration `0001`.
 
 **Flutter**: SDK 3.41.9 installed at `C:\flutter\`. Android toolchain ready (SDK 36). PATH includes `C:\flutter\bin`.
 
