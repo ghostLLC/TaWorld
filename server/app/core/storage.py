@@ -31,18 +31,20 @@ class StorageService:
             logger.warning("MinIO not configured, storage disabled")
             return None
         try:
-            cls._client = Minio(
+            client = Minio(
                 endpoint=settings.MINIO_ENDPOINT,
                 access_key=settings.MINIO_ACCESS_KEY,
                 secret_key=settings.MINIO_SECRET_KEY,
                 secure=False,
             )
             # Ensure bucket exists
-            if not cls._client.bucket_exists(settings.MINIO_BUCKET):
-                cls._client.make_bucket(settings.MINIO_BUCKET)
+            if not client.bucket_exists(settings.MINIO_BUCKET):
+                client.make_bucket(settings.MINIO_BUCKET)
                 logger.info(f"Created bucket: {settings.MINIO_BUCKET}")
-            return cls._client
+            cls._client = client
+            return client
         except Exception as e:
+            cls._client = None  # Don't cache failures
             logger.warning(f"MinIO连接失败: {e}")
             return None
 
