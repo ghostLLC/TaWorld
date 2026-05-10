@@ -20,10 +20,12 @@ $env:PYTHONUTF8=1; alembic downgrade -1        # rollback
 docker-compose up -d postgres redis minio      # start all infrastructure
 docker-compose ps                              # check status
 
-# ---- Flutter (when frontend is created) ----
-flutter doctor                                 # verify environment
-flutter create app                             # create Flutter project in app/
-cd app; flutter run -d chrome                  # run in browser
+# ---- Flutter (from app/) ----
+flutter pub get                                # install dependencies
+flutter analyze                                # static analysis
+flutter run -d chrome                          # run in browser
+flutter run                                    # run on connected device/emulator
+flutter build apk --release                    # build release APK
 ```
 
 ## Architecture
@@ -88,3 +90,22 @@ Use `Base, UUIDMixin, TimestampMixin` from `database.py`. Types use cross-DB SQL
 - **Achievement unlock logic** supports 4 types: `count` (simple increment), `streak_days` (consecutive days with reminders), `mutual_reminder_count` (min of A→B and B→A), `relationship_days` (days since relationship created). Pass `context={"partner_id": ...}` for mutual/relationship types.
 - **Test database** at `server/test.db` is gitignored (`*.db` in `.gitignore`).
 - **Avatar upload** uses `StorageService` from `app/core/storage.py`. Accepts JPEG/PNG/WebP (max 2MB). When MinIO is unreachable, raises `SystemException(503)`. Old avatar is auto-deleted on new upload.
+
+## Flutter Frontend (app/)
+
+**Design System.** The app uses a pre-built design system. All colors, spacing, radius, and shadows are defined in `lib/app/design_tokens.dart`. Never hardcode visual values — use `TaSpacing`, `TaRadius`, `TaLightColors`/`TaDarkColors`, etc.
+
+**Theme.** `lib/app/theme.dart` provides full Material 3 `ThemeData` for both light and dark modes. Use `Theme.of(context).colorScheme.primary` to get colors.
+
+**Component Library** (`lib/presentation/widgets/`): `TaCard`, `TaButton`, `TaTextField`, `TaAvatar`, `TaNotificationCard`, `TaAchievementBadge`, `TaLoading`, `TaEmptyState`, `TaErrorState`. Import via `widgets.dart` barrel file.
+
+**Reference Pages:** `login_screen.dart` and `home_screen.dart` demonstrate the standard patterns for building pages (component usage, API calls, state management, animations).
+
+**Routing.** `lib/app/router.dart` uses GoRouter. All routes are defined with `_Placeholder` widgets. Replace them with real implementations. Auth redirect is automatic (unauthenticated users → login).
+
+**API Layer.** `dio_client.dart` provides a pre-configured Dio with auto token injection and 401 refresh. `api_endpoints.dart` has all backend route paths. `api_response.dart` models the `{code, message, data}` format.
+
+**Animations.** Use `flutter_animate` package with `TaAnimation.normal` duration and `TaAnimation.curve`. See `login_screen.dart` for entrance animation examples.
+
+**Full guide:** See `docs/frontend_guide.md` for component usage examples, styling rules, and page implementation checklist.
+

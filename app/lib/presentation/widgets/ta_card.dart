@@ -1,0 +1,96 @@
+/// TaWorld 统一卡片组件
+///
+/// 所有页面中的卡片都应使用此组件，确保一致的圆角、阴影、间距。
+library;
+
+import 'package:flutter/material.dart';
+
+import '../../app/design_tokens.dart';
+
+/// 统一卡片组件
+///
+/// 支持三种变体：
+/// - [TaCard] 默认白色卡片
+/// - [TaCard.gradient] 带渐变头部的卡片
+/// - [TaCard.outlined] 描边卡片
+class TaCard extends StatelessWidget {
+  const TaCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.onTap,
+    this.color,
+  })  : _gradient = null,
+        _outlined = false;
+
+  const TaCard.outlined({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.onTap,
+    this.color,
+  })  : _gradient = null,
+        _outlined = true;
+
+  /// 带渐变头部装饰的卡片
+  TaCard.gradient({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.onTap,
+    this.color,
+    Gradient? gradient,
+  })  : _gradient = gradient ?? TaGradients.warm,
+        _outlined = false;
+
+  final Widget child;
+  final EdgeInsets? padding;
+  final EdgeInsets? margin;
+  final VoidCallback? onTap;
+  final Color? color;
+  final Gradient? _gradient;
+  final bool _outlined;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    final cardColor = color ?? theme.cardTheme.color ?? theme.colorScheme.surface;
+
+    Widget card = Container(
+      margin: margin,
+      decoration: BoxDecoration(
+        color: _gradient != null ? null : cardColor,
+        gradient: _gradient,
+        borderRadius: TaRadius.borderMd,
+        border: _outlined
+            ? Border.all(
+                color: theme.colorScheme.outline.withValues(alpha: 0.5),
+              )
+            : null,
+        boxShadow: isDark ? null : TaShadows.sm,
+      ),
+      child: Padding(
+        padding: padding ?? TaSpacing.cardInner,
+        child: child,
+      ),
+    );
+
+    if (onTap != null) {
+      card = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: TaRadius.borderMd,
+          child: card,
+        ),
+      );
+    }
+
+    return card;
+  }
+}

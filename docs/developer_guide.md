@@ -7,16 +7,16 @@
 
 ## 一、项目现状
 
-架构骨架已全部搭建完成，所有代码可以正确导入和运行。
+后端全部功能已开发完成并通过验收（33/33 测试通过）。Flutter 前端设计系统已建好，等待页面填充。
 
 | 指标 | 数据 |
 |------|------|
-| 文件总数 | 80+ 个 |
-| API 路由 | 35 个（30 业务 + 5 系统） |
+| 后端文件总数 | 80+ 个 |
+| API 路由 | 36 个（30 业务 + 6 系统） |
 | 数据库表 | 8 张（与 architecture.md ER 图一致） |
 | 业务模块 | 7 个（auth/users/relationships/reminders/weather/achievements/ai） |
-| 测试用例 | 33 个（覆盖 8 个测试文件） |
-| Python 依赖 | 已全部安装到 `server/venv/` |
+| 测试用例 | 33 个（全部通过） |
+| Flutter 前端 | 设计系统 + 组件库 + 2 个参考页面（登录/首页） |
 
 ---
 
@@ -26,47 +26,71 @@
 TaWorld/
 ├── .gitignore
 ├── README.md
-├── docker-compose.yml             # Docker 编排（API + PG + Redis）
+├── CLAUDE.md                      # AI 开发者上下文指引
+├── docker-compose.yml             # Docker 编排（API + PG + Redis + MinIO）
 ├── docs/
 │   ├── architecture.md            # 完整技术架构方案（必读）
-│   └── developer_guide.md         # 本文档
+│   ├── architecture_comparison.md # 架构 vs 实现对比报告
+│   ├── developer_guide.md         # 本文档（后端开发指引）
+│   ├── frontend_guide.md          # 前端开发指引
+│   ├── design_system.md           # 前端设计系统规范
+│   └── walkthrough.md             # 后端验收报告
 │
-└── server/
+├── app/                           # ★ Flutter 移动端
+│   ├── lib/
+│   │   ├── main.dart
+│   │   ├── app/                   #   主题/路由/设计令牌
+│   │   ├── core/                  #   网络层/常量
+│   │   ├── services/              #   认证服务
+│   │   └── presentation/
+│   │       ├── screens/           #   页面
+│   │       └── widgets/           #   组件库（TaCard/TaButton/...）
+│   └── pubspec.yaml
+│
+└── server/                        # ★ Python 后端
     ├── .env.example               # 环境变量模板
     ├── Dockerfile
-    ├── requirements.txt           # Python 依赖（锁定版本）
+    ├── requirements.txt
     ├── alembic.ini
     ├── alembic/
-    │   ├── env.py                 # 异步迁移环境（已导入所有 models）
-    │   ├── script.py.mako
-    │   └── versions/              # 迁移文件存放处（空）
+    │   ├── env.py
+    │   └── versions/
+    │       └── 0001_initial_tables.py  # 手写初始迁移
     ├── tests/
-    │   ├── conftest.py            # 测试 Fixtures（client, auth_client）
+    │   ├── conftest.py            # 测试 Fixtures
     │   ├── test_auth.py
+    │   ├── test_achievements.py
+    │   ├── test_relationships.py
+    │   ├── test_reminders.py
+    │   ├── test_push.py
+    │   ├── test_storage.py
     │   └── test_system.py
     └── app/
-        ├── main.py                # ★ FastAPI 入口 + 生命周期管理
-        ├── core/                  # 核心基础层
-        │   ├── config.py          #   Settings 配置类
-        │   ├── database.py        #   Engine + Session + Base + Mixins
-        │   ├── security.py        #   密码哈希 + JWT Token
-        │   └── dependencies.py    #   get_current_user + get_redis
-        ├── common/                # 公共工具层
-        │   ├── response.py        #   success_response / error_response
-        │   ├── exceptions.py      #   AppException + 子类 + 全局处理器
-        │   └── pagination.py      #   PaginationParams + paginate()
-        ├── modules/               # 业务模块（7个）
-        │   ├── auth/              #   注册/登录/Token刷新
-        │   ├── users/             #   用户信息/位置/设备
-        │   ├── relationships/     #   邀请码/加入/管理
-        │   ├── reminders/         #   提醒配置/发送/确认/日志
-        │   ├── weather/           #   天气API/缓存/条件判断
-        │   ├── achievements/      #   成就定义/进度/种子数据
-        │   └── ai/                #   LLM建议/对话/降级模板
-        └── tasks/                 # 定时任务
-            ├── scheduler.py       #   APScheduler 初始化
-            ├── weather_check.py   #   天气检查（每小时）
-            └── reminder_trigger.py #  定时提醒触发（每分钟）
+        ├── main.py                # FastAPI 入口
+        ├── core/
+        │   ├── config.py          #   Settings
+        │   ├── database.py        #   Engine + Session + Mixins
+        │   ├── security.py        #   JWT + bcrypt
+        │   ├── dependencies.py    #   认证依赖 + Redis
+        │   ├── push_service.py    #   FCM 推送（优雅降级）
+        │   └── storage.py         #   MinIO 头像上传
+        ├── common/
+        │   ├── response.py        #   统一响应
+        │   ├── exceptions.py      #   异常体系
+        │   ├── pagination.py      #   分页
+        │   └── rate_limit.py      #   滑动窗口限流
+        ├── modules/               # 7 个业务模块
+        │   ├── auth/
+        │   ├── users/
+        │   ├── relationships/
+        │   ├── reminders/
+        │   ├── weather/
+        │   ├── achievements/
+        │   └── ai/
+        └── tasks/
+            ├── scheduler.py
+            ├── weather_check.py
+            └── reminder_trigger.py
 ```
 
 ---
@@ -234,7 +258,7 @@ async def cached_endpoint(
 
 ## 五、API 路由完整对照表
 
-全部 27 个业务路由 + 4 个系统路由 = **31 个路由**。
+全部 30 个业务路由 + 6 个系统路由 = **36 个路由**。
 
 | 模块 | 方法 | 路径 | 说明 |
 |------|------|------|------|
@@ -245,6 +269,10 @@ async def cached_endpoint(
 | | PUT | `/api/v1/users/me` | 更新用户信息 |
 | | PUT | `/api/v1/users/me/location` | 上报位置 |
 | | POST | `/api/v1/users/me/devices` | 注册推送设备 |
+| | GET | `/api/v1/users/me/stats` | 用户概览统计 |
+| | POST | `/api/v1/users/me/avatar` | 头像上传 |
+| | DELETE | `/api/v1/users/me/avatar` | 头像删除 |
+| | GET | `/api/v1/users/me/achievements` | 我的成就进度 |
 | **关系** | POST | `/api/v1/relationships/invite` | 生成邀请码 |
 | | POST | `/api/v1/relationships/join` | 通过邀请码加入 |
 | | GET | `/api/v1/relationships` | 我的所有关系 |
@@ -258,13 +286,14 @@ async def cached_endpoint(
 | | POST | `/api/v1/reminders/{id}/send` | 一键提醒（A→B） |
 | | POST | `/api/v1/reminders/{id}/confirm` | 确认收到（B 确认） |
 | | GET | `/api/v1/reminders/{id}/logs` | 提醒历史 |
+| | GET | `/api/v1/reminders/stats` | 提醒统计数据 |
 | **天气** | GET | `/api/v1/weather/current` | 查询天气（调试用） |
 | **成就** | GET | `/api/v1/achievements` | 所有成就列表 |
-| | GET | `/api/v1/users/me/achievements` | 我的成就进度 |
 | **AI** | POST | `/api/v1/ai/suggest` | AI 生成关怀建议 |
 | | POST | `/api/v1/ai/chat` | AI 对话交互 |
 | **系统** | GET | `/` | 欢迎页 |
 | | GET | `/health` | 健康检查 |
+| | GET | `/api/v1/config` | 客户端启动配置 |
 
 ---
 
@@ -333,8 +362,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 下一步开发
 
 1. **配置 API Key** — 在 `.env` 中填入 QWEATHER_API_KEY / LLM_API_KEY / FCM_SERVER_KEY
-2. **Flutter 前端** — SDK 已安装，开始移动端开发
+2. **Flutter 前端页面填充** — 设计系统和组件库已建好，参考 `docs/frontend_guide.md` 实现剩余页面
 3. **启动 MinIO** — `docker-compose up -d minio` 激活头像上传功能
+4. **前后端联调** — 后端在 `localhost:8000` 运行，Flutter 用 `http://10.0.2.2:8000` 连接
 
 ---
 
