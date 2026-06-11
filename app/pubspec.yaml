@@ -10,39 +10,36 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 状态管理
-  flutter_riverpod: ^2.6.1
-  riverpod_annotation: ^2.6.1
-
   # 路由
   go_router: ^15.1.2
 
-  # 网络请求
+  # 网络请求（仅用于外部 API: DeepSeek / 和风天气）
   dio: ^5.8.0+1
 
   # 本地存储
   shared_preferences: ^2.5.3
-  hive_flutter: ^1.1.0
-  hive: ^2.2.3
+  sqflite: ^2.4.2
+  path: ^1.9.0
 
   # 工具
+  uuid: ^4.5.1
   intl: ^0.20.2
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.2
   shimmer: ^3.0.0
-  cached_network_image: ^3.4.1
   flutter_svg: ^2.0.16
 
-  # 推送 & 定位
-  # firebase_messaging: ^15.1.6    # 需要 Firebase 配置后启用
-  # geolocator: ^13.0.2            # 需要权限配置后启用
+  # 本地通知
+  flutter_local_notifications: ^18.0.0
+
+  # 权限 & 硬件
+  permission_handler: ^11.3.1
+  geolocator: ^13.0.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  riverpod_generator: ^2.6.3
-  build_runner: ^2.4.15
 
 flutter:
   uses-material-design: true

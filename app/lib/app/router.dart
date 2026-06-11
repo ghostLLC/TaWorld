@@ -1,145 +1,98 @@
-/// TaWorld 路由配置
+/// TaWorld 路由配置（单机版）
 ///
 /// 使用 GoRouter 声明式路由。所有页面路径在此集中定义。
 library;
 
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../presentation/screens/achievements/achievements_screen.dart';
+import '../presentation/screens/ai_chat/ai_chat_screen.dart';
 import '../presentation/screens/home/home_screen.dart';
-import '../presentation/screens/login/login_screen.dart';
-import '../services/auth_service.dart';
+import '../presentation/screens/add_partner/add_partner_screen.dart';
+import '../presentation/screens/api_key_setup/api_key_setup_screen.dart';
+import '../presentation/screens/reminder_config/reminder_config_screen.dart';
+import '../presentation/screens/partner_detail/partner_detail_screen.dart';
+import '../presentation/screens/reminder_history/reminder_history_screen.dart';
+import '../presentation/screens/settings/settings_screen.dart';
 
 /// 路由路径常量
 abstract final class Routes {
-  static const splash = '/';
-  static const login = '/login';
-  static const register = '/register';
-  static const home = '/home';
-  static const relationships = '/relationships';
-  static const relationshipDetail = '/relationships/:id';
-  static const reminderConfig = '/reminders/config/:relId';
+  static const home = '/';
+  static const partnerDetail = '/partners/:id';
+  static const addPartner = '/partners/add';
+  static const reminderConfig = '/reminders/config/:partnerId';
   static const reminderHistory = '/reminders/:id/logs';
   static const achievements = '/achievements';
   static const aiChat = '/ai/chat';
-  static const profile = '/profile';
+  static const apiKeys = '/settings/api-keys';
   static const settings = '/settings';
 }
 
 /// 创建路由配置
 GoRouter createRouter() {
   return GoRouter(
-    initialLocation: Routes.splash,
+    initialLocation: Routes.home,
     debugLogDiagnostics: true,
-    redirect: (context, state) async {
-      final isLoggedIn = await AuthService.isLoggedIn();
-      final isLoginRoute = state.matchedLocation == Routes.login ||
-          state.matchedLocation == Routes.register;
-
-      if (!isLoggedIn && !isLoginRoute) {
-        return Routes.login;
-      }
-      if (isLoggedIn && state.matchedLocation == Routes.splash) {
-        return Routes.home;
-      }
-      return null;
-    },
     routes: [
-      // 登录
-      GoRoute(
-        path: Routes.login,
-        builder: (_, __) => const LoginScreen(),
-      ),
-
-      // 注册（其他 AI 实现）
-      GoRoute(
-        path: Routes.register,
-        builder: (_, __) => const _Placeholder(title: '注册'),
-      ),
-
       // 首页（含底部导航）
       GoRoute(
         path: Routes.home,
-        builder: (_, __) => const HomeScreen(),
+        builder: (context, _) => const HomeScreen(),
       ),
 
-      // === 以下页面由其他 AI 实现 ===
-
+      // 添加关心的人
       GoRoute(
-        path: Routes.relationships,
-        builder: (_, __) => const _Placeholder(title: '关系管理'),
+        path: Routes.addPartner,
+        builder: (context, _) => const AddPartnerScreen(),
       ),
 
+      // 关心的人详情/编辑
       GoRoute(
-        path: Routes.relationshipDetail,
-        builder: (context, state) => _Placeholder(
-          title: '关系详情',
-          subtitle: 'ID: ${state.pathParameters['id']}',
+        path: Routes.partnerDetail,
+        builder: (context, state) => PartnerDetailScreen(
+          partnerId: state.pathParameters['id']!,
         ),
       ),
 
+      // 提醒配置
       GoRoute(
         path: Routes.reminderConfig,
-        builder: (_, state) => _Placeholder(
-          title: '提醒配置',
-          subtitle: '关系: ${state.pathParameters['relId']}',
+        builder: (context, state) => ReminderConfigScreen(
+          relationshipId: state.pathParameters['partnerId']!,
         ),
       ),
 
+      // 提醒历史
       GoRoute(
         path: Routes.reminderHistory,
-        builder: (_, state) => _Placeholder(
-          title: '提醒历史',
-          subtitle: '配置: ${state.pathParameters['id']}',
+        builder: (context, state) => ReminderHistoryScreen(
+          configId: state.pathParameters['id']!,
         ),
       ),
 
+      // 成就
       GoRoute(
         path: Routes.achievements,
-        builder: (_, __) => const _Placeholder(title: '成就'),
+        builder: (context, _) => const AchievementsScreen(),
       ),
 
+      // AI 助手
       GoRoute(
         path: Routes.aiChat,
-        builder: (_, __) => const _Placeholder(title: 'AI 助手'),
+        builder: (context, _) => const AiChatScreen(),
       ),
 
-      GoRoute(
-        path: Routes.profile,
-        builder: (_, __) => const _Placeholder(title: '个人中心'),
-      ),
-
+      // 设置
       GoRoute(
         path: Routes.settings,
-        builder: (_, __) => const _Placeholder(title: '设置'),
+        builder: (context, _) => const SettingsScreen(),
+      ),
+
+      // API Key 管理
+      GoRoute(
+        path: Routes.apiKeys,
+        builder: (context, _) => const ApiKeySetupScreen(),
       ),
     ],
   );
-}
-
-/// 临时占位页面（其他 AI 替换为真实实现）
-class _Placeholder extends StatelessWidget {
-  const _Placeholder({required this.title, this.subtitle});
-  final String title;
-  final String? subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.construction_rounded, size: 64, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 16),
-            Text(title, style: Theme.of(context).textTheme.headlineMedium),
-            if (subtitle != null) Text(subtitle!, style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(height: 8),
-            Text('等待实现', style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
-    );
-  }
 }

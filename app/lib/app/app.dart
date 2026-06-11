@@ -7,12 +7,31 @@ import 'package:flutter/material.dart';
 
 import 'router.dart';
 import 'theme.dart';
+import '../services/theme_service.dart';
 
 /// TaWorld 应用根组件
-class TaWorldApp extends StatelessWidget {
-  TaWorldApp({super.key});
+class TaWorldApp extends StatefulWidget {
+  const TaWorldApp({super.key});
 
-  final _router = createRouter();
+  @override
+  State<TaWorldApp> createState() => _TaWorldAppState();
+}
+
+class _TaWorldAppState extends State<TaWorldApp> {
+  @override
+  void initState() {
+    super.initState();
+    ThemeService.instance.addListener(_onThemeChanged);
+    ThemeService.instance.init();
+  }
+
+  @override
+  void dispose() {
+    ThemeService.instance.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
@@ -23,10 +42,10 @@ class TaWorldApp extends StatelessWidget {
       // 主题
       theme: TaTheme.light,
       darkTheme: TaTheme.dark,
-      themeMode: ThemeMode.system,
+      themeMode: ThemeService.instance.mode,
 
       // 路由
-      routerConfig: _router,
+      routerConfig: createRouter(),
     );
   }
 }

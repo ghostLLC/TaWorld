@@ -22,6 +22,7 @@ class TaCard extends StatelessWidget {
     this.onTap,
     this.color,
   })  : _gradient = null,
+        _hasGradient = false,
         _outlined = false;
 
   const TaCard.outlined({
@@ -32,10 +33,11 @@ class TaCard extends StatelessWidget {
     this.onTap,
     this.color,
   })  : _gradient = null,
+        _hasGradient = false,
         _outlined = true;
 
   /// 带渐变头部装饰的卡片
-  TaCard.gradient({
+  const TaCard.gradient({
     super.key,
     required this.child,
     this.padding,
@@ -43,7 +45,8 @@ class TaCard extends StatelessWidget {
     this.onTap,
     this.color,
     Gradient? gradient,
-  })  : _gradient = gradient ?? TaGradients.warm,
+  })  : _gradient = gradient,
+        _hasGradient = true,
         _outlined = false;
 
   final Widget child;
@@ -52,6 +55,7 @@ class TaCard extends StatelessWidget {
   final VoidCallback? onTap;
   final Color? color;
   final Gradient? _gradient;
+  final bool _hasGradient;
   final bool _outlined;
 
   @override
@@ -61,11 +65,14 @@ class TaCard extends StatelessWidget {
 
     final cardColor = color ?? theme.cardTheme.color ?? theme.colorScheme.surface;
 
+    final Gradient? effectiveGradient =
+        _hasGradient ? (_gradient ?? TaGradients.warm) : null;
+
     Widget card = Container(
       margin: margin,
       decoration: BoxDecoration(
-        color: _gradient != null ? null : cardColor,
-        gradient: _gradient,
+        color: effectiveGradient != null ? null : cardColor,
+        gradient: effectiveGradient,
         borderRadius: TaRadius.borderMd,
         border: _outlined
             ? Border.all(
