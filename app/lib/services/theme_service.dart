@@ -1,10 +1,12 @@
 /// TaWorld 主题服务
 ///
-/// 管理暗色模式切换和推送通知开关，持久化到 SharedPreferences。
+/// 管理暗色模式切换、调色板切换和推送通知开关，持久化到 SharedPreferences。
 library;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../app/design_tokens.dart';
 
 class ThemeService extends ChangeNotifier {
   static final ThemeService instance = ThemeService._();
@@ -16,6 +18,9 @@ class ThemeService extends ChangeNotifier {
   bool _pushEnabled = true;
   bool get pushEnabled => _pushEnabled;
 
+  String _paletteId = 'coral';
+  String get paletteId => _paletteId;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final themeVal = prefs.getString('theme_mode') ?? 'system';
@@ -25,6 +30,12 @@ class ThemeService extends ChangeNotifier {
       _ => ThemeMode.system,
     };
     _pushEnabled = prefs.getBool('push_enabled') ?? true;
+
+    // 加载调色板
+    final paletteId = prefs.getString('palette_id') ?? 'coral';
+    _paletteId = paletteId;
+    setActivePalette(paletteId);
+
     notifyListeners();
   }
 
@@ -46,6 +57,15 @@ class ThemeService extends ChangeNotifier {
       ThemeMode.system => 'system',
     };
     await prefs.setString('theme_mode', value);
+  }
+
+  /// 设置调色板
+  Future<void> setPalette(String id) async {
+    _paletteId = id;
+    setActivePalette(id);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('palette_id', id);
   }
 
   Future<void> setPushEnabled(bool enabled) async {

@@ -17,6 +17,10 @@ import '../../../data/local/database_helper.dart';
 import '../../../data/models/user.dart';
 import '../../../services/theme_service.dart';
 import '../../../services/notification_service.dart';
+import '../../../services/ai_proactive_service.dart';
+import '../../../services/ai_memory_service.dart';
+import '../../../services/ai_memory_dreamer.dart';
+import '../../../services/ai_service.dart';
 import '../../../services/local/local_user_service.dart';
 
 /// 设置页面
@@ -33,6 +37,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   LocalUser? _user;
   bool _notificationsEnabled = true;
   bool _exactAlarmsAllowed = true;
+  bool _aiProactiveEnabled = true;
+  MemoryStats? _memoryStats;
+  CacheStats? _cacheStats;
+  bool _dreaming = false;
 
   @override
   void initState() {
@@ -42,6 +50,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ThemeService.instance.addListener(_onThemeChanged);
     _loadUser();
     _checkPermissions();
+    _loadAiProactiveSetting();
+    _loadMemoryStats();
+  }
+
+  Future<void> _loadAiProactiveSetting() async {
+    final enabled = await AiProactiveService.isEnabled();
+    if (mounted) setState(() => _aiProactiveEnabled = enabled);
+  }
+
+  Future<void> _loadMemoryStats() async {
+    final stats = await AiMemoryDreamer.getStats();
+    final cache = await AiService.getCacheStats();
+    if (mounted) {
+      setState(() {
+        _memoryStats = stats;
+        _cacheStats = cache;
+      });
+    }
+  }
+
+  Future<void> _runDreamNow() async {
+    if (_dreaming) return;
+    setState(() => _dreaming = true);
+    try {
+      await AiMemoryDreamer.dream();
+      await _loadMemoryStats();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('记忆整合完成')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('整合失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _dreaming = false);
+    }
+  }
+
+  Future<void> _clearAiMemory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        title: const Text('清除 AI 记忆'),
+        content: const Text('将清除 AI 记住的所有信息（事实、对话摘要、历史片段），但不会删除对话记录本身。确定吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('确认清除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await AiMemoryService.clearAllMemory();
+      await AiService.resetCacheStats();
+      await _loadMemoryStats();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI 记忆已清除')),
+        );
+      }
+    }
   }
 
   @override
@@ -205,6 +288,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
+                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                SwitchListTile(
+                  title: const Text('AI 主动关怀'),
+                  subtitle: Text(
+                    'AI 根据上下文主动发送关怀消息',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  value: _aiProactiveEnabled,
+                  activeTrackColor: theme.colorScheme.primary,
+                  onChanged: (v) async {
+                    await AiProactiveService.setEnabled(v);
+                    if (mounted) setState(() => _aiProactiveEnabled = v);
+                  },
+                ),
               ],
             ),
           ),
@@ -252,6 +351,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
                 ),
+                const SizedBox(height: TaSpacing.md),
+                Text(
+                  '配色方案',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: TaSpacing.sm),
+                Wrap(
+                  spacing: TaSpacing.sm,
+                  runSpacing: TaSpacing.sm,
+                  children: kTaPalettes.map((palette) {
+                    final isSelected =
+                        ThemeService.instance.paletteId == palette.id;
+                    return GestureDetector(
+                      onTap: () =>
+                          ThemeService.instance.setPalette(palette.id),
+                      child: AnimatedContainer(
+                        duration: TaAnimation.fast,
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: palette.preview,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSelected
+                                ? theme.colorScheme.onSurface
+                                : theme.colorScheme.outlineVariant,
+                            width: isSelected ? 3 : 1.5,
+                          ),
+                        ),
+                        child: isSelected
+                            ? Icon(Icons.check_rounded,
+                                color: Colors.white, size: 22)
+                            : null,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: TaSpacing.xs),
+                Text(
+                  kTaPalettes
+                      .where(
+                          (p) => p.id == ThemeService.instance.paletteId)
+                      .map((p) => p.label)
+                      .firstOrNull ??
+                  '',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
           ),
@@ -278,6 +428,99 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trailing: Icon(Icons.chevron_right_rounded,
                       color: theme.colorScheme.onSurfaceVariant),
                   onTap: () => context.push(Routes.apiKeys),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: TaSpacing.lg),
+
+          // AI 记忆管理
+          _SectionTitle(title: 'AI 记忆'),
+          const SizedBox(height: TaSpacing.xs),
+          TaCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.psychology_rounded,
+                      color: theme.colorScheme.primary),
+                  title: const Text('记忆统计'),
+                  subtitle: Text(
+                    _memoryStats != null
+                        ? '事实 ${_memoryStats!.totalFacts} 条 · 摘要 ${_memoryStats!.totalSummaries} 条 · 片段 ${_memoryStats!.totalChunks} 条'
+                        : '加载中...',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                ListTile(
+                  leading: Icon(Icons.cached_rounded,
+                      color: theme.colorScheme.tertiary),
+                  title: const Text('DeepSeek 缓存命中率'),
+                  subtitle: Text(
+                    _cacheStats != null
+                        ? '${_cacheStats!.hitRatePercent}（命中 ${_cacheStats!.hitTokens} / 共 ${_cacheStats!.totalTokens} token）'
+                        : '加载中...',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  trailing: TextButton(
+                    onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      await AiService.resetCacheStats();
+                      await _loadMemoryStats();
+                      if (mounted) {
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('缓存统计已重置')),
+                        );
+                      }
+                    },
+                    child: const Text('重置'),
+                  ),
+                ),
+                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                ListTile(
+                  leading: Icon(Icons.auto_fix_high_rounded,
+                      color: theme.colorScheme.secondary),
+                  title: const Text('立即整合记忆'),
+                  subtitle: Text(
+                    '去重、合并、衰减，提升记忆质量',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  trailing: _dreaming
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: theme.colorScheme.primary,
+                          ),
+                        )
+                      : Icon(Icons.play_arrow_rounded,
+                          color: theme.colorScheme.onSurfaceVariant),
+                  onTap: _dreaming ? null : _runDreamNow,
+                ),
+                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                ListTile(
+                  leading: Icon(Icons.memory_rounded,
+                      color: theme.colorScheme.error),
+                  title: Text(
+                    '清除 AI 记忆',
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                  subtitle: Text(
+                    '删除所有记忆数据，重新开始',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  onTap: _clearAiMemory,
                 ),
               ],
             ),
@@ -395,7 +638,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // 清除所有业务数据表
       for (final table in [
         'user_achievements', 'reminder_logs', 'reminder_configs',
-        'chat_history', 'partners', 'users',
+        'chat_history', 'ai_pending_messages', 'partners', 'users',
+        'ai_wiki_facts', 'ai_conversation_summaries', 'conversation_chunks',
       ]) {
         await db.delete(table);
       }

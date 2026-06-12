@@ -99,7 +99,7 @@ abstract final class TaTheme {
           shape: RoundedRectangleBorder(
             borderRadius: TaRadius.borderMd,
           ),
-          side: const BorderSide(color: TaLightColors.primary, width: 1.5),
+          side: BorderSide(color: TaLightColors.primary, width: 1.5),
           textStyle: textTheme.labelLarge?.copyWith(
             fontSize: 16,
             fontWeight: FontWeight.w600,
@@ -133,11 +133,11 @@ abstract final class TaTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: TaRadius.borderMd,
-          borderSide: const BorderSide(color: TaLightColors.primary, width: 1.5),
+          borderSide: BorderSide(color: TaLightColors.primary, width: 1.5),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: TaRadius.borderMd,
-          borderSide: const BorderSide(color: TaLightColors.error, width: 1.5),
+          borderSide: BorderSide(color: TaLightColors.error, width: 1.5),
         ),
         hintStyle: textTheme.bodyMedium?.copyWith(
           color: TaLightColors.onSurfaceVariant.withValues(alpha: 0.6),
@@ -178,7 +178,7 @@ abstract final class TaTheme {
       ),
 
       // ---- BottomSheet ----
-      bottomSheetTheme: const BottomSheetThemeData(
+      bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: TaLightColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(
@@ -188,7 +188,7 @@ abstract final class TaTheme {
       ),
 
       // ---- Divider ----
-      dividerTheme: const DividerThemeData(
+      dividerTheme: DividerThemeData(
         color: TaLightColors.outlineVariant,
         thickness: 1,
         space: 0,
@@ -297,7 +297,7 @@ abstract final class TaTheme {
           shape: RoundedRectangleBorder(
             borderRadius: TaRadius.borderMd,
           ),
-          side: const BorderSide(color: TaDarkColors.primary, width: 1.5),
+          side: BorderSide(color: TaDarkColors.primary, width: 1.5),
         ),
       ),
 
@@ -324,18 +324,18 @@ abstract final class TaTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: TaRadius.borderMd,
-          borderSide: const BorderSide(color: TaDarkColors.primary, width: 1.5),
+          borderSide: BorderSide(color: TaDarkColors.primary, width: 1.5),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: TaRadius.borderMd,
-          borderSide: const BorderSide(color: TaDarkColors.error, width: 1.5),
+          borderSide: BorderSide(color: TaDarkColors.error, width: 1.5),
         ),
         hintStyle: textTheme.bodyMedium?.copyWith(
           color: TaDarkColors.onSurfaceVariant.withValues(alpha: 0.6),
         ),
       ),
 
-      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: TaDarkColors.surface,
         selectedItemColor: TaDarkColors.primary,
         unselectedItemColor: TaDarkColors.onSurfaceVariant,
@@ -359,7 +359,7 @@ abstract final class TaTheme {
         ),
       ),
 
-      bottomSheetTheme: const BottomSheetThemeData(
+      bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: TaDarkColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(
@@ -368,7 +368,7 @@ abstract final class TaTheme {
         ),
       ),
 
-      dividerTheme: const DividerThemeData(
+      dividerTheme: DividerThemeData(
         color: TaDarkColors.outlineVariant,
         thickness: 1,
         space: 0,

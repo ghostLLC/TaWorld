@@ -20,6 +20,7 @@ class TaAchievementBadge extends StatelessWidget {
     required this.target,
     this.unlocked = false,
     this.onTap,
+    this.iconAsset,
   });
 
   final String icon;
@@ -28,6 +29,7 @@ class TaAchievementBadge extends StatelessWidget {
   final int target;
   final bool unlocked;
   final VoidCallback? onTap;
+  final String? iconAsset;
 
   @override
   Widget build(BuildContext context) {
@@ -69,13 +71,19 @@ class TaAchievementBadge extends StatelessWidget {
                     shape: BoxShape.circle,
                   ),
                   child: Center(
-                    child: Text(
-                      icon,
-                      style: TextStyle(
-                        fontSize: 28,
-                        color: unlocked ? null : Colors.grey,
-                      ),
-                    ),
+                    child: iconAsset != null
+                        ? Image.asset(
+                            iconAsset!,
+                            width: 28,
+                            height: 28,
+                          )
+                        : Text(
+                            icon,
+                            style: TextStyle(
+                              fontSize: 28,
+                              color: unlocked ? null : Colors.grey,
+                            ),
+                          ),
                   ),
                 ),
                 // 解锁标记
@@ -86,7 +94,7 @@ class TaAchievementBadge extends StatelessWidget {
                     child: Container(
                       width: 20,
                       height: 20,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         gradient: TaGradients.gold,
                         shape: BoxShape.circle,
                       ),

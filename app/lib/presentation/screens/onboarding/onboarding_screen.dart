@@ -294,9 +294,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.smart_toy_rounded,
-                              size: TaSizes.iconSm,
-                              color: theme.colorScheme.primary),
+                          Image.asset(
+                            'assets/images/ai_config_illustration.png',
+                            width: 40,
+                            height: 40,
+                          ),
                           const SizedBox(width: TaSpacing.xs),
                           Expanded(
                             child: Text(
@@ -384,19 +386,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _buildHeroIcon(BuildContext context) {
-    return Container(
+    return Image.asset(
+      'assets/images/onboarding_mascot.png',
       width: 120,
       height: 120,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: TaGradients.warm,
-        boxShadow: TaShadows.lg,
-      ),
-      child: Icon(
-        Icons.favorite_rounded,
-        size: 56,
-        color: Theme.of(context).colorScheme.primary,
-      ),
     );
   }
 }

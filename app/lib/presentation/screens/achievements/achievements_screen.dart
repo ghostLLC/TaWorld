@@ -23,6 +23,9 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
   List<UserAchievement> _achievements = [];
   Map<String, dynamic> _stats = {};
 
+  /// 正在播放庆祝动画的徽章索引集合
+  final Set<int> _celebrating = {};
+
   static const _achievementTargets = <String, int>{
     '初次守护': 1,
     '连续守护7天': 7,
@@ -31,6 +34,16 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
     '百日陪伴': 100,
     '创意达人': 5,
     // '双向奔赴' 暂时隐藏，留作后期拓展（已在数据库查询层过滤）
+  };
+
+  static const _achievementAssets = <String, String>{
+    '初次守护': 'assets/images/badge_first_guard.png',
+    '连续守护7天': 'assets/images/badge_7day_streak.png',
+    '晚安大使': 'assets/images/badge_goodnight.png',
+    '干饭督导': 'assets/images/badge_meal_monitor.png',
+    '百日陪伴': 'assets/images/badge_100day.png',
+    '创意达人': 'assets/images/badge_creative.png',
+    '双向奔赴': 'assets/images/badge_mutual.png',
   };
 
   @override
@@ -54,6 +67,20 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
         _achievements = results[0] as List<UserAchievement>;
         _stats = results[1] as Map<String, dynamic>;
         _loading = false;
+
+        // 为所有已解锁的成就触发庆祝动画（依次播放）
+        for (var i = 0; i < _achievements.length; i++) {
+          if (_achievements[i].unlocked == true) {
+            _celebrating.add(i);
+          }
+        }
+      });
+
+      // 动画结束后清理庆祝状态
+      Future.delayed(const Duration(milliseconds: 900), () {
+        if (mounted && _celebrating.isNotEmpty) {
+          setState(() => _celebrating.clear());
+        }
       });
     } catch (e) {
       setState(() => _error = '加载失败');
@@ -80,7 +107,7 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
     }
     if (_achievements.isEmpty) {
       return const TaEmptyState(
-        icon: Icons.emoji_events_outlined,
+        imageAsset: 'assets/images/empty_achievements.png',
         title: '暂无成就',
         subtitle: '完成更多关怀来解锁成就吧',
       );
@@ -133,17 +160,29 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
 
                 // Use known target from seed data; fall back to 1 for unknown achievements.
                 final target = _achievementTargets[ua.achievementName ?? ''] ?? 1;
+                final asset = _achievementAssets[ua.achievementName ?? ''];
 
-                return TaAchievementBadge(
+                final badge = TaAchievementBadge(
                   icon: ua.achievementIcon ?? '🏆',
                   name: ua.achievementName ?? '',
                   progress: ua.progress,
                   target: target,
                   unlocked: ua.unlocked,
-                ).animate().fadeIn(
-                      delay: (index * 80).ms,
-                      duration: TaAnimation.normal,
-                    );
+                  iconAsset: asset,
+                );
+
+                return Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    badge.animate().fadeIn(
+                          delay: (index * 80).ms,
+                          duration: TaAnimation.normal,
+                        ),
+                    if (_celebrating.contains(index))
+                      TaCelebrateAnimation(size: 80),
+                  ],
+                );
               },
             ),
           ),

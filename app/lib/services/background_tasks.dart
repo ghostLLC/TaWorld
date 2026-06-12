@@ -18,10 +18,14 @@ import '../services/local/local_reminder_service.dart';
 import '../services/local/partner_service.dart';
 import '../services/reminder_scheduler.dart';
 import '../services/weather_service.dart';
+import '../services/ai_proactive_service.dart';
+import '../services/ai_memory_dreamer.dart';
 
 /// 后台任务名称常量
 const _taskWeatherCheck = 'taworld_weather_check';
 const _taskNotificationRenew = 'taworld_notification_renew';
+const _taskAiProactiveCheck = 'taworld_ai_proactive_check';
+const _taskAiMemoryDream = 'taworld_ai_memory_dream';
 
 /// 后台任务初始化
 abstract final class BackgroundTaskService {
@@ -45,6 +49,28 @@ abstract final class BackgroundTaskService {
       _taskNotificationRenew,
       _taskNotificationRenew,
       frequency: const Duration(hours: 12),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+    );
+
+    // AI 主动评估：每 2 小时检查是否需要主动发消息
+    await Workmanager().registerPeriodicTask(
+      _taskAiProactiveCheck,
+      _taskAiProactiveCheck,
+      frequency: const Duration(hours: 2),
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+    );
+
+    // AI 记忆整合（Dreaming）：每天执行一次，整合、去重、衰减记忆
+    await Workmanager().registerPeriodicTask(
+      _taskAiMemoryDream,
+      _taskAiMemoryDream,
+      frequency: const Duration(hours: 24),
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     );
   }
@@ -72,6 +98,10 @@ void callbackDispatcher() {
           await _runWeatherCheck();
         case _taskNotificationRenew:
           await _runNotificationRenew();
+        case _taskAiProactiveCheck:
+          await _runAiProactiveCheck();
+        case _taskAiMemoryDream:
+          await _runAiMemoryDream();
         case Workmanager.iOSBackgroundTask:
           // iOS 后台任务（暂不处理）
           break;
@@ -179,4 +209,32 @@ int _makeAlertId(String partnerId, String condition) {
 Future<void> _runNotificationRenew() async {
   await ReminderScheduler.scheduleAll();
   dev.log('通知续期完成', name: 'TaWorld');
+}
+
+// ==================== AI 主动评估任务 ====================
+
+/// 后台 AI 主动评估：收集上下文 → AI 判断 → 生成待发消息 + 通知
+Future<void> _runAiProactiveCheck() async {
+  try {
+    final sent = await AiProactiveService.evaluate();
+    dev.log('AI 主动评估完成，是否发送: $sent', name: 'TaWorld');
+  } catch (e) {
+    dev.log('AI 主动评估失败: $e', name: 'TaWorld');
+  }
+}
+
+// ==================== AI 记忆整合（Dreaming）任务 ====================
+
+/// 后台记忆整合：衰减、去重、合并、摘要历史对话
+Future<void> _runAiMemoryDream() async {
+  try {
+    final result = await AiMemoryDreamer.dream();
+    dev.log(
+      'AI Dreaming 完成: 衰减=${result.decayed}, 归档=${result.archived}, '
+      '合并=${result.merged}, 摘要=${result.summarized}',
+      name: 'TaWorld',
+    );
+  } catch (e) {
+    dev.log('AI Dreaming 失败: $e', name: 'TaWorld');
+  }
 }

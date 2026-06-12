@@ -12,7 +12,7 @@ import '../models/achievement.dart';
 class DatabaseHelper {
   static Database? _database;
   static const _dbName = 'taworld.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 4;
   static const _uuid = Uuid();
 
   /// 获取数据库实例
@@ -30,6 +30,7 @@ class DatabaseHelper {
       path,
       version: _dbVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -128,6 +129,62 @@ class DatabaseHelper {
       )
     ''');
 
+    // AI 主动消息队列（后台评估后写入，前台打开时消费）
+    await db.execute('''
+      CREATE TABLE ai_pending_messages (
+        id TEXT PRIMARY KEY,
+        partner_id TEXT,
+        category TEXT NOT NULL,
+        message TEXT NOT NULL,
+        confidence REAL DEFAULT 0.5,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        shown_at TEXT
+      )
+    ''');
+
+    // AI Wiki 事实表（记忆系统 Wiki 层）
+    await db.execute('''
+      CREATE TABLE ai_wiki_facts (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL,
+        entity_id TEXT,
+        content TEXT NOT NULL,
+        source TEXT DEFAULT 'chat',
+        importance REAL DEFAULT 0.5,
+        strength REAL DEFAULT 1.0,
+        access_count INTEGER DEFAULT 0,
+        last_accessed TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    // 对话摘要表（记忆系统摘要层）
+    await db.execute('''
+      CREATE TABLE ai_conversation_summaries (
+        id TEXT PRIMARY KEY,
+        summary TEXT NOT NULL,
+        message_count INTEGER,
+        date TEXT NOT NULL,
+        topics TEXT,
+        created_at TEXT NOT NULL
+      )
+    ''');
+
+    // 对话 chunks 表（记忆系统 RAG 层）
+    await db.execute('''
+      CREATE TABLE conversation_chunks (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        role TEXT NOT NULL,
+        conversation_date TEXT,
+        topics TEXT,
+        embedding BLOB,
+        created_at TEXT NOT NULL
+      )
+    ''');
+
     // 索引
     await db.execute(
       'CREATE INDEX idx_reminder_configs_partner ON reminder_configs(partner_id)',
@@ -141,9 +198,84 @@ class DatabaseHelper {
     await db.execute(
       'CREATE INDEX idx_user_achievements_achievement ON user_achievements(achievement_id)',
     );
+    await db.execute(
+      'CREATE INDEX idx_ai_wiki_facts_category ON ai_wiki_facts(category)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_ai_wiki_facts_entity ON ai_wiki_facts(entity_id)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_conversation_chunks_date ON conversation_chunks(conversation_date)',
+    );
 
     // 插入成就种子数据
     await _seedAchievements(db);
+  }
+
+  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS ai_pending_messages (
+          id TEXT PRIMARY KEY,
+          partner_id TEXT,
+          category TEXT NOT NULL,
+          message TEXT NOT NULL,
+          confidence REAL DEFAULT 0.5,
+          status TEXT DEFAULT 'pending',
+          created_at TEXT NOT NULL,
+          shown_at TEXT
+        )
+      ''');
+    }
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS ai_wiki_facts (
+          id TEXT PRIMARY KEY,
+          category TEXT NOT NULL,
+          entity_id TEXT,
+          content TEXT NOT NULL,
+          source TEXT DEFAULT 'chat',
+          importance REAL DEFAULT 0.5,
+          strength REAL DEFAULT 1.0,
+          access_count INTEGER DEFAULT 0,
+          last_accessed TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS ai_conversation_summaries (
+          id TEXT PRIMARY KEY,
+          summary TEXT NOT NULL,
+          message_count INTEGER,
+          date TEXT NOT NULL,
+          topics TEXT,
+          created_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_ai_wiki_facts_category ON ai_wiki_facts(category)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_ai_wiki_facts_entity ON ai_wiki_facts(entity_id)',
+      );
+    }
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS conversation_chunks (
+          id TEXT PRIMARY KEY,
+          content TEXT NOT NULL,
+          role TEXT NOT NULL,
+          conversation_date TEXT,
+          topics TEXT,
+          embedding BLOB,
+          created_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_conversation_chunks_date ON conversation_chunks(conversation_date)',
+      );
+    }
   }
 
   static Future<void> _seedAchievements(Database db) async {

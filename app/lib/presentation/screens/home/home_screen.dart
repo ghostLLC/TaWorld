@@ -167,7 +167,7 @@ class _PartnersTabState extends State<_PartnersTab> {
     if (_partners.isEmpty) {
       return SafeArea(
         child: TaEmptyState(
-          icon: Icons.people_outline_rounded,
+          imageAsset: 'assets/images/empty_partners.png',
           title: '还没有关心的人',
           subtitle: '添加一个你在意的人，开始你的关怀之旅',
           actionText: '添加',
@@ -488,7 +488,7 @@ class _PartnerCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Text(config.categoryEmoji, style: const TextStyle(fontSize: 20)),
+            Image.asset(config.categoryIconAsset, width: 20, height: 20),
             const SizedBox(width: TaSpacing.xs),
             Expanded(
               child: Text(
@@ -670,12 +670,12 @@ class _ProfileTabState extends State<_ProfileTab> {
                         'custom' => '自定义提醒',
                         _ => entry.key,
                       };
-                      final emoji = switch (entry.key) {
-                        'weather' => '\u{1F326}\u{FE0F}',
-                        'sleep' => '\u{1F319}',
-                        'meal' => '\u{1F35A}',
-                        'custom' => '\u{1F49D}',
-                        _ => '\u{1F49D}',
+                      final iconAsset = switch (entry.key) {
+                        'weather' => 'assets/images/icon_weather_category.png',
+                        'sleep' => 'assets/images/icon_sleep_category.png',
+                        'meal' => 'assets/images/icon_meal_category.png',
+                        'custom' => 'assets/images/icon_custom_category.png',
+                        _ => 'assets/images/icon_custom_category.png',
                       };
                       final pct = totalReminders > 0
                           ? (entry.value / totalReminders * 100).round()
@@ -684,7 +684,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                         padding: const EdgeInsets.only(bottom: TaSpacing.sm),
                         child: Row(
                           children: [
-                            Text(emoji, style: const TextStyle(fontSize: 18)),
+                            Image.asset(iconAsset, width: 18, height: 18),
                             const SizedBox(width: TaSpacing.xs),
                             Expanded(
                               child: Text(label,

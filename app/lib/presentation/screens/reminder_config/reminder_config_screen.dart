@@ -526,24 +526,28 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
             label: '天气提醒',
             subtitle: '天气变化时提醒关心Ta',
             value: 'weather',
+            iconAsset: 'assets/images/icon_weather_category.png',
           ),
           _CategoryOption(
             icon: '🌙',
             label: '睡觉提醒',
             subtitle: '到点提醒Ta早点休息',
             value: 'sleep',
+            iconAsset: 'assets/images/icon_sleep_category.png',
           ),
           _CategoryOption(
             icon: '🍚',
             label: '吃饭提醒',
             subtitle: '提醒Ta按时吃饭',
             value: 'meal',
+            iconAsset: 'assets/images/icon_meal_category.png',
           ),
           _CategoryOption(
             icon: '💝',
             label: '自定义提醒',
             subtitle: '设置你专属的提醒',
             value: 'custom',
+            iconAsset: 'assets/images/icon_custom_category.png',
           ),
         ],
       ),
@@ -617,7 +621,7 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
     }
     if (_configs.isEmpty) {
       return TaEmptyState(
-        icon: Icons.notifications_none_rounded,
+        imageAsset: 'assets/images/empty_reminder_config.png',
         title: '还没有提醒',
         subtitle: '点击右上角 + 创建第一个提醒',
         actionText: '新建提醒',
@@ -666,8 +670,8 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                         borderRadius: TaRadius.borderSm,
                       ),
                       child: Center(
-                        child: Text(info.emoji,
-                            style: const TextStyle(fontSize: 24)),
+                        child: Image.asset(info.iconAsset,
+                            width: 24, height: 24),
                       ),
                     ),
                     const SizedBox(width: TaSpacing.sm),
@@ -727,10 +731,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 
   _CategoryInfo _categoryInfo(String category) {
     return switch (category) {
-      'weather' => const _CategoryInfo('🌦️', '天气提醒', TaLightColors.tertiary),
-      'sleep' => const _CategoryInfo('🌙', '睡觉提醒', Color(0xFF7E57C2)),
-      'meal' => const _CategoryInfo('🍚', '吃饭提醒', TaLightColors.secondary),
-      _ => const _CategoryInfo('💝', '自定义提醒', TaLightColors.primary),
+      'weather' => _CategoryInfo('🌦️', '天气提醒', TaLightColors.tertiary, 'assets/images/icon_weather_category.png'),
+      'sleep' => const _CategoryInfo('🌙', '睡觉提醒', Color(0xFF7E57C2), 'assets/images/icon_sleep_category.png'),
+      'meal' => _CategoryInfo('🍚', '吃饭提醒', TaLightColors.secondary, 'assets/images/icon_meal_category.png'),
+      _ => _CategoryInfo('💝', '自定义提醒', TaLightColors.primary, 'assets/images/icon_custom_category.png'),
     };
   }
 
@@ -747,10 +751,11 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 }
 
 class _CategoryInfo {
-  const _CategoryInfo(this.emoji, this.label, this.color);
+  const _CategoryInfo(this.emoji, this.label, this.color, this.iconAsset);
   final String emoji;
   final String label;
   final Color color;
+  final String iconAsset;
 }
 
 class _CategoryOption extends StatelessWidget {
@@ -759,12 +764,14 @@ class _CategoryOption extends StatelessWidget {
     required this.label,
     required this.subtitle,
     required this.value,
+    required this.iconAsset,
   });
 
   final String icon;
   final String label;
   final String subtitle;
   final String value;
+  final String iconAsset;
 
   @override
   Widget build(BuildContext context) {
@@ -774,7 +781,7 @@ class _CategoryOption extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: TaSpacing.xs),
         child: Row(
           children: [
-            Text(icon, style: const TextStyle(fontSize: 28)),
+            Image.asset(iconAsset, width: 28, height: 28),
             const SizedBox(width: TaSpacing.sm),
             Expanded(
               child: Column(

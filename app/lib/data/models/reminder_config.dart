@@ -80,6 +80,16 @@ class ReminderConfig {
     _ => '💝',
   };
 
+  String get categoryIconAsset {
+    switch (category) {
+      case 'weather': return 'assets/images/icon_weather_category.png';
+      case 'sleep': return 'assets/images/icon_sleep_category.png';
+      case 'meal': return 'assets/images/icon_meal_category.png';
+      case 'custom':
+      default: return 'assets/images/icon_custom_category.png';
+    }
+  }
+
   /// 默认配置模板
   static Map<String, dynamic> defaultConfigFor(String category) {
     return switch (category) {

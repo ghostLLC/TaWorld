@@ -43,9 +43,9 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
   String _selectedType = 'couple';
 
   static const _types = <_PartnerType>[
-    _PartnerType('couple', '\u2764\uFE0F', '情侣'),
-    _PartnerType('family', '\uD83C\uDFE0', '家人'),
-    _PartnerType('friend', '\uD83E\uDD1D', '朋友'),
+    _PartnerType('couple', '\u2764\uFE0F', '情侣', 'assets/images/type_couple.png'),
+    _PartnerType('family', '\uD83C\uDFE0', '家人', 'assets/images/type_family.png'),
+    _PartnerType('friend', '\uD83E\uDD1D', '朋友', 'assets/images/type_friend.png'),
   ];
 
   @override
@@ -666,11 +666,12 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
 
 /// 关系类型数据
 class _PartnerType {
-  const _PartnerType(this.value, this.emoji, this.label);
+  const _PartnerType(this.value, this.emoji, this.label, this.asset);
 
   final String value;
   final String emoji;
   final String label;
+  final String asset;
 }
 
 /// 可点击选中的类型卡片
@@ -704,9 +705,10 @@ class _TypeCard extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              type.emoji,
-              style: const TextStyle(fontSize: 28),
+            Image.asset(
+              type.asset,
+              width: 48,
+              height: 48,
             ),
             const SizedBox(height: TaSpacing.xxs),
             Text(

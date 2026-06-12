@@ -110,7 +110,7 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
     }
     if (_logs.isEmpty) {
       return const TaEmptyState(
-        icon: Icons.history_rounded,
+        imageAsset: 'assets/images/empty_reminder_history.png',
         title: '暂无提醒记录',
         subtitle: '完成第一次提醒后会在这里显示',
       );
