@@ -8,12 +8,16 @@ import '../../data/models/achievement.dart';
 
 abstract final class LocalAchievementService {
   /// 获取所有成就（含用户进度）
-  static Future<List<UserAchievement>> getAllWithProgress() async {
+  ///
+  /// [includeHidden] 是否包含隐藏的成就（如"双向奔赴"，单机版暂不展示）
+  static Future<List<UserAchievement>> getAllWithProgress({bool includeHidden = false}) async {
     final db = await DatabaseHelper.database;
+    final whereClause = includeHidden ? '' : " WHERE a.category != 'mutual'";
     final rows = await db.rawQuery('''
       SELECT a.*, ua.id as ua_id, ua.progress, ua.unlocked, ua.unlocked_at
       FROM achievements a
       LEFT JOIN user_achievements ua ON ua.achievement_id = a.id
+      $whereClause
       ORDER BY a.points ASC
     ''');
 
@@ -34,31 +38,26 @@ abstract final class LocalAchievementService {
     }).toList();
   }
 
-  /// 获取统计概览
+  /// 获取统计概览（排除隐藏成就）
   static Future<Map<String, dynamic>> getStats() async {
     final db = await DatabaseHelper.database;
 
-    final totalResult = await db.rawQuery('SELECT COUNT(*) as cnt FROM achievements');
+    final totalResult = await db.rawQuery(
+      "SELECT COUNT(*) as cnt FROM achievements WHERE category != 'mutual'",
+    );
     final total = totalResult.first['cnt'] as int? ?? 0;
 
-    final unlockedResult = await db.rawQuery(
-      'SELECT COUNT(*) as cnt FROM user_achievements WHERE unlocked = 1',
-    );
-    final unlocked = unlockedResult.first['cnt'] as int? ?? 0;
-
-    final pointsResult = await db.rawQuery('''
-      SELECT COALESCE(SUM(a.points), 0) as total_points
-      FROM user_achievements ua
+    final unlockedResult = await db.rawQuery('''
+      SELECT COUNT(*) as cnt FROM user_achievements ua
       JOIN achievements a ON ua.achievement_id = a.id
-      WHERE ua.unlocked = 1
+      WHERE ua.unlocked = 1 AND a.category != 'mutual'
     ''');
-    final totalPoints = pointsResult.first['total_points'] as int? ?? 0;
+    final unlocked = unlockedResult.first['cnt'] as int? ?? 0;
 
     return {
       'total': total,
       'unlocked': unlocked,
       'pending': total - unlocked,
-      'totalPoints': totalPoints,
     };
   }
 }

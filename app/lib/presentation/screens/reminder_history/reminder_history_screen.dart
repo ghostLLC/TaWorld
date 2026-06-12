@@ -201,6 +201,11 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
 
   _StatusInfo _statusInfo(String status, ThemeData theme) {
     return switch (status) {
+      'scheduled' => _StatusInfo(
+          Icons.schedule_rounded,
+          theme.colorScheme.onSurfaceVariant,
+          '待触发',
+        ),
       'triggered' => _StatusInfo(
           Icons.notifications_active_rounded,
           TaLightColors.warning,

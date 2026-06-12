@@ -9,15 +9,16 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../services/local/local_reminder_service.dart';
 import '../../../services/local/partner_service.dart';
+import '../../../services/reminder_scheduler.dart';
 import '../../../data/models/reminder_config.dart';
 import '../../../data/models/partner.dart';
 import '../../widgets/widgets.dart';
 
 /// 提醒配置页面 — 管理某段关系下的所有提醒配置
 class ReminderConfigScreen extends StatefulWidget {
-  const ReminderConfigScreen({required this.relationshipId, super.key});
+  const ReminderConfigScreen({required this.partnerId, super.key});
 
-  final String relationshipId;
+  final String partnerId;
 
   @override
   State<ReminderConfigScreen> createState() => _ReminderConfigScreenState();
@@ -41,8 +42,8 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
       _error = null;
     });
     try {
-      final configs = await LocalReminderService.getConfigs(widget.relationshipId);
-      final partner = await PartnerService.getById(widget.relationshipId);
+      final configs = await LocalReminderService.getConfigs(widget.partnerId);
+      final partner = await PartnerService.getById(widget.partnerId);
       if (mounted) {
         setState(() {
           _configs = configs;
@@ -68,6 +69,7 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 
     try {
       await LocalReminderService.updateConfig(config.id, enabled: newEnabled);
+      await ReminderScheduler.rescheduleConfig(config.id);
     } catch (e) {
       // 回滚
       if (mounted) {
@@ -110,6 +112,7 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 
     try {
       await LocalReminderService.deleteConfig(config.id);
+      await ReminderScheduler.rescheduleConfig(config.id);
       if (mounted) {
         setState(() => _configs.removeAt(index));
         ScaffoldMessenger.of(context).showSnackBar(
@@ -124,6 +127,392 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
       }
     }
   }
+
+  // ==================== 编辑配置 ====================
+
+  Future<void> _editConfig(int index) async {
+    final config = _configs[index];
+    Map<String, dynamic>? newConfig;
+
+    switch (config.category) {
+      case 'sleep':
+        newConfig = await _showSleepEditDialog(config.config);
+      case 'meal':
+        newConfig = await _showMealEditDialog(config.config);
+      case 'weather':
+        newConfig = await _showWeatherEditDialog(config.config);
+      case 'custom':
+        newConfig = await _showCustomEditDialog(config.config);
+    }
+
+    if (newConfig == null || !mounted) return;
+
+    try {
+      await LocalReminderService.updateConfig(config.id, config: newConfig);
+      await ReminderScheduler.rescheduleConfig(config.id);
+      setState(() {
+        _configs[index] = config.copyWith(config: newConfig);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('配置已更新')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('更新失败，请重试')),
+        );
+      }
+    }
+  }
+
+  /// 睡觉提醒编辑
+  Future<Map<String, dynamic>?> _showSleepEditDialog(
+    Map<String, dynamic> current,
+  ) async {
+    final targetTime = current['target_sleep_time'] as String? ?? '23:00';
+    final advanceMinutes = current['advance_minutes'] as int? ?? 30;
+
+    final parts = targetTime.split(':');
+    var selectedHour = int.tryParse(parts[0]) ?? 23;
+    var selectedMinute = int.tryParse(parts[1]) ?? 0;
+    var selectedAdvance = advanceMinutes;
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          title: const Text('编辑睡觉提醒'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.bedtime_rounded),
+                title: const Text('睡觉时间'),
+                subtitle: Text(
+                  '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
+                ),
+                onTap: () async {
+                  final time = await showTimePicker(
+                    context: ctx,
+                    initialTime: TimeOfDay(hour: selectedHour, minute: selectedMinute),
+                  );
+                  if (time != null) {
+                    setDialogState(() {
+                      selectedHour = time.hour;
+                      selectedMinute = time.minute;
+                    });
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.alarm_rounded),
+                title: const Text('提前提醒'),
+                subtitle: Text('$selectedAdvance 分钟前'),
+                trailing: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(value: 15, label: Text('15')),
+                    ButtonSegment(value: 30, label: Text('30')),
+                    ButtonSegment(value: 60, label: Text('60')),
+                  ],
+                  selected: {selectedAdvance},
+                  onSelectionChanged: (v) =>
+                      setDialogState(() => selectedAdvance = v.first),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop({
+                'target_sleep_time':
+                    '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
+                'advance_minutes': selectedAdvance,
+              }),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 吃饭提醒编辑
+  Future<Map<String, dynamic>?> _showMealEditDialog(
+    Map<String, dynamic> current,
+  ) async {
+    final meals = (current['meals'] as List?)
+            ?.map((m) => Map<String, dynamic>.from(m as Map))
+            .toList() ??
+        [
+          {'name': '早餐', 'target_time': '08:00', 'advance_minutes': 15},
+          {'name': '午餐', 'target_time': '12:00', 'advance_minutes': 15},
+          {'name': '晚餐', 'target_time': '18:00', 'advance_minutes': 15},
+        ];
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          title: const Text('编辑吃饭提醒'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ...List.generate(meals.length, (i) {
+                  final meal = meals[i];
+                  final timeParts = (meal['target_time'] as String? ?? '12:00').split(':');
+                  final hour = int.tryParse(timeParts[0]) ?? 12;
+                  final minute = int.tryParse(timeParts[1]) ?? 0;
+                  final advance = meal['advance_minutes'] as int? ?? 15;
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          Text(meal['name'] as String? ?? '',
+                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: InkWell(
+                              onTap: () async {
+                                final time = await showTimePicker(
+                                  context: ctx,
+                                  initialTime: TimeOfDay(hour: hour, minute: minute),
+                                );
+                                if (time != null) {
+                                  setDialogState(() {
+                                    meal['target_time'] =
+                                        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+                                  });
+                                }
+                              },
+                              child: Text(
+                                meal['target_time'] as String? ?? '',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                          DropdownButton<int>(
+                            value: advance,
+                            items: const [
+                              DropdownMenuItem(value: 10, child: Text('10分钟前')),
+                              DropdownMenuItem(value: 15, child: Text('15分钟前')),
+                              DropdownMenuItem(value: 30, child: Text('30分钟前')),
+                            ],
+                            onChanged: (v) {
+                              if (v != null) {
+                                setDialogState(() => meal['advance_minutes'] = v);
+                              }
+                            },
+                            isDense: true,
+                            underline: const SizedBox(),
+                          ),
+                          if (meals.length > 1)
+                            IconButton(
+                              icon: const Icon(Icons.remove_circle_outline, size: 20),
+                              onPressed: () =>
+                                  setDialogState(() => meals.removeAt(i)),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+                TextButton.icon(
+                  onPressed: () {
+                    setDialogState(() {
+                      meals.add({
+                        'name': '加餐',
+                        'target_time': '15:00',
+                        'advance_minutes': 15,
+                      });
+                    });
+                  },
+                  icon: const Icon(Icons.add_rounded, size: 20),
+                  label: const Text('添加餐次'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop({'meals': meals}),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 天气提醒编辑
+  Future<Map<String, dynamic>?> _showWeatherEditDialog(
+    Map<String, dynamic> current,
+  ) async {
+    final conditions = (current['notify_conditions'] as List?)
+            ?.cast<String>()
+            .toList() ??
+        ['rain', 'snow', 'extreme_cold', 'extreme_heat'];
+
+    final conditionOptions = {
+      'rain': ('🌧️', '下雨'),
+      'snow': ('❄️', '下雪'),
+      'extreme_cold': ('🥶', '极寒 (≤0°C)'),
+      'extreme_heat': ('🥵', '酷热 (≥35°C)'),
+    };
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          title: const Text('编辑天气提醒'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: conditionOptions.entries.map((entry) {
+              final isSelected = conditions.contains(entry.key);
+              final emoji = entry.value.$1;
+              final label = entry.value.$2;
+              return CheckboxListTile(
+                value: isSelected,
+                onChanged: (v) {
+                  setDialogState(() {
+                    if (v == true) {
+                      conditions.add(entry.key);
+                    } else {
+                      conditions.remove(entry.key);
+                    }
+                  });
+                },
+                title: Text('$emoji $label'),
+                controlAffinity: ListTileControlAffinity.leading,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+              );
+            }).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop({
+                'notify_conditions': conditions,
+                'custom_messages': current['custom_messages'] ?? {},
+              }),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 自定义提醒编辑
+  Future<Map<String, dynamic>?> _showCustomEditDialog(
+    Map<String, dynamic> current,
+  ) async {
+    final messageCtrl = TextEditingController(
+      text: current['message'] as String? ?? '',
+    );
+    final timeParts = (current['target_time'] as String? ?? '09:00').split(':');
+    var selectedHour = int.tryParse(timeParts[0]) ?? 9;
+    var selectedMinute = int.tryParse(timeParts[1]) ?? 0;
+    var repeatDaily = current['repeat_daily'] as bool? ?? true;
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          title: const Text('编辑自定义提醒'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: messageCtrl,
+                decoration: const InputDecoration(
+                  labelText: '提醒消息',
+                  hintText: '写一句想对Ta说的话',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
+                maxLength: 100,
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.access_time_rounded),
+                title: const Text('提醒时间'),
+                subtitle: Text(
+                  '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
+                ),
+                onTap: () async {
+                  final time = await showTimePicker(
+                    context: ctx,
+                    initialTime: TimeOfDay(hour: selectedHour, minute: selectedMinute),
+                  );
+                  if (time != null) {
+                    setDialogState(() {
+                      selectedHour = time.hour;
+                      selectedMinute = time.minute;
+                    });
+                  }
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+              SwitchListTile(
+                value: repeatDaily,
+                onChanged: (v) => setDialogState(() => repeatDaily = v),
+                title: const Text('每天重复'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (messageCtrl.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('请填写提醒消息')),
+                  );
+                  return;
+                }
+                Navigator.of(ctx).pop({
+                  'message': messageCtrl.text.trim(),
+                  'target_time':
+                      '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
+                  'repeat_daily': repeatDaily,
+                });
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== 创建 ====================
 
   Future<void> _createConfig() async {
     final category = await showDialog<String>(
@@ -162,13 +551,23 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 
     if (category == null) return;
 
+    Map<String, dynamic> config = ReminderConfig.defaultConfigFor(category);
+
+    // 自定义提醒需要用户配置具体内容
+    if (category == 'custom') {
+      final customConfig = await _showCustomEditDialog(config);
+      if (customConfig == null) return;
+      config = customConfig;
+    }
+
     try {
       await LocalReminderService.createConfig(
-        partnerId: widget.relationshipId,
+        partnerId: widget.partnerId,
         category: category,
-        config: ReminderConfig.defaultConfigFor(category),
+        config: config,
         enabled: true,
       );
+      await ReminderScheduler.scheduleAll();
       await _loadData();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -292,6 +691,13 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                           ),
                         ],
                       ),
+                    ),
+                    // 编辑按钮
+                    IconButton(
+                      icon: Icon(Icons.edit_rounded,
+                          color: theme.colorScheme.onSurfaceVariant, size: 20),
+                      tooltip: '编辑',
+                      onPressed: () => _editConfig(index),
                     ),
                     // 开关
                     Switch(

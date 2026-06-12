@@ -3,8 +3,10 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/router.dart';
 import '../../../services/ai_service.dart';
 
 
@@ -21,11 +23,19 @@ class _AiChatScreenState extends State<AiChatScreen> {
   final _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
   bool _sending = false;
+  bool _hasApiKey = true;
 
   @override
   void initState() {
     super.initState();
+    _checkApiKey();
     _loadHistory();
+  }
+
+  Future<void> _checkApiKey() async {
+    final has = await AiService.hasApiKey();
+    if (!mounted) return;
+    setState(() => _hasApiKey = has);
   }
 
   Future<void> _loadHistory() async {
@@ -165,6 +175,49 @@ class _AiChatScreenState extends State<AiChatScreen> {
       ),
       body: Column(
         children: [
+          // API Key 未配置提示
+          if (!_hasApiKey)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: TaSpacing.pagePadding,
+                vertical: TaSpacing.sm,
+              ),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer.withValues(alpha: 0.5),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    size: 18,
+                    color: theme.colorScheme.error,
+                  ),
+                  const SizedBox(width: TaSpacing.xs),
+                  Expanded(
+                    child: Text(
+                      'AI 服务未配置，请先设置 API Key',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await context.push(Routes.apiKeys);
+                      _checkApiKey();
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: TaSpacing.sm),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('去配置'),
+                  ),
+                ],
+              ),
+            ),
+
           // 消息列表
           Expanded(
             child: _messages.isEmpty

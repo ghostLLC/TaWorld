@@ -70,6 +70,7 @@ class ReminderLog {
   }
 
   String get statusLabel => switch (status) {
+    'scheduled' => '已调度',
     'triggered' => '已触发',
     'sent' => '已发送',
     'confirmed' => '已确认',

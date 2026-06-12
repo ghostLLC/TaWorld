@@ -8,7 +8,6 @@ import 'package:dio/dio.dart';
 import '../../../app/design_tokens.dart';
 import '../../widgets/widgets.dart';
 import '../../../services/ai_service.dart';
-import '../../../services/weather_service.dart';
 
 class ApiKeySetupScreen extends StatefulWidget {
   const ApiKeySetupScreen({super.key});
@@ -19,15 +18,10 @@ class ApiKeySetupScreen extends StatefulWidget {
 
 class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   final _aiKeyController = TextEditingController();
-  final _weatherKeyController = TextEditingController();
   bool _aiKeyVisible = false;
-  bool _weatherKeyVisible = false;
   bool _aiConfigured = false;
-  bool _weatherConfigured = false;
   String? _aiTestResult;
-  String? _weatherTestResult;
   bool _aiTesting = false;
-  bool _weatherTesting = false;
 
   @override
   void initState() {
@@ -38,21 +32,15 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   @override
   void dispose() {
     _aiKeyController.dispose();
-    _weatherKeyController.dispose();
     super.dispose();
   }
 
   Future<void> _loadKeys() async {
     final aiKey = await AiService.getApiKey();
-    final weatherKey = await WeatherService.getApiKey();
     setState(() {
       _aiConfigured = aiKey != null && aiKey.isNotEmpty;
-      _weatherConfigured = weatherKey != null && weatherKey.isNotEmpty;
       if (_aiConfigured) {
         _aiKeyController.text = aiKey!;
-      }
-      if (_weatherConfigured) {
-        _weatherKeyController.text = weatherKey!;
       }
     });
   }
@@ -70,22 +58,6 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('DeepSeek API Key 已保存')),
-    );
-  }
-
-  Future<void> _saveWeatherKey() async {
-    final key = _weatherKeyController.text.trim();
-    if (key.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请输入 API Key')),
-      );
-      return;
-    }
-    await WeatherService.setApiKey(key);
-    setState(() => _weatherConfigured = true);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('和风天气 API Key 已保存')),
     );
   }
 
@@ -124,32 +96,6 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
     }
   }
 
-  Future<void> _testWeatherKey() async {
-    final key = _weatherKeyController.text.trim();
-    if (key.isEmpty) return;
-    setState(() {
-      _weatherTesting = true;
-      _weatherTestResult = null;
-    });
-    try {
-      final dio = Dio();
-      final response = await dio.get(
-        'https://devapi.qweather.com/v7/weather/now',
-        queryParameters: {
-          'location': '101010100', // 北京
-          'key': key,
-        },
-      );
-      setState(() {
-        _weatherTestResult = response.data['code'] == '200' ? '连接成功' : 'Key 无效';
-      });
-    } catch (e) {
-      setState(() => _weatherTestResult = '连接失败');
-    } finally {
-      setState(() => _weatherTesting = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -177,7 +123,6 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-
               const SizedBox(height: TaSpacing.lg),
 
               // ---- DeepSeek AI ----
@@ -289,120 +234,6 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                   ],
                 ),
               ).animate().fadeIn(duration: TaAnimation.normal),
-
-              const SizedBox(height: TaSpacing.lg),
-
-              // ---- QWeather ----
-              TaCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.cloud_rounded,
-                            color: TaLightColors.tertiary, size: 24),
-                        const SizedBox(width: TaSpacing.xs),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '和风天气',
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              Text(
-                                '用于天气查询和天气提醒',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: _weatherConfigured
-                                    ? TaLightColors.success
-                                    : Colors.grey,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _weatherConfigured ? '已配置' : '未配置',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: TaSpacing.md),
-                    TaTextField(
-                      controller: _weatherKeyController,
-                      label: 'API Key',
-                      hint: '输入和风天气 Key',
-                      obscureText: !_weatherKeyVisible,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _weatherKeyVisible
-                              ? Icons.visibility_off_rounded
-                              : Icons.visibility_rounded,
-                          size: 20,
-                        ),
-                        onPressed: () => setState(
-                            () => _weatherKeyVisible = !_weatherKeyVisible),
-                      ),
-                    ),
-                    const SizedBox(height: TaSpacing.sm),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TaButton(
-                            onPressed:
-                                _weatherTesting ? null : _testWeatherKey,
-                            text: '测试连接',
-                            loading: _weatherTesting,
-                          ),
-                        ),
-                        const SizedBox(width: TaSpacing.sm),
-                        Expanded(
-                          child: TaButton(
-                            onPressed: _saveWeatherKey,
-                            text: '保存',
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (_weatherTestResult != null) ...[
-                      const SizedBox(height: TaSpacing.xs),
-                      Text(
-                        _weatherTestResult!,
-                        style: TextStyle(
-                          color: _weatherTestResult == '连接成功'
-                              ? TaLightColors.success
-                              : theme.colorScheme.error,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: TaSpacing.xs),
-                    Text(
-                      '申请地址：dev.qweather.com（免费版每日1000次）',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ).animate().fadeIn(
-                  delay: 200.ms, duration: TaAnimation.normal),
 
               const SizedBox(height: TaSpacing.xxl),
             ],

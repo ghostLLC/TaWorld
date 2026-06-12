@@ -2,7 +2,7 @@
 
 > **目标读者**: 负责实现具体页面的 AI 模型或开发者
 >
-> **前提**: 设计系统已建好，你只需要用组件搭建页面。
+> **前提**: 设计系统已建好。TaWorld 是离线优先的独立 Flutter 应用，数据存储在本地 SQLite，不依赖后端服务器。
 
 ---
 
@@ -10,33 +10,53 @@
 
 ```
 app/lib/
-├── main.dart                      # 入口
-├── app/                           # 应用级配置
-│   ├── app.dart                   # MaterialApp 根组件
-│   ├── router.dart                # GoRouter 路由表
-│   ├── theme.dart                 # 主题配置（亮色+暗色）
-│   ├── design_tokens.dart         # 设计令牌（颜色/间距/圆角/阴影）
-│   └── typography.dart            # 字体配置
-├── core/                          # 核心工具
-│   ├── constants/
-│   │   └── api_endpoints.dart     # API 路径常量
-│   └── network/
-│       ├── dio_client.dart        # Dio HTTP 客户端
-│       └── api_response.dart      # 统一响应模型
+├── main.dart
+├── app/
+│   ├── app.dart              # MaterialApp 根组件
+│   ├── router.dart           # GoRouter 路由表（全部已实现）
+│   ├── theme.dart            # 主题配置（亮色+暗色）
+│   ├── design_tokens.dart    # 设计令牌
+│   └── typography.dart       # 字体配置
+├── data/
+│   ├── models/               # 数据模型
+│   │   ├── user.dart         # LocalUser
+│   │   ├── partner.dart      # Partner（关心的人）
+│   │   ├── reminder_config.dart # ReminderConfig
+│   │   ├── reminder_log.dart # ReminderLog
+│   │   └── achievement.dart  # Achievement + UserAchievement
+│   ├── city_data.dart        # 世界城市数据（24国300+城）
+│   └── local/database_helper.dart # SQLite 数据库
 ├── services/
-│   └── auth_service.dart          # Token 管理
+│   ├── ai_service.dart       # DeepSeek AI
+│   ├── weather_service.dart  # wttr.in 天气
+│   ├── notification_service.dart # 本地通知
+│   ├── reminder_scheduler.dart # 提醒调度
+│   ├── background_tasks.dart # WorkManager
+│   ├── care_suggestion_service.dart
+│   ├── theme_service.dart
+│   └── local/                # 本地数据服务
+│       ├── local_user_service.dart
+│       ├── partner_service.dart
+│       ├── local_reminder_service.dart
+│       └── local_achievement_service.dart
 └── presentation/
-    ├── screens/                   # 页面
-    │   ├── login/login_screen.dart    # ★ 参考实现
-    │   └── home/home_screen.dart      # ★ 参考实现
-    └── widgets/                   # 组件库
-        ├── widgets.dart           # 统一导出
-        ├── ta_card.dart
-        ├── ta_button.dart
-        ├── ta_text_field.dart
-        ├── ta_avatar.dart
-        ├── ta_loading.dart
-        ├── ta_notification_card.dart
+    ├── screens/
+    │   ├── ai_home/           # AI 主屏（Tab 1）
+    │   ├── home/              # 首页 + 关心的人（Tab 2）+ 我的（Tab 3）
+    │   ├── add_partner/       # 添加关心的人
+    │   ├── partner_detail/    # 关心的人详情/编辑
+    │   ├── reminder_config/   # 提醒配置
+    │   ├── reminder_history/  # 提醒历史
+    │   ├── achievements/      # 成就列表
+    │   ├── ai_chat/           # AI 对话（旧版独立页面）
+    │   ├── api_key_setup/     # API Key 管理
+    │   ├── onboarding/        # 引导页
+    │   └── settings/          # 设置
+    └── widgets/
+        ├── widgets.dart       # 统一导出
+        ├── city_picker_sheet.dart # 城市选择器
+        ├── ta_card.dart / ta_button.dart / ta_text_field.dart
+        ├── ta_avatar.dart / ta_loading.dart
         └── ta_achievement_badge.dart
 ```
 
@@ -44,17 +64,45 @@ app/lib/
 
 ## 二、新建页面的标准流程
 
+> **注意**: 当前所有路由均已连接到真实页面，不再需要替换 `_Placeholder`。如需新增页面，按以下流程操作。
+
 ### 步骤 1: 创建页面文件
 
 ```dart
-// lib/presentation/screens/achievements/achievements_screen.dart
+// lib/presentation/screens/my_feature/my_feature_screen.dart
 
 import 'package:flutter/material.dart';
 import '../../../app/design_tokens.dart';
 import '../../widgets/widgets.dart';
 
-class AchievementsScreen extends StatelessWidget {
-  const AchievementsScreen({super.key});
+class MyFeatureScreen extends StatefulWidget {
+  const MyFeatureScreen({super.key});
+
+  @override
+  State<MyFeatureScreen> createState() => _MyFeatureScreenState();
+}
+
+class _MyFeatureScreenState extends State<MyFeatureScreen> {
+  bool _loading = true;
+  String? _error;
+  List<SomeModel> _data = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      // 从本地 SQLite 加载数据（参见第五节）
+      final items = await SomeLocalService.getAll();
+      setState(() { _data = items; _loading = false; });
+    } catch (e) {
+      setState(() { _error = '加载失败'; _loading = false; });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,12 +116,12 @@ class AchievementsScreen extends StatelessWidget {
 
 ### 步骤 2: 注册路由
 
-在 `lib/app/router.dart` 中替换对应的 `_Placeholder`：
+在 `lib/app/router.dart` 中添加新路由：
 
 ```dart
 GoRoute(
-  path: Routes.achievements,
-  builder: (_, __) => const AchievementsScreen(),  // 替换 _Placeholder
+  path: '/my-feature',
+  builder: (_, __) => const MyFeatureScreen(),
 ),
 ```
 
@@ -111,8 +159,8 @@ TaCard.outlined(
 
 ```dart
 TaButton(
-  text: '登录',
-  icon: Icons.login_rounded,   // 可选图标
+  text: '保存',
+  icon: Icons.check_rounded,   // 可选图标
   loading: isLoading,          // 加载态
   onPressed: () {},
 )
@@ -122,10 +170,10 @@ TaButton(
 
 ```dart
 TaTextField(
-  label: '手机号',
-  hint: '请输入手机号',
-  prefixIcon: Icons.phone_rounded,
-  obscureText: false,          // 密码模式
+  label: '姓名',
+  hint: '请输入姓名',
+  prefixIcon: Icons.person_rounded,
+  obscureText: false,
   controller: _controller,
   validator: (v) => v!.isEmpty ? '必填' : null,
 )
@@ -140,18 +188,6 @@ TaAvatar.large(name: '张三')
 TaAvatar.xl(url: url, showBorder: true)
 ```
 
-### TaNotificationCard — 提醒卡片
-
-```dart
-TaNotificationCard(
-  type: ReminderCardType.weather,
-  message: 'Ta那边要下雨了 🌂',
-  time: '2小时前',
-  confirmed: false,
-  onConfirm: () {},
-)
-```
-
 ### TaAchievementBadge — 成就徽章
 
 ```dart
@@ -161,8 +197,22 @@ TaAchievementBadge(
   progress: 1,
   target: 1,
   unlocked: true,
-  points: 10,
+  // 已解锁时自动显示"已解锁"标签，无需传入 points
 )
+```
+
+### CityPickerSheet — 城市选择器
+
+```dart
+import '../../widgets/city_picker_sheet.dart';
+
+// 弹出城市选择底部弹窗
+final selection = await showCityPicker(context);
+if (selection != null) {
+  // selection.city, selection.province, selection.country
+  // selection.displayText — "广东 · 深圳" or "日本 · 东京"
+  setState(() { _selectedCity = selection; });
+}
 ```
 
 ### TaLoading / TaEmptyState / TaErrorState
@@ -174,15 +224,15 @@ TaLoading(message: '加载中...')
 // 空状态
 TaEmptyState(
   icon: Icons.people_outline_rounded,
-  title: '还没有关系',
-  subtitle: '邀请你关心的人加入吧',
-  actionText: '创建邀请',
+  title: '还没有关心的人',
+  subtitle: '添加你关心的人，开始守护吧',
+  actionText: '添加',
   onAction: () {},
 )
 
 // 错误状态
 TaErrorState(
-  message: '网络连接失败',
+  message: '加载失败',
   onRetry: () {},
 )
 ```
@@ -232,53 +282,84 @@ borderRadius: TaRadius.borderMd
 
 ---
 
-## 五、API 调用规范
+## 五、本地服务调用规范
 
-### 创建 Dio 实例
+> **架构说明**: TaWorld 是离线优先的独立应用，数据存储在本地 SQLite 数据库中，不依赖后端服务器。外部服务（AI、天气）通过 HTTP 直接调用。
+
+### 本地数据操作（SQLite）
 
 ```dart
-import 'package:taworld/core/network/dio_client.dart';
-import 'package:taworld/core/constants/api_endpoints.dart';
+import '../../../services/local/partner_service.dart';
 
-final dio = createDioClient();
+// 查询全部
+final partners = await PartnerService.getAll();
+
+// 按 ID 查询
+final partner = await PartnerService.getById(id);
+
+// 创建
+final newPartner = await PartnerService.create(partner);
+
+// 更新
+await PartnerService.update(partner);
 ```
 
-### 发起请求
+其他本地服务用法相同：
 
 ```dart
-// GET
-final resp = await dio.get(ApiEndpoints.me);
+import '../../../services/local/local_user_service.dart';
+import '../../../services/local/local_reminder_service.dart';
+import '../../../services/local/local_achievement_service.dart';
 
-// POST
-final resp = await dio.post(ApiEndpoints.login, data: {
-  'phone': '13800001234',
-  'password': '123456',
-});
+// 用户
+final user = await LocalUserService.getCurrentUser();
 
-// 解析响应
-if (resp.data['code'] == 0) {
-  final data = resp.data['data'];
-  // 成功处理
-} else {
-  final message = resp.data['message'];
-  // 错误处理
-}
+// 提醒配置
+final reminders = await LocalReminderService.getByPartnerId(partnerId);
+
+// 成就
+final achievements = await LocalAchievementService.getAll();
+```
+
+### AI 服务
+
+```dart
+import '../../../services/ai_service.dart';
+
+// 检查是否已配置 API Key
+final hasKey = await AiService.hasApiKey();
+
+// 发送聊天消息
+final reply = await AiService.chat(message);
+```
+
+### 天气服务
+
+```dart
+import '../../../services/weather_service.dart';
+
+// 按城市名获取当前天气
+final weather = await WeatherService.getCurrentWeatherByCity('深圳');
+```
+
+### 提醒调度
+
+```dart
+import '../../../services/reminder_scheduler.dart';
+
+// 重新调度所有已启用的提醒（添加/修改/删除提醒后调用）
+await ReminderScheduler.scheduleAll();
 ```
 
 ### 错误处理
 
 ```dart
 try {
-  final resp = await dio.post(ApiEndpoints.login, data: {...});
+  final partners = await PartnerService.getAll();
   // ...
-} on DioException catch (e) {
-  if (e.response != null) {
-    // 服务端返回了错误（如 400/401/404）
-    final msg = e.response?.data?['message'] ?? '请求失败';
-  } else {
-    // 网络不可达
-    const msg = '网络连接失败，请稍后重试';
-  }
+} catch (e) {
+  // SQLite 异常或文件损坏（极少发生）
+  setState(() { _error = '读取本地数据失败'; });
 }
 ```
 
@@ -286,7 +367,9 @@ try {
 
 ## 六、页面状态管理模式
 
-每个页面应处理 4 种状态：
+> **说明**: 页面使用 `StatefulWidget` + `setState` 管理状态，不使用 Riverpod 或其他状态管理框架。数据来自本地 SQLite 服务，无网络错误（DioException 等），仅需处理 SQLite 异常。
+
+每个页面应处理 3 种状态：加载中、错误、正常数据：
 
 ```dart
 class _SomeScreenState extends State<SomeScreen> {
@@ -297,22 +380,15 @@ class _SomeScreenState extends State<SomeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _loadAll();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadAll() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final dio = createDioClient();
-      final resp = await dio.get(ApiEndpoints.someEndpoint);
-      if (resp.data['code'] == 0) {
-        setState(() {
-          _data = (resp.data['data'] as List).map(...).toList();
-          _loading = false;
-        });
-      } else {
-        setState(() { _error = resp.data['message']; _loading = false; });
-      }
+      // 从本地 SQLite 服务加载数据
+      final items = await SomeLocalService.getAll();
+      setState(() { _data = items; _loading = false; });
     } catch (e) {
       setState(() { _error = '加载失败'; _loading = false; });
     }
@@ -321,7 +397,7 @@ class _SomeScreenState extends State<SomeScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return const TaLoading(message: '加载中...');
-    if (_error != null) return TaErrorState(message: _error!, onRetry: _loadData);
+    if (_error != null) return TaErrorState(message: _error!, onRetry: _loadAll);
     if (_data.isEmpty) return const TaEmptyState(icon: ..., title: '暂无数据');
 
     // 正常数据展示
@@ -354,18 +430,21 @@ TaAnimation.slow    // 500ms
 
 ---
 
-## 八、待实现页面清单
+## 八、页面清单（全部已实现）
 
-| 页面 | 路由 | 复杂度 | 关键组件 |
-|------|------|--------|---------|
-| 注册页 | `/register` | 低 | TaTextField × 2 + TaButton |
-| 关系管理页 | `/relationships` (tab内) | 中 | TaCard 列表 + TaAvatar |
-| 关系详情页 | `/relationships/:id` | 中 | TaCard + 提醒配置入口 |
-| 提醒配置页 | `/reminders/config/:relId` | 中 | 表单 + Switch + TimePicker |
-| 提醒历史页 | `/reminders/:id/logs` | 低 | TaNotificationCard 列表 |
-| 成就列表页 | `/achievements` | 中 | TaAchievementBadge 网格 |
-| AI 对话页 | `/ai/chat` | 中 | 聊天气泡 + 输入框 |
-| 个人中心页 | `/profile` (tab内) | 低 | TaAvatar + 菜单列表 |
-| 设置页 | `/settings` | 低 | Switch + ListTile |
+| 页面 | 路由 | 文件 | 状态 |
+|------|------|------|------|
+| 引导页 | `/onboarding` | onboarding_screen.dart | ✅ |
+| AI 主屏 | Tab 1 | ai_home_screen.dart | ✅ |
+| 关心的人 | Tab 2 | home_screen.dart (_PartnersTab) | ✅ |
+| 我的 | Tab 3 | home_screen.dart (_ProfileTab) | ✅ |
+| 添加关心的人 | `/partners/add` | add_partner_screen.dart | ✅ |
+| 关心的人详情 | `/partners/:id` | partner_detail_screen.dart | ✅ |
+| 提醒配置 | `/reminders/config/:partnerId` | reminder_config_screen.dart | ✅ |
+| 提醒历史 | `/reminders/:id/logs` | reminder_history_screen.dart | ✅ |
+| 成就列表 | `/achievements` | achievements_screen.dart | ✅ |
+| AI 对话 | `/ai/chat` | ai_chat_screen.dart | ✅ |
+| API Key 管理 | `/settings/api-keys` | api_key_setup_screen.dart | ✅ |
+| 设置 | `/settings` | settings_screen.dart | ✅ |
 
-> **参考 `login_screen.dart` 和 `home_screen.dart` 了解完整的页面实现模式。**
+> **所有页面均已实现，路由表完整，无占位符。**

@@ -30,7 +30,7 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
     '干饭督导': 30,
     '百日陪伴': 100,
     '创意达人': 5,
-    '双向奔赴': 10,
+    // '双向奔赴' 暂时隐藏，留作后期拓展（已在数据库查询层过滤）
   };
 
   @override
@@ -88,7 +88,6 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
 
     final unlocked = _stats['unlocked'] as int? ?? 0;
     final pending = _stats['pending'] as int? ?? 0;
-    final totalPoints = _stats['totalPoints'] as int? ?? 0;
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -112,11 +111,6 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
                       value: pending.toString(),
                       label: '待解锁',
                     ),
-                    _OverviewStat(
-                      icon: Icons.stars_rounded,
-                      value: totalPoints.toString(),
-                      label: '总积分',
-                    ),
                   ],
                 ),
               ).animate().fadeIn(duration: 400.ms),
@@ -136,7 +130,6 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
               itemCount: _achievements.length,
               itemBuilder: (context, index) {
                 final ua = _achievements[index];
-                final points = ua.achievementPoints ?? 0;
 
                 // Use known target from seed data; fall back to 1 for unknown achievements.
                 final target = _achievementTargets[ua.achievementName ?? ''] ?? 1;
@@ -147,7 +140,6 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
                   progress: ua.progress,
                   target: target,
                   unlocked: ua.unlocked,
-                  points: points,
                 ).animate().fadeIn(
                       delay: (index * 80).ms,
                       duration: TaAnimation.normal,

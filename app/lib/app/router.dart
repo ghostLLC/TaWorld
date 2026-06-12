@@ -10,13 +10,16 @@ import '../presentation/screens/ai_chat/ai_chat_screen.dart';
 import '../presentation/screens/home/home_screen.dart';
 import '../presentation/screens/add_partner/add_partner_screen.dart';
 import '../presentation/screens/api_key_setup/api_key_setup_screen.dart';
+import '../presentation/screens/onboarding/onboarding_screen.dart';
 import '../presentation/screens/reminder_config/reminder_config_screen.dart';
 import '../presentation/screens/partner_detail/partner_detail_screen.dart';
 import '../presentation/screens/reminder_history/reminder_history_screen.dart';
 import '../presentation/screens/settings/settings_screen.dart';
+import '../services/local/local_user_service.dart';
 
 /// 路由路径常量
 abstract final class Routes {
+  static const onboarding = '/onboarding';
   static const home = '/';
   static const partnerDetail = '/partners/:id';
   static const addPartner = '/partners/add';
@@ -33,7 +36,23 @@ GoRouter createRouter() {
   return GoRouter(
     initialLocation: Routes.home,
     debugLogDiagnostics: true,
+    redirect: (context, state) async {
+      final isOnboarding = state.matchedLocation == Routes.onboarding;
+      final hasUser = await LocalUserService.hasUser();
+
+      // 没有用户且不在引导页 → 跳转引导页
+      if (!hasUser && !isOnboarding) return Routes.onboarding;
+      // 已有用户且在引导页 → 跳转首页
+      if (hasUser && isOnboarding) return Routes.home;
+      return null;
+    },
     routes: [
+      // 首次引导页
+      GoRoute(
+        path: Routes.onboarding,
+        builder: (context, _) => const OnboardingScreen(),
+      ),
+
       // 首页（含底部导航）
       GoRoute(
         path: Routes.home,
@@ -58,7 +77,7 @@ GoRouter createRouter() {
       GoRoute(
         path: Routes.reminderConfig,
         builder: (context, state) => ReminderConfigScreen(
-          relationshipId: state.pathParameters['partnerId']!,
+          partnerId: state.pathParameters['partnerId']!,
         ),
       ),
 

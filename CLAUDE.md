@@ -5,107 +5,124 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Common Commands
 
 ```bash
-# ---- Backend (from server/) ----
-venv\Scripts\activate                          # activate venv
-uvicorn app.main:app --reload --port 8000      # dev server
-pytest                                         # all tests (33)
-pytest tests/test_auth.py -k test_login        # single test
-
-# Database (from server/ — Chinese Windows MUST set PYTHONUTF8=1)
-$env:PYTHONUTF8=1; alembic upgrade head        # apply migrations
-$env:PYTHONUTF8=1; alembic revision --autogenerate -m "desc"  # generate new migration
-$env:PYTHONUTF8=1; alembic downgrade -1        # rollback
-
-# Infrastructure (from repo root)
-docker-compose up -d postgres redis minio      # start all infrastructure
-docker-compose ps                              # check status
-
-# ---- Flutter (from app/) ----
+# Flutter (from app/)
 flutter pub get                                # install dependencies
-flutter analyze                                # static analysis
-flutter run -d chrome                          # run in browser
+flutter analyze                                # static analysis (must pass clean)
 flutter run                                    # run on connected device/emulator
-flutter build apk --release                    # build release APK
+flutter build apk --release                    # build release APK (~55MB)
 ```
+
+> **Note:** The `server/` directory contains a deprecated Python backend, kept for reference only. Do NOT run or modify it.
 
 ## Architecture
 
-**Modular Monolith.** The single FastAPI app (`server/app/main.py`) registers 7 business modules under `/api/v1`. Each module follows a strict 4-layer dependency order:
+**Standalone Flutter App.** All data stored locally in SQLite via `sqflite`. No server, no network dependency for core features.
 
+### App structure (`app/lib/`)
+
+- `app/` — App entry, routing (GoRouter), theme (Material 3), design tokens
+- `data/` — Models (user, partner, reminder_config, reminder_log, achievement), city_data (world cities), local SQLite (DatabaseHelper)
+- `services/` — Business logic layer:
+  - `ai_service.dart` — DeepSeek AI chat + API key management (SQLite chat_history table)
+  - `weather_service.dart` — wttr.in free weather API (no key needed)
+  - `notification_service.dart` — flutter_local_notifications zonedSchedule
+  - `reminder_scheduler.dart` — Schedules all enabled reminder configs as local notifications
+  - `background_tasks.dart` — WorkManager periodic background tasks
+  - `local/` — SQLite CRUD services (user, partner, reminder, achievement)
+- `presentation/` — UI layer:
+  - `screens/` — 11 screens (ai_home, home, add_partner, partner_detail, reminder_config, reminder_history, achievements, ai_chat, api_key_setup, onboarding, settings)
+  - `widgets/` — Component library (TaCard, TaButton, TaTextField, TaAvatar, TaLoading, TaEmptyState, TaErrorState, TaAchievementBadge, CityPickerSheet)
+
+### Navigation
+
+3-tab bottom NavigationBar with IndexedStack:
+
+| Tab | Screen | Description |
+|-----|--------|-------------|
+| 1 | AI 助手 (`AiHomeScreen`) | AI chat + proactive messages + quick chips |
+| 2 | 关心的人 (`_PartnersTab` in `HomeScreen`) | Expandable partner cards with city/time/weather |
+| 3 | 我的 (`_ProfileTab` in `HomeScreen`) | Profile + stats + menu |
+
+### Routes (defined in `lib/app/router.dart`)
+
+```dart
+Routes.home = '/'
+Routes.onboarding = '/onboarding'
+Routes.addPartner = '/partners/add'
+Routes.partnerDetail = '/partners/:id'
+Routes.reminderConfig = '/reminders/config/:partnerId'
+Routes.reminderHistory = '/reminders/:id/logs'
+Routes.achievements = '/achievements'
+Routes.aiChat = '/ai/chat'
+Routes.apiKeys = '/settings/api-keys'
+Routes.settings = '/settings'
 ```
-models.py  →  schemas.py  →  service.py  →  router.py
-  (DB)         (validation)    (logic)        (HTTP)
-```
-
-**Core layer** (`server/app/core/`): `config.py` (pydantic-settings), `database.py` (async engine + `UUIDMixin`/`TimestampMixin`), `security.py` (JWT + bcrypt), `dependencies.py` (auth deps + Redis pool), `push_service.py` (FCM with graceful degradation), `storage.py` (MinIO avatar upload, degrades gracefully when MinIO unreachable).
-
-**Common layer** (`server/app/common/`): `response.py` (unified `{code, message, data}`), `exceptions.py` (hierarchy: `1xxx` Auth, `2xxx` User, `3xxx` Relationship, `4xxx` Reminder, `5xxx` System), `pagination.py`, `rate_limit.py` (auth endpoints: 10req/60s, localhost exempt).
-
-**Tasks** (`server/app/tasks/`): APScheduler — weather check (hourly), timed reminder (per minute). Started in FastAPI `lifespan`, use `async_session_factory()` directly (must commit/rollback manually).
-
-**Infrastructure**: PostgreSQL 16 + Redis 7 + MinIO via Docker Compose (all healthy). If Docker Hub is unreachable, pull images via `docker pull docker.m.daocloud.io/<image>:<tag>` then tag to the expected name. Database has 9 tables at migration `0001`.
-
-**Flutter**: SDK 3.41.9 installed at `C:\flutter\`. Android toolchain ready (SDK 36). PATH includes `C:\flutter\bin`.
 
 ## Key Conventions
 
-### Response format
-All endpoints return `{code: 0, message: "success", data: {...}}`. Use helpers: `success_response()`, `paginated_response()`. Never return raw dicts.
+### Design tokens
 
-### Error handling
-Use custom exceptions from `app/common/exceptions.py`. Never `raise HTTPException` directly. The global handler converts `AppException` to unified response format.
+All visual values come from `lib/app/design_tokens.dart`. Never hardcode colors, spacing, or radius. Use `TaSpacing.md`, `TaRadius.borderMd`, `theme.colorScheme.primary`, etc.
 
-### Authentication
-Protected routes use `current_user: Annotated[User, Depends(get_current_active_user)]`. The `get_current_user` dep validates JWT + fetches User. `get_current_active_user` wraps it (extension point for status checks).
+### State management
 
-### Database session
-`get_db()` auto-commits on success, auto-rollbacks on exception. Services called from routes don't need explicit `commit()`. Tasks using `async_session_factory()` directly MUST commit/rollback manually.
+Plain `StatefulWidget` + `setState`. No Riverpod/Bloc. Each screen manages its own loading/error/data states.
 
-### Models
-Use `Base, UUIDMixin, TimestampMixin` from `database.py`. Types use cross-DB SQLAlchemy 2.0: `sa.Uuid` (not `postgresql.UUID`), `sa.JSON` (not `postgresql.JSONB`). This allows SQLite for tests and PostgreSQL for production.
+### Animations
 
-### Push notifications
-`PushService.send()` from `app/core/push_service.py`. When `FCM_SERVER_KEY` is not configured, it logs the message and returns (no error). This means all TODO locations (reminders, weather_check, reminder_trigger) are wired and working — they just need a real key to actually deliver.
+Use the `flutter_animate` package with the standard durations:
 
-## API Overview (35 routes)
+- `TaAnimation.fast` — 200ms
+- `TaAnimation.normal` — 300ms
+- `TaAnimation.slow` — 500ms
+- `TaAnimation.curve` — easeInOutCubic
 
-| Module | Key endpoints |
-|--------|--------------|
-| Auth | `POST register/login/refresh` |
-| Users | `GET/PUT /me`, `PUT /me/location`, `POST /me/devices`, `GET /me/stats`, `POST/DELETE /me/avatar` |
-| Relationships | `POST invite/join`, `GET/PUT/DELETE /{id}`, `GET ""` (list with partner info) |
-| Reminders | CRUD configs, `POST send/confirm`, `GET logs/stats` |
-| Weather | `GET /current` |
-| Achievements | `GET /achievements`, `GET /users/me/achievements` |
-| AI | `POST /suggest`, `POST /chat` |
-| System | `GET /`, `GET /health`, `GET /api/v1/config` |
+### Data flow
+
+```
+Screens → Services (local/ or weather/ai) → SQLite/HTTP
+```
+
+No repository pattern. Services are static methods on abstract classes.
+
+### Partner cards
+
+Each partner card shows: avatar, nickname, city, relationship type, days together, local time (estimated from longitude), real-time weather (emoji + description + temp), and reminder count badge.
+
+### City picker
+
+`showCityPicker()` bottom sheet. Returns `CitySelection` with city, province, country. Data from `city_data.dart` (24 countries, 300+ cities, default China).
+
+### Location permission
+
+3-stage check: GPS service → permission request → get position. Uses `geolocator` + `permission_handler`.
+
+### Weather
+
+wttr.in free API, no key needed. `WeatherResult` has text, temp, windDir, humidity. `checkConditions()` for alert triggers.
+
+### AI
+
+DeepSeek API, user-configured key stored in SQLite. `AiService.chat()` for conversation, `AiService.generateSuggestion()` for care suggestions. Chat history persisted in `chat_history` SQLite table.
+
+### Notifications
+
+`flutter_local_notifications` with `zonedSchedule()` for precise timing. `ReminderScheduler.scheduleAll()` reschedules all enabled configs.
+
+### Background tasks
+
+`WorkManager` for periodic tasks. Triggers weather checks and reminder maintenance.
+
+### Achievement badges
+
+`TaAchievementBadge` widget. No points system — just "已解锁" / progress display.
 
 ## Gotchas
 
-- **`PYTHONUTF8=1` required** for Alembic on Chinese Windows (alembic reads config with `encoding="locale"` which is GBK, failing on ASCII-incompatible bytes).
-- **Tests use SQLite** (`sqlite+aiosqlite:///./test.db`) with an `autouse` fixture that creates/drops tables per test and seeds achievement data. The `auth_client` fixture generates unique phone numbers per call.
-- **Weather module has no DB models** — all data is Redis-cached (TTL 30 min). It only has `schemas.py`, `service.py`, `router.py`.
-- **Reminder direction**: the system notifies `config.created_by` (the person being prompted to care) about the partner (the other user in the relationship). Both `weather_check.py` and `reminder_trigger.py` now respect `created_by` — not hardcoded `user_a`.
-- **AI and Push degrade gracefully**: if API keys are missing, AI returns preset fallback templates and PushService just logs. No errors thrown.
-- **Achievement unlock logic** supports 4 types: `count` (simple increment), `streak_days` (consecutive days with reminders), `mutual_reminder_count` (min of A→B and B→A), `relationship_days` (days since relationship created). Pass `context={"partner_id": ...}` for mutual/relationship types.
-- **Test database** at `server/test.db` is gitignored (`*.db` in `.gitignore`).
-- **Avatar upload** uses `StorageService` from `app/core/storage.py`. Accepts JPEG/PNG/WebP (max 2MB). When MinIO is unreachable, raises `SystemException(503)`. Old avatar is auto-deleted on new upload.
-
-## Flutter Frontend (app/)
-
-**Design System.** The app uses a pre-built design system. All colors, spacing, radius, and shadows are defined in `lib/app/design_tokens.dart`. Never hardcode visual values — use `TaSpacing`, `TaRadius`, `TaLightColors`/`TaDarkColors`, etc.
-
-**Theme.** `lib/app/theme.dart` provides full Material 3 `ThemeData` for both light and dark modes. Use `Theme.of(context).colorScheme.primary` to get colors.
-
-**Component Library** (`lib/presentation/widgets/`): `TaCard`, `TaButton`, `TaTextField`, `TaAvatar`, `TaNotificationCard`, `TaAchievementBadge`, `TaLoading`, `TaEmptyState`, `TaErrorState`. Import via `widgets.dart` barrel file.
-
-**Reference Pages:** `login_screen.dart` and `home_screen.dart` demonstrate the standard patterns for building pages (component usage, API calls, state management, animations).
-
-**Routing.** `lib/app/router.dart` uses GoRouter. All routes are defined with `_Placeholder` widgets. Replace them with real implementations. Auth redirect is automatic (unauthenticated users → login).
-
-**API Layer.** `dio_client.dart` provides a pre-configured Dio with auto token injection and 401 refresh. `api_endpoints.dart` has all backend route paths. `api_response.dart` models the `{code, message, data}` format.
-
-**Animations.** Use `flutter_animate` package with `TaAnimation.normal` duration and `TaAnimation.curve`. See `login_screen.dart` for entrance animation examples.
-
-**Full guide:** See `docs/frontend_guide.md` for component usage examples, styling rules, and page implementation checklist.
-
+- `flutter analyze` must pass clean before any commit
+- All UI uses design tokens from `design_tokens.dart` — never hardcode visual values
+- `city_data.dart` replaced `china_cities.dart` — import the correct file
+- The `server/` directory is deprecated — don't modify or run it
+- API Key management page (`api_key_setup_screen.dart`) should NOT mention weather services
+- Partner local time is estimated from longitude (`lng / 15` hours from UTC) — approximate but sufficient for display
+- `TaAchievementBadge` no longer has a `points` parameter

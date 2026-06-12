@@ -159,7 +159,6 @@
 | `TaTextField` | 输入框（含密码切换、标签、验证） |
 | `TaAvatar` | 头像（4 种尺寸，网络图+暖色占位符） |
 | `TaLoading` / `TaEmptyState` / `TaErrorState` | 加载心跳动画、空状态、错误重试 |
-| `TaNotificationCard` | 提醒通知卡片（4 种类型、确认按钮、入场动画） |
 | `TaAchievementBadge` | 成就徽章（进度环、解锁金标） |
 
 ### 基础架构

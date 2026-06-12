@@ -133,7 +133,7 @@ abstract final class AiService {
       return '我是Ta世界的AI关怀助手 💝\n目前AI服务尚未配置，请先在"设置"中填入 DeepSeek API Key。';
     }
 
-    // 读取最近 10 条对话历史
+    // 1. 读取最近 10 条对话历史
     final db = await DatabaseHelper.database;
     final historyRows = await db.query(
       'chat_history',
@@ -141,15 +141,7 @@ abstract final class AiService {
       limit: 10,
     );
 
-    // 保存用户消息
-    await db.insert('chat_history', {
-      'id': DatabaseHelper.newId(),
-      'role': 'user',
-      'content': userMessage,
-      'created_at': DateTime.now().toIso8601String(),
-    });
-
-    // 构建消息列表（system + history 倒序 + 当前用户消息）
+    // 2. 构建消息列表（system + history 倒序 + 当前用户消息）
     final messages = <Map<String, String>>[
       {'role': 'system', 'content': _chatSystemPrompt},
     ];
@@ -161,7 +153,16 @@ abstract final class AiService {
     }
     messages.add({'role': 'user', 'content': userMessage});
 
+    // 3. 保存用户消息到 DB
+    await db.insert('chat_history', {
+      'id': DatabaseHelper.newId(),
+      'role': 'user',
+      'content': userMessage,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
     try {
+      // 4. 调用 API
       final dio = Dio();
       final response = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
@@ -179,7 +180,7 @@ abstract final class AiService {
 
       final reply = response.data['choices'][0]['message']['content'] as String;
 
-      // 保存助手回复
+      // 5. 保存助手回复
       await db.insert('chat_history', {
         'id': DatabaseHelper.newId(),
         'role': 'assistant',

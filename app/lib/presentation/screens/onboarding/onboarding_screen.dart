@@ -1,17 +1,19 @@
 /// TaWorld 首次引导页
 ///
 /// 用户第一次打开应用时展示的欢迎界面。
-/// 收集用户昵称后创建本地用户，然后跳转至首页。
+/// 分两步：1) 设置昵称 2) 可选配置 API Key
 library;
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../widgets/widgets.dart';
 import '../../../services/local/local_user_service.dart';
+import '../../../services/ai_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -21,13 +23,17 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
+  int _step = 0; // 0 = 昵称, 1 = API Key
   final _nicknameController = TextEditingController();
+  final _deepseekKeyController = TextEditingController();
   bool _loading = false;
   bool _canSubmit = false;
+  bool _savingKeys = false;
 
   @override
   void dispose() {
     _nicknameController.dispose();
+    _deepseekKeyController.dispose();
     super.dispose();
   }
 
@@ -38,7 +44,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  Future<void> _onStart() async {
+  Future<void> _onNicknameNext() async {
     final nickname = _nicknameController.text.trim();
     if (nickname.isEmpty) return;
 
@@ -47,11 +53,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       await LocalUserService.createUser(nickname: nickname);
       if (!mounted) return;
-      context.go(Routes.home);
+      setState(() {
+        _step = 1;
+        _loading = false;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('创建失败，请重试：$e'),
@@ -61,8 +69,45 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  Future<void> _onFinish() async {
+    setState(() => _savingKeys = true);
+
+    try {
+      final deepseekKey = _deepseekKeyController.text.trim();
+
+      if (deepseekKey.isNotEmpty) {
+        await AiService.setApiKey(deepseekKey);
+      }
+    } catch (_) {
+      // 保存失败不影响进入主页
+    }
+
+    if (!mounted) return;
+    setState(() => _savingKeys = false);
+    context.go(Routes.home);
+  }
+
+  Future<void> _skipApiKeys() async {
+    context.go(Routes.home);
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_step == 0) {
+      return _buildNicknameStep(context);
+    } else {
+      return _buildApiKeyStep(context);
+    }
+  }
+
+  Widget _buildNicknameStep(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -73,7 +118,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ---- 顶部装饰图标 ----
                 _buildHeroIcon(context)
                     .animate()
                     .fadeIn(
@@ -89,7 +133,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                 const SizedBox(height: TaSpacing.xl),
 
-                // ---- 应用名称 ----
                 Text(
                   'Ta的世界',
                   style: theme.textTheme.displaySmall?.copyWith(
@@ -114,7 +157,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                 const SizedBox(height: TaSpacing.xs),
 
-                // ---- 副标题 ----
                 Text(
                   '记录你的每一份关心',
                   style: theme.textTheme.titleMedium?.copyWith(
@@ -138,7 +180,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                 const SizedBox(height: TaSpacing.xxl),
 
-                // ---- 昵称输入 ----
                 SizedBox(
                   width: double.infinity,
                   child: TaTextField(
@@ -165,13 +206,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                 const SizedBox(height: TaSpacing.xl),
 
-                // ---- 开始按钮 ----
                 SizedBox(
                   width: double.infinity,
                   child: TaButton(
-                    onPressed: _loading ? null : _onStart,
-                    text: '开始关怀之旅',
-                    icon: Icons.favorite_rounded,
+                    onPressed: _loading ? null : _onNicknameNext,
+                    text: '下一步',
+                    icon: Icons.arrow_forward_rounded,
                     loading: _loading,
                     enabled: _canSubmit && !_loading,
                     gradient: TaGradients.primary,
@@ -198,7 +238,151 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  /// 顶部装饰性渐变圆形图标
+  Widget _buildApiKeyStep(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: TaSpacing.page,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 步骤指示器
+                Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _StepDot(active: true),
+                      const SizedBox(width: TaSpacing.xs),
+                      _StepDot(active: false),
+                    ],
+                  ),
+                ).animate().fadeIn(duration: TaAnimation.fast),
+
+                const SizedBox(height: TaSpacing.lg),
+
+                Center(
+                  child: Text(
+                    '配置 AI 服务（可选）',
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ).animate().fadeIn(delay: 100.ms),
+
+                const SizedBox(height: TaSpacing.xs),
+
+                Center(
+                  child: Text(
+                    '配置 DeepSeek API Key 后可解锁 AI 关怀建议功能\n天气查询已使用免费开源服务，无需配置',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ).animate().fadeIn(delay: 200.ms),
+
+                const SizedBox(height: TaSpacing.xl),
+
+                // DeepSeek API Key
+                TaCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.smart_toy_rounded,
+                              size: TaSizes.iconSm,
+                              color: theme.colorScheme.primary),
+                          const SizedBox(width: TaSpacing.xs),
+                          Expanded(
+                            child: Text(
+                              'DeepSeek API Key',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: TaSpacing.xs),
+                      Text(
+                        '用于 AI 关怀助手功能，帮你生成温暖的关怀语',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: TaSpacing.sm),
+                      TaTextField(
+                        controller: _deepseekKeyController,
+                        hint: 'sk-...',
+                        prefixIcon: Icons.key_rounded,
+                        obscureText: true,
+                      ),
+                      const SizedBox(height: TaSpacing.xs),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () => _openUrl(
+                            'https://platform.deepseek.com/api_keys',
+                          ),
+                          icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                          label: const Text('获取 API Key'),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: TaSpacing.sm,
+                              vertical: TaSpacing.xxs,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ).animate().fadeIn(delay: 300.ms, duration: TaAnimation.normal),
+
+                const SizedBox(height: TaSpacing.xl),
+
+                // 按钮组
+                SizedBox(
+                  width: double.infinity,
+                  child: TaButton(
+                    onPressed: _savingKeys ? null : _onFinish,
+                    text: '保存并开始',
+                    icon: Icons.check_rounded,
+                    loading: _savingKeys,
+                    gradient: TaGradients.primary,
+                  ),
+                ).animate().fadeIn(delay: 500.ms),
+
+                const SizedBox(height: TaSpacing.sm),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: _savingKeys ? null : _skipApiKeys,
+                    child: Text(
+                      '跳过，稍后在设置中配置',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ).animate().fadeIn(delay: 600.ms),
+
+                const SizedBox(height: TaSpacing.lg),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeroIcon(BuildContext context) {
     return Container(
       width: 120,
@@ -212,6 +396,28 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         Icons.favorite_rounded,
         size: 56,
         color: Theme.of(context).colorScheme.primary,
+      ),
+    );
+  }
+}
+
+/// 步骤指示器圆点
+class _StepDot extends StatelessWidget {
+  const _StepDot({required this.active});
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AnimatedContainer(
+      duration: TaAnimation.fast,
+      width: active ? 24 : 8,
+      height: 8,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(4),
+        color: active
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
       ),
     );
   }

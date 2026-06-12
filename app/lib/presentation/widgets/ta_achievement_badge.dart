@@ -19,7 +19,6 @@ class TaAchievementBadge extends StatelessWidget {
     required this.progress,
     required this.target,
     this.unlocked = false,
-    this.points = 0,
     this.onTap,
   });
 
@@ -28,7 +27,6 @@ class TaAchievementBadge extends StatelessWidget {
   final int progress;
   final int target;
   final bool unlocked;
-  final int points;
   final VoidCallback? onTap;
 
   @override
@@ -118,9 +116,9 @@ class TaAchievementBadge extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
 
-          // 进度/积分
+          // 进度/状态
           Text(
-            unlocked ? '+$points分' : '$progress/$target',
+            unlocked ? '已解锁' : '$progress/$target',
             style: theme.textTheme.labelSmall?.copyWith(
               color: unlocked
                   ? TaLightColors.secondary

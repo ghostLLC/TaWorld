@@ -37,6 +37,8 @@
 
 **关键原则**: 暗色模式使用暖色调暗棕色（非冷灰黑），营造"温暖的晚上"而非"冰冷的夜晚"。
 
+**透明度写法**: 使用 `withValues(alpha: X)` 替代已废弃的 `withOpacity()`，例如 `color.withValues(alpha: 0.5)`。
+
 ---
 
 ## 二、间距系统（8px 基线网格）
@@ -148,8 +150,8 @@ TaSpacing.cardInnerLarge // 24px 的大卡片内边距
 | `TaLoading` | `ta_loading.dart` | 加载动画（跳动心形 ❤️） |
 | `TaEmptyState` | `ta_loading.dart` | 空状态（图标+文案+可选按钮） |
 | `TaErrorState` | `ta_loading.dart` | 错误状态 |
-| `TaNotificationCard` | `ta_notification_card.dart` | 提醒通知卡片（含类型图标/确认按钮） |
-| `TaAchievementBadge` | `ta_achievement_badge.dart` | 成就徽章（进度环+解锁标记） |
+| `TaAchievementBadge` | `ta_achievement_badge.dart` | 成就徽章（进度环+解锁标记，已解锁显示"已解锁"） |
+| `CityPickerSheet` | `city_picker_sheet.dart` | 城市选择器底部弹窗，支持搜索+浏览，国家→省→市三级选择 |
 
 ---
 
@@ -160,3 +162,28 @@ TaSpacing.cardInnerLarge // 24px 的大卡片内边距
 3. **呼吸感** — 充足的间距，不拥挤
 4. **一致性** — 所有颜色/间距/圆角从设计令牌取值，禁止硬编码
 5. **响应性** — 微动画让界面有生命力（入场淡入、按下缩放）
+
+---
+
+## 十、新增组件与模式
+
+### CityPickerSheet — 底部弹窗城市选择器
+
+- **文件**: `city_picker_sheet.dart`
+- 调用 `showCityPicker()` 函数，返回 `Future<CitySelection?>`
+- `CitySelection` 数据类包含 `city`、`province`、`country` 三个字段
+- 支持**搜索模式**与**浏览模式**，通过 `AnimatedCrossFade` 切换
+- 国家选择使用 `ChoiceChip` 标签页实现
+
+### 可展开卡片模式（_PartnerCard）
+
+- 使用 `AnimatedCrossFade` 实现卡片展开/收起动画
+- 通过 `Set<String> _expandedIds` 跟踪当前展开状态的卡片 ID
+
+### AI 主动消息卡片
+
+| 组件 | 说明 | 视觉 |
+|------|------|------|
+| `_WeatherCard` | 渐变天气卡片 | 使用 `TaGradients.sky` 渐变背景 |
+| `_GreetingCard` | AI 问候卡片 | 使用 `TaGradients.warm` 渐变背景 |
+| `_GuideCard` | 引导卡片 | 使用 `secondaryContainer` 背景色 |

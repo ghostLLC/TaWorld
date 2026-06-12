@@ -85,6 +85,64 @@ abstract final class LocalReminderService {
 
   // ==================== 提醒日志 ====================
 
+  /// 为调度中的通知预创建日志（status: 'scheduled'）
+  ///
+  /// 在 ReminderScheduler 调度通知时调用，确保提醒历史中能看到未来的调度记录。
+  /// 如果该 configId 在目标日期已有 scheduled/sent 日志则跳过，避免重复。
+  static Future<void> createScheduledLog({
+    required String configId,
+    required String partnerId,
+    required String message,
+    required DateTime scheduledTime,
+  }) async {
+    final db = await DatabaseHelper.database;
+
+    // 检查是否已有同日同配置的日志
+    final dayStart = DateTime(
+      scheduledTime.year, scheduledTime.month, scheduledTime.day,
+    );
+    final dayEnd = dayStart.add(const Duration(days: 1));
+    final existing = await db.rawQuery(
+      'SELECT COUNT(*) as cnt FROM reminder_logs '
+      'WHERE config_id = ? AND triggered_at >= ? AND triggered_at < ?',
+      [configId, dayStart.toIso8601String(), dayEnd.toIso8601String()],
+    );
+    if ((existing.first['cnt'] as int? ?? 0) > 0) return;
+
+    await db.insert('reminder_logs', {
+      'id': DatabaseHelper.newId(),
+      'config_id': configId,
+      'partner_id': partnerId,
+      'message': message,
+      'status': 'scheduled',
+      'triggered_at': scheduledTime.toIso8601String(),
+      'sent_at': null,
+      'confirmed_at': null,
+    });
+  }
+
+  /// 将某配置的 scheduled 日志标记为 sent（用户手动触发时调用）
+  ///
+  /// 查找当天该 configId 最近的 scheduled 日志并更新为 sent。
+  /// 如果不存在则返回 false。
+  static Future<bool> markScheduledAsSent(String configId) async {
+    final db = await DatabaseHelper.database;
+    final now = DateTime.now();
+    final dayStart = DateTime(now.year, now.month, now.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+
+    final result = await db.update(
+      'reminder_logs',
+      {
+        'status': 'sent',
+        'sent_at': now.toIso8601String(),
+      },
+      where: 'config_id = ? AND status = ? AND triggered_at >= ? AND triggered_at < ?',
+      whereArgs: [configId, 'scheduled', dayStart.toIso8601String(), dayEnd.toIso8601String()],
+    );
+    return result > 0;
+  }
+
   /// 一键提醒：创建日志 + 返回消息
   static Future<ReminderLog> sendReminder(String configId) async {
     final db = await DatabaseHelper.database;
@@ -106,23 +164,60 @@ abstract final class LocalReminderService {
       message = _generateMessage(config);
     }
 
-    final log = ReminderLog(
-      id: DatabaseHelper.newId(),
-      configId: configId,
-      partnerId: config.partnerId,
-      message: message,
-      status: 'sent',
-      triggeredAt: now,
-      sentAt: now,
-    );
-    await db.insert('reminder_logs', log.toMap());
+    // 优先更新当天已有的 scheduled 日志
+    final updated = await markScheduledAsSent(configId);
+
+    ReminderLog log;
+    if (updated) {
+      // 获取刚更新的日志
+      final dayStart = DateTime(now.year, now.month, now.day);
+      final dayEnd = dayStart.add(const Duration(days: 1));
+      final rows = await db.query(
+        'reminder_logs',
+        where: 'config_id = ? AND status = ? AND triggered_at >= ? AND triggered_at < ?',
+        whereArgs: [configId, 'sent', dayStart.toIso8601String(), dayEnd.toIso8601String()],
+        orderBy: 'sent_at DESC',
+        limit: 1,
+      );
+      // 更新消息内容（调度时的消息可能与当前实时消息不同）
+      if (rows.isNotEmpty) {
+        await db.update(
+          'reminder_logs',
+          {'message': message},
+          where: 'id = ?',
+          whereArgs: [rows.first['id'] as String],
+        );
+      }
+      log = ReminderLog.fromMap(rows.isNotEmpty ? rows.first : {
+        'id': DatabaseHelper.newId(),
+        'config_id': configId,
+        'partner_id': config.partnerId,
+        'message': message,
+        'status': 'sent',
+        'triggered_at': now.toIso8601String(),
+        'sent_at': now.toIso8601String(),
+        'confirmed_at': null,
+      });
+    } else {
+      // 没有预调度日志，直接创建新日志
+      log = ReminderLog(
+        id: DatabaseHelper.newId(),
+        configId: configId,
+        partnerId: config.partnerId,
+        message: message,
+        status: 'sent',
+        triggeredAt: now,
+        sentAt: now,
+      );
+      await db.insert('reminder_logs', log.toMap());
+    }
 
     // Push notification
     await NotificationService.show(
       id: log.id.hashCode,
       title: '关心提醒',
       body: message,
-      payload: log.id,
+      payload: 'configId:$configId',
     );
 
     // 更新成就进度
@@ -229,10 +324,14 @@ abstract final class LocalReminderService {
 
       final lat = partnerRows.first['latitude'] as double?;
       final lng = partnerRows.first['longitude'] as double?;
-      if (lat == null || lng == null) return _generateMessage(config);
+      final city = partnerRows.first['city'] as String?;
 
-      // Query weather
-      final weather = await WeatherService.getCurrentWeather(lng, lat);
+      WeatherResult? weather;
+      if (lat != null && lng != null) {
+        weather = await WeatherService.getCurrentWeather(lng, lat);
+      } else if (city != null && city.isNotEmpty) {
+        weather = await WeatherService.getCurrentWeatherByCity(city);
+      }
       if (weather == null) return _generateMessage(config);
 
       // Check conditions from config

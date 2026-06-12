@@ -35,6 +35,19 @@ class ThemeService extends ChangeNotifier {
     await prefs.setString('theme_mode', dark ? 'dark' : 'light');
   }
 
+  /// 设置主题模式（支持跟随系统）
+  Future<void> setThemeMode(ThemeMode mode) async {
+    _mode = mode;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    final value = switch (mode) {
+      ThemeMode.light => 'light',
+      ThemeMode.dark => 'dark',
+      ThemeMode.system => 'system',
+    };
+    await prefs.setString('theme_mode', value);
+  }
+
   Future<void> setPushEnabled(bool enabled) async {
     _pushEnabled = enabled;
     notifyListeners();
