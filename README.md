@@ -13,18 +13,18 @@
 
 > A fully offline, standalone APP centered around caring for others. You add the people you care about, configure reminders, and the APP reminds you at the right moments to reach out and care for them — it never contacts them directly. All data stays on your phone. No server, no cloud.
 >
-> The AI assistant (DeepSeek V4) proactively sends you weather alerts, greetings, and care suggestions, while remembering what you've talked about across sessions through a Wiki + RAG hybrid memory architecture.
+> The AI assistant (DeepSeek V4 Pro) proactively sends you weather alerts, greetings, and care suggestions. It features dynamic token-based context management (200K token budget, up to 2000 messages), automated conversation summaries, and a Wiki + RAG hybrid memory architecture for cross-session recall.
 
 ## Core Features
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| **AI Care Assistant** | DeepSeek V4 Flash (real-time chat) + V4 Pro (async tasks). Dynamic system prompt with full context injection | Done |
-| **AI Memory System** | Wiki + RAG hybrid architecture: structured facts (Wiki), keyword-based recall (RAG), Ebbinghaus decay, Dreaming consolidation | Done |
+| **AI Care Assistant** | DeepSeek V4 Pro for all tasks. Dynamic system prompt, dynamic token-based context (200K tokens / 2000 messages), 8 function-calling tools | Done |
+| **AI Memory System** | Wiki (100 facts) + RAG (10 results, 90-day recall) hybrid architecture. Automated conversation summaries (80K token threshold), Ebbinghaus decay, Dreaming consolidation | Done |
 | **Proactive Messaging** | AI proactively sends weather alerts, reminders, and care suggestions via function calling | Done |
-| **Partner Management** | Add/edit/delete people you care about, GPS + city picker (24 countries, 300+ cities) | Done |
+| **Partner Management** | Add/edit/delete people you care about, GPS + city picker (24 countries, 300+ cities), AI-powered create/update/detail tools | Done |
 | **Smart Reminders** | Sleep/meal/weather/custom reminders, local precise scheduling via WorkManager | Done |
-| **Real-time Weather** | wttr.in free weather (no API key), partner city cards with local time and weather | Done |
+| **Real-time Weather** | wttr.in free weather (no API key), partner city cards with local time and weather, city name normalization | Done |
 | **Achievement System** | 7 badges, 4 unlock logics (count/streak/mutual/relationship_days) | Done |
 | **Theme System** | 5 color palettes (warm coral, ocean blue, forest green, lavender, sunset orange), light/dark mode | Done |
 | **City Picker** | Bottom sheet with search + browse, 24 countries, 300+ cities | Done |
@@ -52,11 +52,11 @@ Pure client-side standalone architecture. All data stored in local SQLite. AI an
 | Framework | Flutter 3.41.9 + Dart | Cross-platform, Material 3 warm style |
 | Routing | GoRouter | Declarative routing + auth redirect |
 | Database | SQLite (sqflite) | All data local, DB version 4 |
-| AI (chat) | DeepSeek V4 Flash | Low-latency real-time conversation |
-| AI (async) | DeepSeek V4 Pro | Memory extraction, Dreaming consolidation |
-| AI Memory | Wiki + RAG hybrid | Structured facts + keyword recall, Ebbinghaus decay |
+| AI (all tasks) | DeepSeek V4 Pro | Unified model for chat, memory extraction, Dreaming, summaries |
+| AI Context | Dynamic token management | 200K token budget, 2000 messages, CJK-aware estimation |
+| AI Memory | Wiki + RAG + Summaries | 100 facts, 10 RAG results, automated conversation summaries |
 | Prompt Cache | DeepSeek Context Caching | Automatic KV cache, 50-120x cost reduction on cache hits |
-| Weather | wttr.in | Free, no API key needed |
+| Weather | wttr.in | Free, no API key needed, city name normalization |
 | Notifications | flutter_local_notifications | zonedSchedule precise dispatch |
 | Background | WorkManager | Periodic task scheduling |
 | Location | geolocator + permission_handler | GPS + permission management |
@@ -78,8 +78,8 @@ Pure client-side standalone architecture. All data stored in local SQLite. AI an
 │                     Dynamic System Prompt                     │
 │                                                              │
 │  [Base Instructions] [User Identity] [Partners] [Reminders] │  ← Semi-static
-│  [Wiki Facts (top-20)] [Conversation Summaries]              │  ← Session-level
-│  [Current Time (coarsened)] [RAG Results]                    │  ← Per-message
+│  [Wiki Facts (top-100)] [Conversation Summaries]             │  ← Session-level
+│  [Current Time (coarsened)] [RAG Results (top-10)]           │  ← Per-message
 │                                                              │
 │  Optimized for DeepSeek Context Caching (prefix-friendly)    │
 └──────────────────────────────────────────────────────────────┘
@@ -88,7 +88,25 @@ Pure client-side standalone architecture. All data stored in local SQLite. AI an
                     ┌──────────┴───────────────────────┐
                     │     AiMemoryService               │
                     │  buildSystemPrompt() per request   │
+                    │  checkAndSummarize() every 5 turns │
                     └──────────────────────────────────┘
+
+Dynamic Context (per request, V4 Pro)
+┌──────────────────────────────────────────────────────────────┐
+│  _estimateTokens()   — CJK-aware token estimation            │
+│  _loadDynamicHistory — 200K token budget, 2000 messages max  │
+│  _buildMessages      — system prompt + history + user msg    │
+│  Skips already-summarized messages (summarized_up_to)        │
+└──────────────────────────────────────────────────────────────┘
+
+Automated Summarization (every 5 turns, V4 Pro)
+┌──────────────────────────────────────────────────────────────┐
+│  Trigger: history > 80K tokens                               │
+│  Keep: 150K token budget of recent messages                  │
+│  Summarize: older messages (capped at 300K input)            │
+│  Store: summary in ai_conversation_summaries                 │
+│  Track: summarized_up_to timestamp to avoid re-summarizing   │
+└──────────────────────────────────────────────────────────────┘
 
 Background (daily, V4 Pro)
 ┌──────────────────────────────────────────────────────────────┐
@@ -100,6 +118,7 @@ Background (daily, V4 Pro)
 ┌──────────────────────────────────────────────────────────────┐
 │                     AiRagService                              │
 │  Keyword-based search (bigram + stopwords + time decay)      │
+│  Top-10 results, 90-day recall, 500 chunk scan limit        │
 │  No external embedding model needed                          │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -155,13 +174,14 @@ TaWorld/
 │   │   │   ├── city_data.dart         # World cities (24 countries, 300+ cities)
 │   │   │   └── local/database_helper.dart  # SQLite (DB v4, 8 tables)
 │   │   ├── services/                  # Business logic
-│   │   │   ├── ai_service.dart        # DeepSeek V4 chat + Pro model + cache tracking
-│   │   │   ├── ai_memory_service.dart # Dynamic system prompt builder + Wiki CRUD
+│   │   │   ├── ai_service.dart        # DeepSeek V4 Pro (all tasks), dynamic context, cache tracking
+│   │   │   ├── ai_memory_service.dart # Dynamic system prompt + Wiki CRUD + automated summaries
 │   │   │   ├── ai_memory_extractor.dart # Post-conversation fact extraction (V4 Pro)
 │   │   │   ├── ai_memory_dreamer.dart # Background memory consolidation (V4 Pro)
-│   │   │   ├── ai_rag_service.dart    # Keyword-based RAG search
+│   │   │   ├── ai_rag_service.dart    # Keyword-based RAG search (top-10, 90-day)
 │   │   │   ├── ai_proactive_service.dart # Proactive messaging + function calling
-│   │   │   ├── weather_service.dart   # wttr.in weather
+│   │   │   ├── data_backup_service.dart # Data backup/restore
+│   │   │   ├── weather_service.dart   # wttr.in weather + city name normalization
 │   │   │   ├── notification_service.dart # Local notifications
 │   │   │   ├── reminder_scheduler.dart # Reminder scheduling
 │   │   │   ├── background_tasks.dart  # WorkManager tasks (weather + dreaming)

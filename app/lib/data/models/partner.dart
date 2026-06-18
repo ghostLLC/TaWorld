@@ -94,8 +94,9 @@ class Partner {
 
   String get typeLabel => switch (type) {
     'couple' => '情侣',
+    'partner' => '伴侣',
     'family' => '家人',
     'friend' => '朋友',
-    _ => '朋友',
+    _ => type,
   };
 }

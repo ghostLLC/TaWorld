@@ -17,7 +17,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
     <application
-        android:label="taworld"
+        android:label="TaWorld-想念"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -40,6 +40,15 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- 支持打开 .zip 备份文件（从文件管理器、微信、QQ 等） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+                <data android:mimeType="application/zip"/>
+                <data android:mimeType="application/x-zip-compressed"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

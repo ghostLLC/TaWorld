@@ -24,14 +24,15 @@ flutter build apk --release                    # build release APK (~93MB)
 - `data/` — Models (user, partner, reminder_config, reminder_log, achievement, ai_wiki_fact), city_data (world cities), local SQLite (DatabaseHelper)
 - `services/` — Business logic layer:
   - **AI Core:**
-    - `ai_service.dart` — DeepSeek V4 Flash (chat) + V4 Pro (async tasks), API key management, DeepSeek context cache hit tracking
-    - `ai_memory_service.dart` — Dynamic system prompt builder (`buildSystemPrompt()`), Wiki CRUD, summary management. Prompt structured for DeepSeek prefix caching: static sections first, volatile sections (time, RAG) last
+    - `ai_service.dart` — DeepSeek V4 Pro (all tasks: chat, async, summarization). Dynamic token-based context management (200K token budget, 2000 messages), CJK-aware token estimation, 8 function-calling tools, API key management, DeepSeek context cache hit tracking
+    - `ai_memory_service.dart` — Dynamic system prompt builder (`buildSystemPrompt()`), Wiki CRUD (top-100), automated conversation summarization (`checkAndSummarize()` every 5 turns when history > 80K tokens), summary management. Prompt structured for DeepSeek prefix caching: static sections first, volatile sections (time, RAG) last
     - `ai_memory_extractor.dart` — Post-conversation fact extraction using V4 Pro. Splits instructions into system message (cacheable) and data into user message
     - `ai_memory_dreamer.dart` — Background memory consolidation: Ebbinghaus decay, weak fact archival, LLM dedup/merge (V4 Pro), conversation summarization, old chunk cleanup. Runs daily via WorkManager
-    - `ai_rag_service.dart` — Keyword-based RAG search (character bigram + Chinese stopwords + time decay weighting). No external embedding model needed
-    - `ai_proactive_service.dart` — Proactive messaging with function calling (5 tools: create/delete reminders, get weather, list partners, get stats)
+    - `ai_rag_service.dart` — Keyword-based RAG search (character bigram + Chinese stopwords + time decay weighting). Top-10 results, 90-day recall, 500 chunk scan. No external embedding model needed
+    - `ai_proactive_service.dart` — Proactive messaging with function calling (8 tools: create/update/delete reminders, get weather, list partners, get stats, get partner detail, update partner)
   - **Infrastructure:**
-    - `weather_service.dart` — wttr.in free weather API (no key needed)
+    - `weather_service.dart` — wttr.in free weather API (no key needed), city name normalization (trim whitespace, remove 市/县/区 suffix)
+    - `data_backup_service.dart` — Data backup and restore
     - `notification_service.dart` — flutter_local_notifications zonedSchedule
     - `reminder_scheduler.dart` — Schedules all enabled reminder configs
     - `background_tasks.dart` — WorkManager periodic tasks (weather check + AI memory dreaming)
@@ -43,26 +44,27 @@ flutter build apk --release                    # build release APK (~93MB)
 
 ### AI Model Usage
 
-| Model | Use Case | Cost (input/output per 1M tokens) |
-|-------|----------|-------------------------------------|
-| `deepseek-v4-flash` | Real-time chat, suggestions | ¥1 / ¥2 |
-| `deepseek-v4-pro` | Memory extraction, Dreaming consolidation | ¥3 / ¥6 |
+| Model | Use Case | Notes |
+|-------|----------|-------|
+| `deepseek-v4-pro` | All tasks: chat, memory extraction, Dreaming, summarization | Unified model for consistency and quality |
 
-### AI Memory System (Wiki + RAG Hybrid)
+### AI Memory System (Wiki + RAG + Summaries Hybrid)
 
 Three-layer architecture:
 
-1. **Wiki layer** (`ai_wiki_facts` table): Structured facts with category, importance, strength (decaying over time). Always injected into system prompt (top-20 by score). CRUD via `AiMemoryService`.
+1. **Wiki layer** (`ai_wiki_facts` table): Structured facts with category, importance, strength (decaying over time). Always injected into system prompt (top-100 by score). CRUD via `AiMemoryService`.
 
-2. **RAG layer** (`conversation_chunks` table): Keyword-based search for historical conversations. Injected on-demand based on current user message relevance. No external embedding model — uses character bigram extraction + Chinese stopword filtering + time decay weighting.
+2. **RAG layer** (`conversation_chunks` table): Keyword-based search for historical conversations. Top-10 results, 90-day recall window, 500 chunk scan limit. Injected on-demand based on current user message relevance. No external embedding model — uses character bigram extraction + Chinese stopword filtering + time decay weighting.
 
-3. **Summary layer** (`ai_conversation_summaries` table): Dreaming-generated summaries of old conversations. Injected as recent context (top-3).
+3. **Summary layer** (`ai_conversation_summaries` table): Automated summaries generated when history exceeds 80K tokens (every 5 turns check). Keeps 150K token budget of recent messages, summarizes older messages (capped at 300K input). Also Dreaming-generated summaries. Injected as recent context.
+
+**Dynamic Context Management** (`_loadDynamicHistory()` / `_buildMessages()`): Token-based history loading with CJK-aware estimation (2 tokens per CJK character, 1 per ASCII). 200K token budget, 2000 message cap. Skips already-summarized messages using `summarized_up_to` timestamp. All three methods (`chat`, `streamChat`, `chatWithTools`) use this unified pipeline.
 
 **Dynamic System Prompt** (`buildSystemPrompt()`): Assembled per-request with sections ordered by stability for DeepSeek prefix caching:
 ```
 [Base Instructions] → [User Identity] → [Partners] → [Reminders]  (semi-static)
-→ [Wiki Facts] → [Summaries]  (session-level)
-→ [Current Time (period only)] → [RAG Results]  (per-message)
+→ [Wiki Facts (100)] → [Summaries]  (session-level)
+→ [Current Time (period only)] → [RAG Results (10)]  (per-message)
 ```
 
 Time is coarsened to period-of-day (not minute-precision) and placed near the end to maximize cache prefix length.
@@ -70,6 +72,15 @@ Time is coarsened to period-of-day (not minute-precision) and placed near the en
 **Post-conversation pipeline** (fire-and-forget, non-blocking):
 - `AiRagService.storeConversationChunks()` — store conversation for future recall
 - `AiMemoryExtractor.extractFromConversation()` — extract facts via V4 Pro
+- `AiMemoryService.checkAndSummarize()` — check and generate summaries if needed
+
+**Automated Summarization** (`checkAndSummarize()`):
+- Increments turn counter, runs every 5 turns
+- Loads all messages since `summarized_up_to` cutoff
+- If total > 80K tokens: keeps 150K budget of recent messages, summarizes older ones
+- Sends to V4 Pro for summarization (max 300K input, 500 output)
+- Stores summary + updates `summarized_up_to` cutoff in SharedPreferences
+- `_loadDynamicHistory()` skips messages before cutoff to avoid duplicate context
 
 **Background Dreaming** (daily via WorkManager):
 - Ebbinghaus forgetting curve decay with category-specific half-lives
@@ -86,11 +97,11 @@ Key optimization: system prompt sections ordered by stability so the prefix stay
 
 ### Navigation
 
-3-tab bottom NavigationBar with IndexedStack:
+3-tab bottom NavigationBar with PageView (using `AutomaticKeepAliveClientMixin` to keep tabs alive):
 
 | Tab | Screen | Description |
 |-----|--------|-------------|
-| 1 | AI Assistant (`AiHomeScreen`) | AI chat + proactive messages + quick chips + function calling |
+| 1 | AI Assistant (`AiHomeScreen`) | AI chat + proactive messages + quick chips + function calling (keep-alive enabled) |
 | 2 | Partners (`_PartnersTab` in `HomeScreen`) | Expandable partner cards with city/time/weather |
 | 3 | Profile (`_ProfileTab` in `HomeScreen`) | Profile + stats + menu |
 
@@ -140,7 +151,7 @@ No repository pattern. Services are static methods on abstract classes.
 
 ### Database
 
-SQLite via `sqflite`. Current version: 4. Tables: user, partners, reminder_configs, reminder_logs, achievements, ai_wiki_facts, ai_conversation_summaries, conversation_chunks, chat_history. Migration handled in `_onUpgrade`.
+SQLite via `sqflite`. Current version: 4. Tables: user, partners, reminder_configs, reminder_logs, achievements, ai_wiki_facts, ai_conversation_summaries, conversation_chunks, chat_history. Migration handled in `_onUpgrade`. Chat history supports dynamic token-based loading with summarization cutoff tracking via SharedPreferences (`summarized_up_to`, `conversation_turns`).
 
 ### Partner cards
 
@@ -160,11 +171,11 @@ wttr.in free API, no key needed. `WeatherResult` has text, temp, windDir, humidi
 
 ### AI
 
-DeepSeek V4 API. Two models: `deepseek-v4-flash` (real-time chat, low cost) and `deepseek-v4-pro` (async tasks, stronger reasoning). User-configured key stored in SharedPreferences. `AiService.chat()` / `streamChat()` / `chatWithTools()` for conversation. `AiService.callProModel()` for async tasks with optional `systemPrompt` parameter for cache optimization. Chat history persisted in `chat_history` SQLite table.
+DeepSeek V4 Pro API (unified model for all tasks). User-configured key stored in SharedPreferences. `AiService.chat()` / `streamChat()` / `chatWithTools()` for conversation with dynamic token-based context (200K budget, 2000 messages). `AiService.callProModel()` for async tasks with optional `systemPrompt` parameter for cache optimization. `max_tokens` set to 4000 for all chat calls. Chat history persisted in `chat_history` SQLite table. 8 function-calling tools: create_partner, update_partner, get_partner_detail, get_all_partners, create_reminder, delete_reminder, get_partner_weather, get_reminder_stats. System prompt includes operation verification rules to ensure AI validates tool results before claiming success.
 
 ### Proactive messaging
 
-`AiProactiveService` builds rich context (partners, weather, reminders) and uses function calling (5 tools) for AI-driven actions like creating reminders or querying weather. Results delivered as local notifications.
+`AiProactiveService` builds rich context (partners, weather, reminders) and uses function calling (8 tools) for AI-driven actions like creating reminders, querying weather, or updating partner info. Results delivered as local notifications.
 
 ### Notifications
 
@@ -190,4 +201,11 @@ DeepSeek V4 API. Two models: `deepseek-v4-flash` (real-time chat, low cost) and 
 - `TaAchievementBadge` no longer has a `points` parameter
 - `callProModel()` supports optional `systemPrompt` — always use it when the instruction text is static across multiple calls (for DeepSeek cache optimization)
 - Time in system prompt is coarsened to period-of-day only (no minutes) and placed near the end — this is intentional for DeepSeek prefix caching
-- Post-conversation memory extraction and RAG storage are fire-and-forget (`.catchError((_) {})`) — they must never block the chat UI
+- Post-conversation memory extraction, RAG storage, and summarization are fire-and-forget (`.catchError((_) {})`) — they must never block the chat UI
+- All models use `deepseek-v4-pro` — no flash model is used anywhere
+- `max_tokens` is 4000 for all chat methods, 500 for summary generation, 2000 for `callProModel()` (default)
+- `AiHomeScreen` uses `AutomaticKeepAliveClientMixin` to prevent widget disposal on tab switch — `super.build(context)` must be called
+- Welcome messages use `SharedPreferences` `welcome_shown` flag for persistence — only shown once
+- City names are normalized: trim whitespace, remove trailing 市/县/区 suffix before lookup
+- `_loadDynamicHistory` skips messages before `summarized_up_to` cutoff — clearing history must also reset this cutoff
+- Conversation turn counter (`conversation_turns`) and `summarized_up_to` are reset when clearing chat history or memory

@@ -15,6 +15,24 @@ class DatabaseHelper {
   static const _dbVersion = 4;
   static const _uuid = Uuid();
 
+  /// 数据库文件名（供备份/恢复服务使用）
+  static String get dbFileName => _dbName;
+
+  /// 获取数据库完整路径
+  static Future<String> getDatabasePath() async {
+    final dbPath = await getDatabasesPath();
+    return p.join(dbPath, _dbName);
+  }
+
+  /// 强制关闭并重新打开数据库（导入备份后使用）
+  static Future<void> forceReopen() async {
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
+    await database;
+  }
+
   /// 获取数据库实例
   static Future<Database> get database async {
     if (_database != null) return _database!;

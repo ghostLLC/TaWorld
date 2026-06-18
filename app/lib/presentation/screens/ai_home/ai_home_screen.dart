@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
@@ -14,13 +15,13 @@ import '../../../services/ai_service.dart';
 import '../../../services/ai_proactive_service.dart';
 import '../../../services/ai_memory_extractor.dart';
 import '../../../services/ai_rag_service.dart';
+import '../../../services/ai_memory_dreamer.dart';
 import '../../../services/local/local_user_service.dart';
 import '../../../services/local/partner_service.dart';
 import '../../../services/local/local_reminder_service.dart';
 import '../../../services/local/local_achievement_service.dart';
 import '../../../services/reminder_scheduler.dart';
 import '../../../services/weather_service.dart';
-import '../../../data/models/user.dart';
 import '../../../data/models/partner.dart';
 import '../../../data/models/reminder_config.dart';
 import '../../widgets/widgets.dart';
@@ -59,7 +60,10 @@ class AiHomeScreen extends StatefulWidget {
   State<AiHomeScreen> createState() => _AiHomeScreenState();
 }
 
-class _AiHomeScreenState extends State<AiHomeScreen> {
+class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
@@ -70,7 +74,6 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
   bool _greeted = false;
   String? _executingTool;
 
-  LocalUser? _user;
   Map<String, dynamic> _stats = {};
   List<dynamic> _achievements = [];
 
@@ -88,7 +91,6 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
     // 并行加载基础数据
     try {
       final results = await Future.wait([
-        LocalUserService.getUser(),
         LocalUserService.getStats(),
         LocalAchievementService.getAllWithProgress(),
         AiService.getChatHistory(),
@@ -96,15 +98,28 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
       if (!mounted) return;
 
       setState(() {
-        _user = results[0] as LocalUser?;
-        _stats = results[1] as Map<String, dynamic>;
-        _achievements = results[2] as List;
-        // 加载历史消息
-        for (final row in results[3] as List) {
-          _messages.add(_ChatMessage(
-            role: row['role'] as String,
-            content: row['content'] as String,
-          ));
+        _stats = results[0] as Map<String, dynamic>;
+        _achievements = results[1] as List;
+        // 加载历史消息（assistant 消息按 ||| 拆分为多条气泡）
+        for (final row in results[2] as List) {
+          final role = row['role'] as String;
+          final content = row['content'] as String;
+          if (role == 'assistant' && content.contains('|||')) {
+            final parts = content
+                .split('|||')
+                .map((s) => s.trim())
+                .where((s) => s.isNotEmpty)
+                .toList();
+            if (parts.length > 1) {
+              for (final part in parts) {
+                _messages.add(_ChatMessage(role: role, content: part));
+              }
+            } else {
+              _messages.add(_ChatMessage(role: role, content: content));
+            }
+          } else {
+            _messages.add(_ChatMessage(role: role, content: content));
+          }
         }
         _loading = false;
       });
@@ -143,20 +158,35 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
 
     if (partners.isEmpty) {
       if (!mounted) return;
-      setState(() {
-        _messages.insert(
-          0,
-          _ChatMessage(
+
+      // 检查是否已经展示过欢迎消息（持久化，防止切 Tab 重复播放）
+      final prefs = await SharedPreferences.getInstance();
+      final welcomeShown = prefs.getBool('welcome_shown') ?? false;
+      if (welcomeShown) return;
+
+      // 以 AI 消息形式逐条发送欢迎语，沉浸式引导
+      final welcomeMessages = [
+        '你好呀，我是小念',
+        '我可以帮你关注在乎的人的天气、写温暖的关怀语、设置贴心提醒',
+        '不过你现在还没有添加关心的人，先来告诉我一个你在意的人吧',
+      ];
+      for (int i = 0; i < welcomeMessages.length; i++) {
+        if (i > 0) {
+          final charCount = welcomeMessages[i].length;
+          final delayMs = (charCount * 100).clamp(2000, 8000);
+          await Future.delayed(Duration(milliseconds: delayMs));
+        }
+        if (!mounted) break;
+        setState(() {
+          _messages.add(_ChatMessage(
             role: 'assistant',
-            content:
-                '你好呀，我是你的 AI 关怀助手\n\n'
-                '你还没有添加关心的人哦。去「关心的人」页面添加一个你在意的人吧，'
-                '我会帮你关注 Ta 的天气、提醒你按时关心 Ta',
-            proactiveType: ProactiveType.guide,
-          ),
-        );
-      });
-      _scrollToBottom();
+            content: welcomeMessages[i],
+          ));
+        });
+        _scrollToBottom();
+      }
+      // 标记欢迎消息已展示
+      await prefs.setBool('welcome_shown', true);
       return;
     }
 
@@ -299,7 +329,6 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
 
     setState(() {
       _messages.add(_ChatMessage(role: 'user', content: text));
-      // 添加流式占位消息
       _messages.add(const _ChatMessage(
         role: 'assistant',
         content: '',
@@ -310,82 +339,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
       _executingTool = null;
     });
     _scrollToBottom();
-
-    try {
-      await AiService.chatWithTools(text,
-        onToolCall: (name, args) async {
-          if (!mounted) return '操作已取消';
-          setState(() => _executingTool = name);
-          _scrollToBottom();
-          final result = await _executeTool(name, args);
-          if (!mounted) return result;
-          setState(() => _executingTool = null);
-          _scrollToBottom();
-          return result;
-        },
-        onToken: (accumulated) {
-          if (!mounted) return;
-          setState(() {
-            final idx = _messages.lastIndexWhere((m) => m.streaming);
-            if (idx >= 0) {
-              _messages[idx] = _ChatMessage(
-                role: 'assistant',
-                content: accumulated,
-                streaming: true,
-              );
-            }
-          });
-        },
-      );
-
-      if (!mounted) return;
-
-      // 流式完成：取出完整回复，按 ||| 拆分为多条气泡
-      final idx = _messages.lastIndexWhere((m) => m.streaming);
-      if (idx >= 0) {
-        final fullContent = _messages[idx].content;
-        _messages.removeAt(idx);
-
-        // 异步执行记忆提取和 RAG 存储（不阻塞 UI）
-        _postConversationMemory(text, fullContent);
-
-        final parts = fullContent
-            .split('|||')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
-
-        if (parts.isEmpty) {
-          _messages.add(_ChatMessage(
-            role: 'assistant',
-            content: fullContent.trim(),
-          ));
-        } else {
-          for (final part in parts) {
-            _messages.add(_ChatMessage(role: 'assistant', content: part));
-          }
-        }
-      }
-    } catch (e) {
-      if (!mounted) return;
-      final idx = _messages.lastIndexWhere((m) => m.streaming);
-      if (idx >= 0) _messages.removeAt(idx);
-
-      setState(() {
-        _messages.add(_ChatMessage(
-          role: 'assistant',
-          content: '抱歉，网络好像出了点问题：$e',
-        ));
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _sending = false;
-          _executingTool = null;
-        });
-      }
-      _scrollToBottom();
-    }
+    await _processAiResponse(text);
   }
 
   // ---- 工具执行调度 ----
@@ -402,6 +356,12 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
           return await _toolGetAllPartners();
         case 'get_reminder_stats':
           return await _toolGetReminderStats();
+        case 'create_partner':
+          return await _toolCreatePartner(args);
+        case 'update_partner':
+          return await _toolUpdatePartner(args);
+        case 'get_partner_detail':
+          return await _toolGetPartnerDetail(args);
         default:
           return '不支持的操作: $name';
       }
@@ -414,8 +374,20 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
   Future<String> _toolCreateReminder(Map<String, dynamic> args) async {
     final partnerName = args['partner_name'] as String? ?? '';
     final category = args['category'] as String? ?? 'custom';
-    final time = args['time'] as String? ?? '22:00';
+    var time = args['time'] as String? ?? '22:00';
     final customMessage = args['message'] as String?;
+
+    // 时间格式校验和修正
+    final timeMatch = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(time);
+    if (timeMatch == null) {
+      return '时间格式错误：$time，应为 HH:mm 格式（如 22:00）';
+    }
+    final hour = int.tryParse(timeMatch.group(1)!) ?? 22;
+    final minute = int.tryParse(timeMatch.group(2)!) ?? 0;
+    if (hour > 23 || minute > 59) {
+      return '时间无效：$time，小时应在0-23之间，分钟应在0-59之间';
+    }
+    time = '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 
     // 按名字查找 partner
     final partners = await PartnerService.getAll();
@@ -512,7 +484,8 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
         if (weather != null) {
           lines.add('${p.nickname}: ${weather.temp}°C ${weather.text}');
         } else {
-          lines.add('${p.nickname}: 暂无天气数据');
+          final err = WeatherService.lastError;
+          lines.add('${p.nickname}: 天气查询失败${err != null ? "（$err）" : ""}');
         }
       }
       return partners.isEmpty
@@ -528,7 +501,14 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
 
     final weather = await _getPartnerWeather(partner.first);
     if (weather == null) {
-      return '$partnerName 那边暂无天气数据（可能未设置位置信息）';
+      final err = WeatherService.lastError;
+      if (partner.first.city == null || partner.first.city!.isEmpty) {
+        return '$partnerName 还没有设置城市，无法查询天气，请先帮用户设置城市';
+      }
+      if (err != null) {
+        return '$partnerName 那边天气查询失败：$err';
+      }
+      return '$partnerName（城市: ${partner.first.city}）暂无天气数据，可能是城市名不匹配或网络问题';
     }
 
     // 检查是否有天气预警
@@ -559,7 +539,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
           partner.longitude!, partner.latitude!,
         );
       } else if (partner.city != null && partner.city!.isNotEmpty) {
-        return await WeatherService.getCurrentWeatherByCity(partner.city!);
+        // 清理城市名：去空格、去掉"市"后缀
+        final cleanCity = partner.city!.trim().replaceAll(RegExp(r'[市]$'), '');
+        return await WeatherService.getCurrentWeatherByCity(cleanCity);
       }
     } catch (_) {}
     return null;
@@ -573,7 +555,8 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
     final lines = <String>[];
     for (final p in partners) {
       final days = DateTime.now().difference(p.createdAt).inDays;
-      lines.add('${p.nickname}（${p.type}，认识 $days 天）');
+      final cityInfo = p.city != null && p.city!.isNotEmpty ? '，城市: ${p.city}' : '，城市: 未设置';
+      lines.add('${p.nickname}（${p.typeLabel}，认识 $days 天$cityInfo）');
     }
     return '关心的人: ${lines.join('、')}';
   }
@@ -598,6 +581,179 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
     return parts.join('；');
   }
 
+  // ---- 工具: 创建关心的人 ----
+  Future<String> _toolCreatePartner(Map<String, dynamic> args) async {
+    final nickname = args['nickname'] as String? ?? '';
+    final type = args['relationship'] as String? ?? 'other';
+    final rawCity = args['city'] as String?;
+    // 城市名清理：去空格、去掉"市"后缀
+    final city = rawCity != null
+        ? rawCity.trim().replaceAll(RegExp(r'[市]$'), '')
+        : null;
+    final note = args['note'] as String?;
+
+    if (nickname.isEmpty) {
+      return '创建失败：需要提供名字';
+    }
+
+    // 检查是否已存在同名
+    final existing = await PartnerService.getAll();
+    if (existing.any((p) => p.nickname == nickname)) {
+      return '$nickname 已经在你的关心列表里了，不需要重复添加';
+    }
+
+    await PartnerService.add(
+      nickname: nickname,
+      type: type,
+      city: city,
+      note: note,
+    );
+    PartnerService.notifyRefresh();
+
+    // 验证创建结果
+    final verify = await PartnerService.getAll();
+    final created = verify.where((p) => p.nickname == nickname).toList();
+    if (created.isEmpty) {
+      return '创建失败：数据库写入异常，请重试';
+    }
+    final p = created.first;
+
+    final typeLabel = _relationshipLabel(type);
+    final cityInfo = p.city != null && p.city!.isNotEmpty ? '，城市已设为${p.city}' : '';
+
+    if (city != null && city.isNotEmpty) {
+      return '已成功添加 $nickname（$typeLabel$cityInfo）。\n'
+          '请主动告诉用户已经添加成功（包含城市信息），然后问用户是否需要设置提醒。\n'
+          '用选择题格式让用户选择提醒类型：[选项:睡觉提醒|吃饭提醒|天气提醒|稍后再说]';
+    }
+    return '已成功添加 $nickname（$typeLabel）。\n'
+        '请主动告诉用户已经添加成功，建议用户设置城市和提醒。\n'
+        '先问用户 $nickname 在哪个城市，然后再问是否需要设置提醒。\n'
+        '提醒类型用选择题格式：[选项:睡觉提醒|吃饭提醒|天气提醒|稍后再说]';
+  }
+
+  // ---- 工具: 查看某人详情 ----
+  Future<String> _toolGetPartnerDetail(Map<String, dynamic> args) async {
+    final partnerName = args['partner_name'] as String? ?? '';
+
+    final partners = await PartnerService.getAll();
+    final partner = partners.where((p) => p.nickname == partnerName).toList();
+    if (partner.isEmpty) {
+      return '未找到名为"$partnerName"的关心的人';
+    }
+
+    final p = partner.first;
+    final days = DateTime.now().difference(p.createdAt).inDays;
+    final parts = <String>[
+      '$partnerName（${p.typeLabel}，认识 $days 天）',
+    ];
+    if (p.city != null && p.city!.isNotEmpty) {
+      parts.add('城市: ${p.city}');
+    } else {
+      parts.add('城市: 未设置');
+    }
+    if (p.note != null && p.note!.isNotEmpty) {
+      parts.add('描述: ${p.note}');
+    }
+
+    // 查询提醒配置
+    final configs = await LocalReminderService.getConfigs(p.id);
+    final enabled = configs.where((c) => c.enabled).toList();
+    if (enabled.isNotEmpty) {
+      final categories = enabled.map((c) {
+        switch (c.category) {
+          case 'sleep':
+            final time = c.config['target_sleep_time'] ?? '';
+            return '睡觉提醒${time.isNotEmpty ? "($time)" : ""}';
+          case 'meal':
+            final meals = c.config['meals'] as List?;
+            final time = meals != null && meals.isNotEmpty
+                ? meals[0]['target_time'] ?? ''
+                : '';
+            return '吃饭提醒${time.isNotEmpty ? "($time)" : ""}';
+          case 'weather':
+            return '天气提醒';
+          default:
+            return c.category;
+        }
+      }).join('、');
+      parts.add('提醒: $categories');
+    } else {
+      parts.add('提醒: 暂无');
+    }
+
+    return parts.join('；');
+  }
+
+  // ---- 工具: 更新关心的人 ----
+  Future<String> _toolUpdatePartner(Map<String, dynamic> args) async {
+    final partnerName = args['partner_name'] as String? ?? '';
+    final newNickname = args['new_nickname'] as String?;
+    final newType = args['relationship'] as String?;
+    final rawCity = args['city'] as String?;
+    final city = rawCity != null
+        ? rawCity.trim().replaceAll(RegExp(r'[市县区]$'), '')
+        : null;
+    final note = args['note'] as String?;
+
+    final partners = await PartnerService.getAll();
+    final partner = partners.where((p) => p.nickname == partnerName).toList();
+    if (partner.isEmpty) {
+      return '未找到名为"$partnerName"的关心的人';
+    }
+
+    final p = partner.first;
+    final changes = <String>[];
+
+    await PartnerService.update(
+      p.id,
+      nickname: newNickname,
+      type: newType,
+      city: city,
+      note: note,
+    );
+    PartnerService.notifyRefresh();
+
+    if (newNickname != null && newNickname != partnerName) {
+      changes.add('名字改为$newNickname');
+    }
+    if (newType != null) {
+      changes.add('关系改为${_relationshipLabel(newType)}');
+    }
+    if (city != null) {
+      changes.add('城市改为$city');
+    }
+    if (note != null) {
+      changes.add('描述改为$note');
+    }
+
+    if (changes.isEmpty) {
+      return '${p.nickname}的信息没有变化';
+    }
+
+    // 验证更新结果
+    final verifyName = newNickname ?? partnerName;
+    final verify = await PartnerService.getAll();
+    final updated = verify.where((p) => p.nickname == verifyName).toList();
+    if (updated.isEmpty) {
+      return '更新失败：数据库写入异常，请重试';
+    }
+
+    return '已更新$verifyName：${changes.join('、')}';
+  }
+
+  String _relationshipLabel(String type) {
+    return switch (type) {
+      'couple' => '情侣',
+      'partner' => '伴侣',
+      'family' => '家人',
+      'friend' => '朋友',
+      'colleague' => '同事',
+      'classmate' => '同学',
+      _ => '关心的人',
+    };
+  }
+
   // ---- 工具名称映射 ----
   String _categoryLabel(String category) {
     return switch (category) {
@@ -615,7 +771,10 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
       'delete_reminder' => '删除提醒',
       'get_partner_weather' => '查询天气',
       'get_all_partners' => '查看关心的人',
+      'get_partner_detail' => '查看详情',
       'get_reminder_stats' => '查看统计',
+      'create_partner' => '添加关心的人',
+      'update_partner' => '修改信息',
       _ => name,
     };
   }
@@ -639,77 +798,220 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
   }
 
   // ---- 快捷芯片 ----
+
+  /// 用户点击选择题按钮，直接发送选项内容（不经过输入框）
+  void _sendChoiceMessage(String choice) {
+    if (_sending) return;
+
+    setState(() {
+      _messages.add(_ChatMessage(role: 'user', content: choice));
+      _messages.add(const _ChatMessage(
+        role: 'assistant',
+        content: '',
+        streaming: true,
+      ));
+      _sending = true;
+      _executingTool = null;
+    });
+    _scrollToBottom();
+    _processAiResponse(choice);
+  }
+
+  /// 处理 AI 回复（从 _sendMessage 中提取的公共逻辑）
+  Future<void> _processAiResponse(String text) async {
+    try {
+      await AiService.chatWithTools(text,
+        onToolCall: (name, args) async {
+          if (!mounted) return '操作已取消';
+          setState(() => _executingTool = name);
+          _scrollToBottom();
+          final result = await _executeTool(name, args);
+          if (!mounted) return result;
+          setState(() => _executingTool = null);
+          _scrollToBottom();
+          return result;
+        },
+        onToken: (accumulated) {
+          if (!mounted) return;
+          setState(() {
+            final idx = _messages.lastIndexWhere((m) => m.streaming);
+            if (idx >= 0) {
+              _messages[idx] = _ChatMessage(
+                role: 'assistant',
+                content: accumulated,
+                streaming: true,
+              );
+            }
+          });
+        },
+      );
+
+      if (!mounted) return;
+
+      final idx = _messages.lastIndexWhere((m) => m.streaming);
+      if (idx >= 0) {
+        final fullContent = _messages[idx].content;
+        _messages.removeAt(idx);
+
+        _postConversationMemory(text, fullContent);
+
+        final parts = fullContent
+            .split('|||')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+
+        if (parts.isEmpty) {
+          _messages.add(_ChatMessage(
+            role: 'assistant',
+            content: fullContent.trim(),
+          ));
+        } else {
+          for (int i = 0; i < parts.length; i++) {
+            if (i > 0) {
+              final charCount = parts[i].length;
+              final delayMs = (charCount * 100).clamp(2000, 8000);
+              await Future.delayed(Duration(milliseconds: delayMs));
+            }
+            if (!mounted) break;
+            setState(() {
+              _messages.add(_ChatMessage(role: 'assistant', content: parts[i]));
+            });
+            _scrollToBottom();
+          }
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final idx = _messages.lastIndexWhere((m) => m.streaming);
+      if (idx >= 0) _messages.removeAt(idx);
+
+      setState(() {
+        _messages.add(_ChatMessage(
+          role: 'assistant',
+          content: '抱歉，网络好像出了点问题：$e',
+        ));
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _executingTool = null;
+        });
+      }
+      _scrollToBottom();
+    }
+  }
+
+  /// 将推荐提示词放入输入框，而非直接发送。
+  /// 如果输入框已有内容，弹窗确认是否替换。
+  Future<void> _putInInputField(String text) async {
+    final currentText = _controller.text.trim();
+    if (currentText.isEmpty) {
+      // 输入框为空，直接填入
+      _controller.text = text;
+      return;
+    }
+
+    // 输入框有内容，检查是否需要弹窗
+    final prefs = await SharedPreferences.getInstance();
+    final skipAsk = prefs.getBool('chip_replace_without_ask') ?? false;
+
+    if (skipAsk) {
+      // 用户之前勾选了"不再提醒"，直接替换
+      _controller.text = text;
+      return;
+    }
+
+    // 弹窗确认
+    if (!mounted) return;
+    bool dontAskAgain = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          title: const Text('替换输入内容'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('输入框已有内容，是否清空并填入推荐提示词？'),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Checkbox(
+                    value: dontAskAgain,
+                    onChanged: (v) => setDialogState(() => dontAskAgain = v ?? false),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      '不再提醒',
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('替换'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed == true) {
+      // 保存"不再提醒"偏好
+      if (dontAskAgain) {
+        await prefs.setBool('chip_replace_without_ask', true);
+      }
+      _controller.text = text;
+    }
+  }
+
   Future<void> _handleChip(String action) async {
     switch (action) {
       case 'weather':
-        setState(() {
-          _messages.add(const _ChatMessage(
-              role: 'user', content: '帮我看看大家的天气'));
-          _sending = true;
-        });
-        _scrollToBottom();
-        final partners = await PartnerService.getAll();
-        final lines = <String>[];
-        for (final p in partners) {
-          try {
-            WeatherResult? w;
-            if (p.latitude != null && p.longitude != null) {
-              w = await WeatherService.getCurrentWeather(p.longitude!, p.latitude!);
-            } else if (p.city != null && p.city!.isNotEmpty) {
-              w = await WeatherService.getCurrentWeatherByCity(p.city!);
-            }
-            if (w != null) {
-              lines.add('${p.nickname}: ${w.temp}\u00B0C ${w.text}');
-            } else {
-              lines.add('${p.nickname}: 暂无天气数据');
-            }
-          } catch (_) {
-            lines.add('${p.nickname}: 获取失败');
-          }
-        }
-        if (!mounted) return;
-        setState(() {
-          _messages.add(_ChatMessage(
-            role: 'assistant',
-            content: partners.isEmpty
-                ? '还没有关心的人哦，先去添加一个吧~'
-                : '今日天气速报\n\n${lines.join('\n')}',
-            weatherData: {'type': 'summary'},
-          ));
-          _sending = false;
-        });
-        _scrollToBottom();
+        _putInInputField('帮我看看大家的天气');
         break;
 
       case 'goodnight':
-        _controller.text = '帮我写一句晚安语';
-        _sendMessage();
+        _putInInputField('帮我写一句晚安语');
         break;
 
       case 'goodmorning':
-        _controller.text = '帮我写一句早安语';
-        _sendMessage();
+        _putInInputField('帮我写一句早安语');
         break;
 
       case 'care':
-        _controller.text = '给我一些关心建议';
-        _sendMessage();
+        _putInInputField('给我一些关心建议');
         break;
 
       case 'remind_meal':
-        _controller.text = '帮我写一条提醒吃饭的消息';
-        _sendMessage();
+        _putInInputField('帮我写一条提醒吃饭的消息');
         break;
     }
   }
 
-  // ---- 清历史 ----
-  Future<void> _clearHistory() async {
+  // ---- 一键清空消息显示（仅清除视觉展示，不删除历史记录）----
+  Future<void> _clearMessagesDisplay() async {
+    if (!mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('清除对话记录'),
-        content: const Text('确定清除所有对话记录吗？'),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        title: const Text('清空屏幕'),
+        content: const Text('确定要清空当前屏幕上的对话内容吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -717,18 +1019,78 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('清除'),
+            child: const Text('清空'),
           ),
         ],
       ),
     );
-    if (confirmed == true && mounted) {
-      await AiService.clearChatHistory();
-      if (mounted) {
-        setState(() {
-          _messages.removeWhere((m) => m.proactiveType == ProactiveType.none);
-        });
-      }
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _messages.clear();
+    });
+  }
+
+  // ---- 清历史（总结 → 写入 Wiki → 清空显示和 DB）----
+  Future<void> _clearHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        title: const Text('清除对话记录'),
+        content: const Text(
+          '确定要清除当前对话记录吗？\n\n'
+          '小念会先将对话内容总结并存入长期记忆，然后清除显示。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('确认清除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // 1. 收集当前所有对话内容
+    final conversationMessages = _messages.where(
+      (m) => m.role == 'user' || m.role == 'assistant',
+    ).toList();
+
+    if (conversationMessages.isNotEmpty) {
+      final userParts = conversationMessages
+          .where((m) => m.role == 'user')
+          .map((m) => m.content)
+          .join('\n');
+      final assistantParts = conversationMessages
+          .where((m) => m.role == 'assistant')
+          .map((m) => m.content)
+          .join('\n');
+
+      // 2. 异步提取记忆到 Wiki（不阻塞 UI）
+      AiMemoryExtractor.extractFromConversation(
+        userMessage: userParts,
+        assistantReply: assistantParts,
+      ).catchError((_) {});
+
+      // 3. 触发记忆整合
+      AiMemoryDreamer.dream().catchError((_) => DreamResult());
+    }
+
+    // 4. 清除 DB 中的聊天记录
+    await AiService.clearChatHistory();
+
+    // 5. 清空显示
+    if (mounted) {
+      setState(() {
+        _messages.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('对话已总结并存入长期记忆')),
+      );
     }
   }
 
@@ -757,6 +1119,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // keep-alive
     final theme = Theme.of(context);
 
     if (_loading) {
@@ -788,7 +1151,6 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
 
   // ---- 状态条 ----
   Widget _buildStatusBar(ThemeData theme) {
-    final partnerCount = _stats['partnerCount'] ?? 0;
     final streakDays = _stats['streakDays'] ?? 0;
 
     return Container(
@@ -797,10 +1159,19 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
       ),
       child: Row(
         children: [
-          TaAvatar(
-            name: _user?.nickname ?? '我',
-            imageUrl: _user?.avatarPath,
-            size: TaSizes.avatarSm,
+          Container(
+            width: TaSizes.avatarMd,
+            height: TaSizes.avatarMd,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: TaShadows.sm,
+            ),
+            child: ClipOval(
+              child: Image.asset(
+                'assets/images/onboarding_mascot.png',
+                fit: BoxFit.cover,
+              ),
+            ),
           ),
           const SizedBox(width: TaSpacing.xs),
           Expanded(
@@ -808,13 +1179,13 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${_greeting()}，${_user?.nickname ?? '你'}',
+                  _greeting(),
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 Text(
-                  '$partnerCount 位关心的人',
+                  '小念 · 你的关怀搭子',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -873,6 +1244,27 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
               ),
             ),
           ),
+          // 清除消息：单击清空显示，长按清除历史（含总结存档）
+          if (_messages.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: TaSpacing.xs),
+              child: GestureDetector(
+                onTap: _clearMessagesDisplay,
+                onLongPress: _clearHistory,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: TaRadius.borderFull,
+                  ),
+                  child: Icon(
+                    Icons.cleaning_services_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -936,7 +1328,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
               fit: BoxFit.contain,
             ).animate().scale(duration: 500.ms, curve: TaAnimation.bounce),
             const SizedBox(height: TaSpacing.md),
-            Text('AI 关怀助手', style: theme.textTheme.titleLarge),
+            Text('小念', style: theme.textTheme.titleLarge),
             const SizedBox(height: TaSpacing.xs),
             Text(
               '有什么想问的，随时告诉我~',
@@ -963,7 +1355,10 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
               .animate()
               .fadeIn(duration: TaAnimation.normal);
         }
-        return _ChatBubble(message: msg);
+        return _ChatBubble(
+          message: msg,
+          onChoiceSelected: (choice) => _sendChoiceMessage(choice),
+        );
       },
     );
   }
@@ -1106,7 +1501,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
               const SizedBox(width: TaSpacing.xs),
               Container(
                 decoration: BoxDecoration(
-                  gradient: TaGradients.primary,
+                  gradient: TaGradients.primary(theme.brightness),
                   borderRadius: TaRadius.borderFull,
                 ),
                 child: IconButton(
@@ -1115,24 +1510,6 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
                       const Icon(Icons.send_rounded, color: Colors.white),
                 ),
               ),
-              if (_messages.any((m) => m.proactiveType == ProactiveType.none))
-                PopupMenuButton<String>(
-                  onSelected: (v) {
-                    if (v == 'clear') _clearHistory();
-                  },
-                  icon: Icon(Icons.more_vert_rounded,
-                      color: theme.colorScheme.onSurfaceVariant, size: 20),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: 'clear',
-                      child: Row(children: [
-                        Icon(Icons.delete_sweep_rounded, size: 20),
-                        SizedBox(width: 8),
-                        Text('清除对话记录'),
-                      ]),
-                    ),
-                  ],
-                ),
             ],
           ),
         ],
@@ -1161,19 +1538,38 @@ class _AiHomeScreenState extends State<AiHomeScreen> {
 // ============================================================
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({required this.message});
+  const _ChatBubble({required this.message, this.onChoiceSelected});
   final _ChatMessage message;
+  final ValueChanged<String>? onChoiceSelected;
+
+  /// 从消息内容中提取选择题选项
+  static List<String> _parseChoices(String content) {
+    final match = RegExp(r'\[选项:([^\]]+)\]').firstMatch(content);
+    if (match == null) return [];
+    return match
+        .group(1)!
+        .split('|')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUser = message.role == 'user';
 
-    // 流式消息：隐藏 ||| 分隔符，空内容时显示输入光标
+    // 流式消息：隐藏 ||| 分隔符和选择题标记，空内容时显示输入光标
     String displayContent = message.content;
     if (message.streaming) {
       displayContent = displayContent.replaceAll('|||', '');
     }
+    // 移除选择题标记
+    displayContent = displayContent
+        .replaceAll(RegExp(r'\[选项:[^\]]+\]'), '')
+        .trim();
+
+    final choices = _parseChoices(message.content);
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -1204,36 +1600,82 @@ class _ChatBubble extends StatelessWidget {
                   bottomRight: Radius.circular(TaRadius.md),
                 ),
         ),
-        child: message.streaming && displayContent.isEmpty
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: List.generate(3, (i) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: Container(
-                      width: 5,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: (isUser
-                                ? theme.colorScheme.onPrimary
-                                : theme.colorScheme.onSurface)
-                            .withValues(alpha: 0.4),
-                      ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            message.streaming && displayContent.isEmpty
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(3, (i) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: Container(
+                          width: 5,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: (isUser
+                                    ? theme.colorScheme.onPrimary
+                                    : theme.colorScheme.onSurface)
+                                .withValues(alpha: 0.4),
+                          ),
+                        ),
+                      );
+                    }),
+                  )
+                : Text(
+                    displayContent,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: isUser
+                          ? theme.colorScheme.onPrimary
+                          : theme.colorScheme.onSurface,
                     ),
-                  );
-                }),
-              )
-            : Text(
-                displayContent,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: isUser
-                      ? theme.colorScheme.onPrimary
-                      : theme.colorScheme.onSurface,
-                ),
-              ),
+                  ),
+            if (choices.isNotEmpty && !message.streaming) ...[
+              const SizedBox(height: TaSpacing.sm),
+              ..._buildChoiceButtons(theme, isUser, choices),
+            ],
+          ],
+        ),
       ),
     ).animate().fadeIn(duration: TaAnimation.fast, curve: TaAnimation.curve);
+  }
+
+  List<Widget> _buildChoiceButtons(ThemeData theme, bool isUser, List<String> choices) {
+    return [
+      Wrap(
+        spacing: TaSpacing.xs,
+        runSpacing: TaSpacing.xs,
+        children: choices.map((choice) {
+          return Material(
+            color: isUser
+                ? theme.colorScheme.onPrimary.withValues(alpha: 0.2)
+                : theme.colorScheme.primaryContainer,
+            borderRadius: TaRadius.borderFull,
+            child: InkWell(
+              borderRadius: TaRadius.borderFull,
+              onTap: () => onChoiceSelected?.call(choice),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: TaSpacing.md,
+                  vertical: 8,
+                ),
+                child: Text(
+                  choice,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: isUser
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    ];
   }
 }
 
@@ -1262,7 +1704,7 @@ class _WeatherCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: TaSpacing.xs),
       decoration: BoxDecoration(
-        gradient: TaGradients.sky,
+        gradient: TaGradients.sky(theme.brightness),
         borderRadius: TaRadius.borderMd,
       ),
       child: Column(
@@ -1292,7 +1734,7 @@ class _WeatherCard extends StatelessWidget {
                     const SizedBox(width: TaSpacing.xs),
                     Text('天气关注',
                         style: theme.textTheme.titleSmall?.copyWith(
-                          color: TaLightColors.onTertiaryContainer,
+                          color: Colors.white.withValues(alpha: 0.9),
                           fontWeight: FontWeight.w600,
                         )),
                   ],
@@ -1301,7 +1743,7 @@ class _WeatherCard extends StatelessWidget {
                 Text(
                   message.content,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    color: TaLightColors.onTertiaryContainer,
+                    color: Colors.white.withValues(alpha: 0.9),
                   ),
                 ),
                 if (message.actionLabel != null) ...[
@@ -1318,7 +1760,7 @@ class _WeatherCard extends StatelessWidget {
                       child: Text(
                         message.actionLabel!,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: TaLightColors.onTertiaryContainer,
+                          color: Colors.white.withValues(alpha: 0.9),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1349,7 +1791,7 @@ class _GreetingCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: TaSpacing.xs),
       padding: const EdgeInsets.all(TaSpacing.md),
       decoration: BoxDecoration(
-        gradient: TaGradients.warm,
+        gradient: TaGradients.warm(theme.brightness),
         borderRadius: TaRadius.borderMd,
       ),
       child: Column(
@@ -1361,10 +1803,10 @@ class _GreetingCard extends StatelessWidget {
               Image.asset('assets/images/ai_empty_chat.png',
                   width: 20, height: 20),
               const SizedBox(width: TaSpacing.xs),
-              Text('AI 关怀助手',
+              Text('小念',
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w600,
-                    color: TaLightColors.onPrimaryContainer,
+                    color: Colors.white.withValues(alpha: 0.9),
                   )),
             ],
           ),
@@ -1372,7 +1814,7 @@ class _GreetingCard extends StatelessWidget {
           Text(
             message.content,
             style: theme.textTheme.bodyMedium?.copyWith(
-              color: TaLightColors.onPrimaryContainer,
+              color: Colors.white.withValues(alpha: 0.9),
             ),
           ),
         ],
@@ -1402,14 +1844,33 @@ class _GuideCard extends StatelessWidget {
           color: theme.colorScheme.secondaryContainer,
         ),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Image.asset('assets/images/chip_care.png', width: 20, height: 20),
-          const SizedBox(width: TaSpacing.xs),
-          Expanded(
-            child: Text(message.content,
-                style: theme.textTheme.bodyMedium),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Image.asset('assets/images/chip_care.png', width: 20, height: 20),
+              const SizedBox(width: TaSpacing.xs),
+              Expanded(
+                child: Text(message.content, style: theme.textTheme.bodyMedium),
+              ),
+            ],
+          ),
+          const SizedBox(height: TaSpacing.md),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () async {
+                final result = await context.push<bool>(Routes.addPartner);
+                if (result == true) PartnerService.notifyRefresh();
+              },
+              icon: const Icon(Icons.person_add_rounded, size: 18),
+              label: const Text('添加关心的人'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
           ),
         ],
       ),

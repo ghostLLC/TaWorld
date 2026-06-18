@@ -107,6 +107,24 @@ GoRouter createRouter() {
         builder: (context, _) => const SettingsScreen(),
       ),
 
+      // 设置子页面
+      GoRoute(
+        path: '/settings/notifications',
+        builder: (context, _) => SettingsScreen.buildNotificationsPage(),
+      ),
+      GoRoute(
+        path: '/settings/appearance',
+        builder: (context, _) => SettingsScreen.buildAppearancePage(),
+      ),
+      GoRoute(
+        path: '/settings/ai-data',
+        builder: (context, _) => SettingsScreen.buildAiDataPage(),
+      ),
+      GoRoute(
+        path: '/settings/account',
+        builder: (context, _) => SettingsScreen.buildAccountPage(),
+      ),
+
       // API Key 管理
       GoRoute(
         path: Routes.apiKeys,

@@ -76,7 +76,7 @@ class _TaButtonState extends State<TaButton>
           child: Container(
             height: TaSizes.buttonHeight,
             decoration: BoxDecoration(
-              gradient: widget.gradient ?? TaGradients.primary,
+              gradient: widget.gradient ?? TaGradients.primary(Theme.of(context).brightness),
               borderRadius: TaRadius.borderMd,
               boxShadow: isActive ? TaShadows.sm : null,
             ),

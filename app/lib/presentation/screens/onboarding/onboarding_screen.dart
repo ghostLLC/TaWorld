@@ -214,7 +214,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     icon: Icons.arrow_forward_rounded,
                     loading: _loading,
                     enabled: _canSubmit && !_loading,
-                    gradient: TaGradients.primary,
+                    gradient: TaGradients.primary(Theme.of(context).brightness),
                   ),
                 )
                     .animate()
@@ -277,7 +277,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                 Center(
                   child: Text(
-                    '配置 DeepSeek API Key 后可解锁 AI 关怀建议功能\n天气查询已使用免费开源服务，无需配置',
+                    '配置 DeepSeek API Key 后，小念就能陪你聊天、\n写关怀语、提醒你在意的人',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -312,7 +312,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       const SizedBox(height: TaSpacing.xs),
                       Text(
-                        '用于 AI 关怀助手功能，帮你生成温暖的关怀语',
+                        '让小念陪你聊天、写关怀语、提醒你在意的人',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -322,7 +322,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         controller: _deepseekKeyController,
                         hint: 'sk-...',
                         prefixIcon: Icons.key_rounded,
-                        obscureText: true,
                       ),
                       const SizedBox(height: TaSpacing.xs),
                       Align(
@@ -357,7 +356,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     text: '保存并开始',
                     icon: Icons.check_rounded,
                     loading: _savingKeys,
-                    gradient: TaGradients.primary,
+                    gradient: TaGradients.primary(Theme.of(context).brightness),
                   ),
                 ).animate().fadeIn(delay: 500.ms),
 

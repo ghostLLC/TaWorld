@@ -30,6 +30,12 @@ dependencies:
   flutter_animate: ^4.5.2
   url_launcher: ^6.3.1
 
+  # 数据备份与恢复
+  archive: ^4.0.4
+  file_saver: ^0.2.14
+  file_picker: ^8.1.7
+  share_plus: ^10.1.4
+
   # 本地通知 & 定时
   flutter_local_notifications: ^18.0.0
   timezone: ^0.10.0
@@ -38,6 +44,7 @@ dependencies:
   # 权限 & 硬件
   permission_handler: ^11.3.1
   geolocator: ^13.0.2
+  geocoding: ^3.0.0
   image_picker: ^1.1.2
 
 dev_dependencies:

@@ -3,10 +3,20 @@
 /// 管理用户关心的人（单机版替代关系模块）。
 library;
 
+import 'package:flutter/foundation.dart';
+
 import '../../data/local/database_helper.dart';
 import '../../data/models/partner.dart';
 
 abstract final class PartnerService {
+  /// 关心的人列表变更通知器（跨 Tab 刷新用）
+  static final refreshCounter = ValueNotifier<int>(0);
+
+  /// 通知所有监听方刷新关心的人列表
+  static void notifyRefresh() {
+    refreshCounter.value++;
+  }
+
   /// 获取所有活跃的关注人
   static Future<List<Partner>> getAll({bool includeDissolved = false}) async {
     final db = await DatabaseHelper.database;

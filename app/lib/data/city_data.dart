@@ -1,7 +1,6 @@
-/// 全球城市数据 — wttr.in 支持的城市列表
+/// 全球城市数据 — TaWorld 支持的城市列表
 ///
 /// 三级结构：国家 → 省/州 → 城市。
-/// wttr.in 基于 WorldWeatherOnline，支持全球主要城市。
 /// 默认国家为中国。
 library;
 

@@ -89,7 +89,7 @@ class _Placeholder extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        gradient: TaGradients.warm,
+        gradient: TaGradients.warm(theme.brightness),
       ),
       child: Center(
         child: Text(

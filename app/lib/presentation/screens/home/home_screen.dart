@@ -29,6 +29,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  late final PageController _pageController;
 
   static const _tabs = [
     AiHomeScreen(),
@@ -37,20 +38,60 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(initialPage: 0);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
+      body: PageView(
+        controller: _pageController,
+        onPageChanged: (i) => setState(() => _currentIndex = i),
         children: _tabs,
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (i) => setState(() => _currentIndex = i),
-        destinations: const [
+        onDestinationSelected: (i) {
+          setState(() => _currentIndex = i);
+          _pageController.animateToPage(
+            i,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+          );
+        },
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.smart_toy_outlined),
-            selectedIcon: Icon(Icons.smart_toy_rounded),
-            label: 'AI 助手',
+            icon: Padding(
+              padding: const EdgeInsets.all(2),
+              child: ClipOval(
+                child: Image.asset(
+                  'assets/images/onboarding_mascot.png',
+                  width: 26,
+                  height: 26,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            selectedIcon: Padding(
+              padding: const EdgeInsets.all(2),
+              child: ClipOval(
+                child: Image.asset(
+                  'assets/images/onboarding_mascot.png',
+                  width: 26,
+                  height: 26,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            label: '小念',
           ),
           NavigationDestination(
             icon: Icon(Icons.people_outline_rounded),
@@ -83,13 +124,24 @@ class _PartnersTabState extends State<_PartnersTab> {
   bool _loading = true;
   List<Partner> _partners = [];
   Map<String, List<ReminderConfig>> _configsByPartner = {};
-  Map<String, WeatherResult?> _weatherByPartner = {};
+  Map<String, FullWeatherResult?> _weatherByPartner = {};
   final Set<String> _expandedIds = {};
 
   @override
   void initState() {
     super.initState();
     _loadAll();
+    PartnerService.refreshCounter.addListener(_onPartnerRefresh);
+  }
+
+  @override
+  void dispose() {
+    PartnerService.refreshCounter.removeListener(_onPartnerRefresh);
+    super.dispose();
+  }
+
+  void _onPartnerRefresh() {
+    if (mounted) _loadAll();
   }
 
   Future<void> _loadAll() async {
@@ -104,15 +156,15 @@ class _PartnersTabState extends State<_PartnersTab> {
         allConfigs[p.id] = pConfigs;
       }
 
-      // 获取天气
-      final weatherMap = <String, WeatherResult?>{};
+      // 获取天气（含预报）
+      final weatherMap = <String, FullWeatherResult?>{};
       for (final p in partners) {
         try {
-          WeatherResult? w;
+          FullWeatherResult? w;
           if (p.latitude != null && p.longitude != null) {
-            w = await WeatherService.getCurrentWeather(p.longitude!, p.latitude!);
+            w = await WeatherService.getFullWeather('${p.latitude},${p.longitude}');
           } else if (p.city != null && p.city!.isNotEmpty) {
-            w = await WeatherService.getCurrentWeatherByCity(p.city!);
+            w = await WeatherService.getFullWeather(p.city!);
           }
           weatherMap[p.id] = w;
         } catch (_) {
@@ -210,8 +262,7 @@ class _PartnersTabState extends State<_PartnersTab> {
             final partner = _partners[index];
             final isExpanded = _expandedIds.contains(partner.id);
             final configs = _configsByPartner[partner.id] ?? [];
-            final weather = _weatherByPartner[partner.id];
-            final days = PartnerService.daysSince(partner.createdAt);
+            final weather = _weatherByPartner[partner.id];            final days = PartnerService.daysSince(partner.createdAt);
 
             return Padding(
               padding: const EdgeInsets.only(bottom: TaSpacing.sm),
@@ -235,6 +286,12 @@ class _PartnersTabState extends State<_PartnersTab> {
                 onAddReminder: () => context.push(
                   Routes.reminderConfig.replaceAll(':partnerId', partner.id),
                 ),
+                onEdit: () async {
+                  final result = await context.push<bool>(
+                    Routes.partnerDetail.replaceAll(':id', partner.id),
+                  );
+                  if (result == true) _loadAll();
+                },
               ),
             ).animate()
                 .fadeIn(
@@ -265,11 +322,12 @@ class _PartnerCard extends StatelessWidget {
     required this.onPartnerTap,
     required this.onConfigTap,
     required this.onAddReminder,
+    required this.onEdit,
   });
 
   final Partner partner;
   final int days;
-  final WeatherResult? weather;
+  final FullWeatherResult? weather;
   final List<ReminderConfig> configs;
   final bool isExpanded;
   final VoidCallback onToggleExpand;
@@ -277,6 +335,7 @@ class _PartnerCard extends StatelessWidget {
   final VoidCallback onPartnerTap;
   final ValueChanged<ReminderConfig> onConfigTap;
   final VoidCallback onAddReminder;
+  final VoidCallback onEdit;
 
   /// 根据经度估算当地时间（每15° ≈ 1小时时区偏移）
   String _localTimeStr() {
@@ -317,7 +376,7 @@ class _PartnerCard extends StatelessWidget {
     final infoParts = <String>[];
     if (timeStr.isNotEmpty) infoParts.add(timeStr);
     if (weather != null) {
-      infoParts.add('${_weatherEmoji(weather!.text)} ${weather!.text} ${weather!.temp}\u00B0C');
+      infoParts.add('${_weatherEmoji(weather!.current.text)} ${weather!.current.text} ${weather!.current.temp}\u00B0C');
     }
 
     return TaCard(
@@ -337,6 +396,7 @@ class _PartnerCard extends StatelessWidget {
                   TaAvatar(
                     name: partner.nickname,
                     size: TaSizes.avatarMd,
+                    imageUrl: partner.avatarPath,
                   ),
                   const SizedBox(width: TaSpacing.sm),
                   Expanded(
@@ -356,6 +416,18 @@ class _PartnerCard extends StatelessWidget {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
+                        if (partner.note != null && partner.note!.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            partner.note!,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.tertiary,
+                              fontStyle: FontStyle.italic,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                         if (infoParts.isNotEmpty) ...[
                           const SizedBox(height: 4),
                           Text(
@@ -387,6 +459,19 @@ class _PartnerCard extends StatelessWidget {
                       ),
                     ),
                   const SizedBox(width: TaSpacing.xs),
+                  // 编辑按钮
+                  GestureDetector(
+                    onTap: onEdit,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.edit_outlined,
+                        size: 18,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: TaSpacing.xs),
                   // 展开箭头
                   AnimatedRotation(
                     turns: isExpanded ? 0.5 : 0,
@@ -416,6 +501,9 @@ class _PartnerCard extends StatelessWidget {
   }
 
   Widget _buildExpandedContent(ThemeData theme) {
+    final activeConfigs = configs.where((c) => c.enabled).toList();
+    final forecast = weather?.forecast ?? [];
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -425,8 +513,114 @@ class _PartnerCard extends StatelessWidget {
         ),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Divider(height: 1),
+
+          // ---- 天气预报行（3 天） ----
+          if (forecast.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                TaSpacing.md, TaSpacing.sm, TaSpacing.md, 0,
+              ),
+              child: Text(
+                '未来天气',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: TaSpacing.md, vertical: TaSpacing.xs,
+              ),
+              child: Row(
+                children: forecast.take(3).map((day) {
+                  final dateObj = DateTime.tryParse(day.date);
+                  final dayLabel = dateObj != null
+                      ? '${dateObj.month}/${dateObj.day}'
+                      : day.date.substring(5);
+                  // 取中午 12 点的天气描述
+                  final midHour = day.hourly.firstWhere(
+                    (h) => h.hour == 12,
+                    orElse: () => day.hourly.first,
+                  );
+                  return Expanded(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(TaRadius.sm),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            dayLabel,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _weatherEmoji(midHour.text),
+                            style: const TextStyle(fontSize: 18),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${day.minTemp}° / ${day.maxTemp}°',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+
+          // ---- 活跃提醒摘要 ----
+          if (activeConfigs.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                TaSpacing.md, TaSpacing.xs, TaSpacing.md, 0,
+              ),
+              child: Text(
+                '已开启的提醒',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ...activeConfigs.map((config) => _buildConfigRow(config, theme)),
+          ],
+
+          // ---- 未开启的提醒 ----
+          if (configs.any((c) => !c.enabled)) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                TaSpacing.md, TaSpacing.xs, TaSpacing.md, 0,
+              ),
+              child: Text(
+                '其他提醒',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            ...configs.where((c) => !c.enabled).map(
+              (config) => _buildConfigRow(config, theme),
+            ),
+          ],
+
+          // 无提醒时占位
           if (configs.isEmpty)
             Padding(
               padding: const EdgeInsets.all(TaSpacing.md),
@@ -436,9 +630,8 @@ class _PartnerCard extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-            )
-          else
-            ...configs.map((config) => _buildConfigRow(config, theme)),
+            ),
+
           // 添加提醒按钮
           Padding(
             padding: const EdgeInsets.fromLTRB(

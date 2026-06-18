@@ -603,50 +603,53 @@ abstract final class TaSizes {
 
 abstract final class TaGradients {
   /// 主渐变（AppBar、主按钮）
-  static LinearGradient get primary => LinearGradient(
+  static LinearGradient primary([Brightness b = Brightness.light]) => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          activePalette.light.primary,
-          HSLColor.fromColor(activePalette.light.primary)
+          _cs(b).primary,
+          HSLColor.fromColor(_cs(b).primary)
               .withLightness(
-                  (HSLColor.fromColor(activePalette.light.primary).lightness - 0.05)
+                  (HSLColor.fromColor(_cs(b).primary).lightness - 0.05)
                       .clamp(0.0, 1.0))
               .toColor(),
         ],
       );
 
   /// 温暖渐变（卡片背景装饰）
-  static LinearGradient get warm => LinearGradient(
+  static LinearGradient warm([Brightness b = Brightness.light]) => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          activePalette.light.primaryContainer,
-          activePalette.light.secondaryContainer,
+          _cs(b).primaryContainer,
+          _cs(b).secondaryContainer,
         ],
       );
 
   /// 成就金色渐变
-  static LinearGradient get gold => LinearGradient(
+  static LinearGradient gold([Brightness b = Brightness.light]) => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          activePalette.light.secondaryContainer,
-          HSLColor.fromColor(activePalette.light.secondary)
+          _cs(b).secondaryContainer,
+          HSLColor.fromColor(_cs(b).secondary)
               .withLightness(
-                  (HSLColor.fromColor(activePalette.light.secondary).lightness - 0.08)
+                  (HSLColor.fromColor(_cs(b).secondary).lightness - 0.08)
                       .clamp(0.0, 1.0))
               .toColor(),
         ],
       );
 
   /// 天气蓝色渐变
-  static LinearGradient get sky => LinearGradient(
+  static LinearGradient sky([Brightness b = Brightness.light]) => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          activePalette.light.tertiaryContainer,
-          activePalette.light.tertiary,
+          _cs(b).tertiaryContainer,
+          _cs(b).tertiary,
         ],
       );
+
+  static TaColorSet _cs(Brightness b) =>
+      b == Brightness.dark ? activePalette.dark : activePalette.light;
 }

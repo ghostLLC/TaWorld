@@ -6,6 +6,10 @@
 /// 3. 对话摘要管理
 library;
 
+import 'dart:convert';
+import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../data/local/database_helper.dart';
 import '../data/models/ai_wiki_fact.dart';
 import 'local/local_user_service.dart';
@@ -89,7 +93,7 @@ abstract final class AiMemoryService {
     // 5. Wiki 事实（从数据库读取）
     // 注意：Wiki 和摘要放在时间之前，因为时间每 3-6 小时变一次，
     // 放后面可以让更多稳定区块命中 DeepSeek 上下文缓存。
-    final facts = await getTopFacts(limit: 20);
+    final facts = await getTopFacts(limit: 100);
     if (facts.isNotEmpty) {
       final factLines = facts.map((f) => '- ${f.content}').toList();
       sections.add('【你了解的信息】\n${factLines.join('\n')}');
@@ -130,8 +134,7 @@ abstract final class AiMemoryService {
       try {
         final ragResults = await AiRagService.search(
           query: userMessage,
-          topK: 3,
-          maxAge: 60,
+          topK: 10,
         );
         if (ragResults.isNotEmpty) {
           sections.add(AiRagService.formatForPrompt(ragResults));
@@ -298,6 +301,165 @@ abstract final class AiMemoryService {
   static Future<void> clearAllSummaries() async {
     final db = await DatabaseHelper.database;
     await db.delete('ai_conversation_summaries');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('summarized_up_to');
+  }
+
+  // ==================== 对话摘要自动化 ====================
+
+  /// 估算文本的 token 数量（中英文混合）
+  static int _estimateTokens(String text) {
+    int tokens = 0;
+    for (int i = 0; i < text.length; i++) {
+      final code = text.codeUnitAt(i);
+      if (code >= 0x4e00 && code <= 0x9fff) {
+        tokens += 2;
+      } else if (code < 128) {
+        tokens += 1;
+      } else {
+        tokens += 2;
+      }
+    }
+    return tokens;
+  }
+
+  /// 每次对话后调用，定期检查并生成对话摘要
+  ///
+  /// 每 5 轮对话检查一次。当历史消息超过 80K token 时，
+  /// 将较早的消息压缩成摘要存入 ai_conversation_summaries 表，
+  /// 保留最近的消息作为新鲜上下文。
+  static Future<void> checkAndSummarize() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final turns = (prefs.getInt('conversation_turns') ?? 0) + 1;
+      await prefs.setInt('conversation_turns', turns);
+
+      // 每 5 轮检查一次
+      if (turns % 5 != 0) return;
+
+      final db = await DatabaseHelper.database;
+      final cutoff = prefs.getString('summarized_up_to');
+
+      // 加载 cutoff 之后的所有消息
+      final rows = cutoff != null
+          ? await db.query('chat_history',
+              where: 'created_at > ?',
+              whereArgs: [cutoff],
+              orderBy: 'created_at ASC')
+          : await db.query('chat_history', orderBy: 'created_at ASC');
+
+      if (rows.isEmpty) return;
+
+      final messages = rows
+          .map((r) => {
+                'role': r['role'] as String,
+                'content': r['content'] as String,
+                'created_at': r['created_at'] as String,
+              })
+          .toList();
+
+      // 估算总 token
+      int totalTokens = 0;
+      for (final msg in messages) {
+        totalTokens += _estimateTokens(msg['content']!);
+      }
+
+      // 阈值 80K token，未达到则跳过
+      const summarizeThreshold = 80000;
+      if (totalTokens <= summarizeThreshold) return;
+
+      // 从最新消息往回算，保留 150K token 预算内的消息
+      const keepBudget = 150000;
+      int keptTokens = 0;
+      int splitIndex = messages.length;
+
+      for (int i = messages.length - 1; i >= 0; i--) {
+        final tokens = _estimateTokens(messages[i]['content']!);
+        if (keptTokens + tokens > keepBudget) break;
+        keptTokens += tokens;
+        splitIndex = i;
+      }
+
+      if (splitIndex >= messages.length || splitIndex < 4) return;
+
+      final oldMessages = messages.sublist(0, splitIndex);
+
+      // 限制摘要输入为 300K token，防止超出 flash 模型上下文
+      const maxSummarizeTokens = 300000;
+      int summarizeTokens = 0;
+      int endIdx = 0;
+      for (int i = 0; i < oldMessages.length; i++) {
+        final tokens = _estimateTokens(oldMessages[i]['content']!);
+        if (summarizeTokens + tokens > maxSummarizeTokens) break;
+        summarizeTokens += tokens;
+        endIdx = i + 1;
+      }
+
+      final batch = oldMessages.sublist(0, endIdx);
+      final cutoffTime = batch.last['created_at']!;
+
+      // 构建对话文本
+      final convText = batch
+          .map((m) =>
+              '${m['role'] == 'user' ? '用户' : 'AI'}：${m['content']}')
+          .join('\n');
+
+      final summary = await _summarizeText(convText);
+      if (summary != null && summary.isNotEmpty) {
+        await db.insert('ai_conversation_summaries', {
+          'id': DatabaseHelper.newId(),
+          'summary': summary,
+          'message_count': batch.length,
+          'date': DateTime.now()
+              .toIso8601String()
+              .split('T')
+              .first,
+          'topics': null,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+
+        await prefs.setString('summarized_up_to', cutoffTime);
+      }
+    } catch (_) {
+      // 摘要失败不影响主流程
+    }
+  }
+
+  /// 调用 flash 模型生成对话摘要
+  static Future<String?> _summarizeText(String conversation) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = prefs.getString('deepseek_api_key');
+      if (key == null || key.isEmpty) return null;
+
+      final dio = Dio();
+      final response = await dio.post(
+        'https://api.deepseek.com/v1/chat/completions',
+        options: Options(headers: {
+          'Authorization': 'Bearer $key',
+          'Content-Type': 'application/json',
+        }),
+        data: {
+          'model': 'deepseek-v4-pro',
+          'temperature': 0.3,
+          'max_tokens': 500,
+          'messages': [
+            {
+              'role': 'system',
+              'content':
+                  '你是一个对话摘要助手。将以下对话总结为简洁的摘要（200字以内），'
+                  '保留关键信息：人名、关系、城市、重要事件、用户偏好和情感表达。'
+                  '用要点形式输出，每个要点一行。',
+            },
+            {'role': 'user', 'content': conversation},
+          ],
+        },
+      );
+
+      return response.data['choices']?[0]?['message']?['content'] as String?;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ==================== 内部辅助 ====================
@@ -335,9 +497,46 @@ abstract final class AiMemoryService {
 - 利用下方提供的用户信息、关心的人、你了解的信息来个性化你的回复
 - 当提到你了解的信息时，要自然融入，不要生硬引用
 
+关系推测：
+- 根据用户设的提醒类型和聊天内容，推测关心的人和用户的关系
+- 比如设了晚安提醒的可能是伴侣或家人，设了天气提醒的可能是异地恋或远方的亲人
+- 当有合理推测时，找自然的机会问用户确认，比如"对了，Ta是你家人还是朋友呀"
+- 不要刻意追问，在聊天中自然提起就好
+
+工具使用（非常重要，必须严格遵守）：
+- 当用户在对话中提到想添加或关心一个新的人时，主动使用 create_partner 工具帮用户创建
+- 如果用户提到了城市，创建时一定要把城市一起传入
+- 当用户想修改某个关心的人的信息（城市、关系、名字、备注等），使用 update_partner 工具
+- 创建或修改完成后，用 get_partner_detail 验证一下是否真的成功
+- 当提出选择题（如关系类型、提醒类别）时，用 [选项:A|B|C] 提供快捷按钮，用户可直接点击
+- 每个选择题最多4个选项
+
+重要：操作验证规则（必须遵守）：
+- 每次执行工具后，必须根据工具返回的结果来判断是否成功，不要凭空声称"搞定了"或"设置好了"
+- 如果工具返回失败或错误信息，要如实告诉用户，并尝试解决
+- 设置完城市或提醒后，用 get_partner_detail 工具验证一下是否真的设置成功
+- 查天气前，先用 get_partner_detail 确认对方是否已设置城市，如果没设置先问用户城市
+- 绝对不要重复问用户已经告诉过你的信息（比如已经确认过的城市、关系类型等）
+- 如果用户说"我刚刚不是说了吗"，说明你重复提问了，要道歉并直接使用已有信息
+
 示例回复（用户问"帮我写句早安语"）：
 早安呀|||今天天气不错呢|||记得吃早餐哦
 
 示例回复（用户问"怎么关心对方"）：
-其实不用太复杂|||有时候一句在干嘛就很暖|||关键是让他感觉到你在想他''';
+其实不用太复杂|||有时候一句在干嘛就很暖|||关键是让他感觉到你在想他
+
+示例回复（用户说"我想添加我妈"）：
+好呀，阿姨叫什么名字呢|||我帮你添加一下
+
+示例回复（问关系类型）：
+好嘞|||Ta是你的什么人呀|||[选项:家人|朋友|伴侣|同事]
+
+示例回复（问提醒类型）：
+想给Ta设置什么提醒呢|||[选项:睡觉提醒|吃饭提醒|天气提醒]
+
+示例回复（操作失败时）：
+抱歉，刚才设置出了点问题|||我重新帮你试一下
+
+示例回复（天气查询前验证）：
+我先确认一下Ta的城市信息|||（调用 get_partner_detail 验证）|||好的，马上帮你查''';
 }

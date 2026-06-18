@@ -1,4 +1,4 @@
-/// TaWorld AI 关怀助手对话页面
+/// TaWorld 小念对话页面
 library;
 
 import 'package:flutter/material.dart';
@@ -148,7 +148,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
           children: [
             Icon(Icons.smart_toy_rounded, color: theme.colorScheme.primary),
             const SizedBox(width: TaSpacing.xs),
-            const Text('AI 关怀助手'),
+            const Text('小念'),
           ],
         ),
         centerTitle: true,
@@ -307,7 +307,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
                 const SizedBox(width: TaSpacing.xs),
                 Container(
                   decoration: BoxDecoration(
-                    gradient: TaGradients.primary,
+                    gradient: TaGradients.primary(Theme.of(context).brightness),
                     borderRadius: TaRadius.borderFull,
                   ),
                   child: IconButton(
@@ -334,7 +334,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
               width: 80,
               height: 80,
               decoration: BoxDecoration(
-                gradient: TaGradients.primary,
+                gradient: TaGradients.primary(Theme.of(context).brightness),
                 borderRadius: TaRadius.borderLg,
               ),
               child: const Icon(
@@ -345,7 +345,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
             ).animate().scale(duration: 500.ms, curve: TaAnimation.bounce),
             const SizedBox(height: TaSpacing.md),
             Text(
-              'AI 关怀助手',
+              '小念',
               style: theme.textTheme.headlineMedium,
             ).animate().fadeIn(delay: 300.ms),
             const SizedBox(height: TaSpacing.xs),

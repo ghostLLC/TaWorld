@@ -3,10 +3,13 @@
 /// 支持 GPS 定位（含权限引导）和城市选择器（省-市浏览 + 模糊搜索）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/design_tokens.dart';
@@ -29,11 +32,13 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
   String _selectedType = 'couple';
   bool _saving = false;
   Position? _position;
+  String? _address;
   bool _fetchingLocation = false;
   CitySelection? _selectedCity;
 
   static const _types = <_PartnerType>[
     _PartnerType('couple', '\u2764\uFE0F', '情侣', 'assets/images/type_couple.png'),
+    _PartnerType('partner', '\uD83D\uDC91', '伴侣', 'assets/images/type_couple.png'),
     _PartnerType('family', '\uD83C\uDFE0', '家人', 'assets/images/type_family.png'),
     _PartnerType('friend', '\uD83E\uDD1D', '朋友', 'assets/images/type_friend.png'),
   ];
@@ -76,29 +81,73 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
       return;
     }
 
-    // 3. 权限OK，获取位置
+    // 3. 权限OK，获取位置（直接用实时定位，不做缓存）
     setState(() => _fetchingLocation = true);
+    String? errorMsg;
     try {
+      // 使用 AndroidFusedLocationProvider，medium 精度更可靠
       final position = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.low),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 30),
+        ),
       );
+
       if (!mounted) return;
       setState(() => _position = position);
+
+      // 4. 反向地理编码：经纬度 → 地址
+      try {
+        final placemarks = await placemarkFromCoordinates(
+          position.latitude, position.longitude,
+        );
+        if (placemarks.isNotEmpty && mounted) {
+          final p = placemarks.first;
+          final addr = p.subLocality?.isNotEmpty == true
+              ? '${p.locality ?? ''} ${p.subLocality}'
+              : p.locality ?? p.administrativeArea ?? p.subAdministrativeArea ?? '';
+          setState(() => _address = addr.trim().isNotEmpty ? addr.trim() : null);
+
+          if (_selectedCity == null && p.locality != null && p.locality!.isNotEmpty) {
+            setState(() {
+              _selectedCity = CitySelection(
+                country: p.country ?? '中国',
+                province: p.administrativeArea ?? '',
+                city: p.locality!,
+              );
+            });
+          }
+        }
+      } catch (_) {
+        // 反向地理编码失败不影响定位结果
+      }
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '已获取位置: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}',
+            _address != null
+                ? '已获取位置: $_address'
+                : '已获取位置: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}',
           ),
         ),
       );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('获取位置失败，请手动选择城市')),
-      );
+    } on PermissionDeniedException {
+      errorMsg = '位置权限被拒绝';
+    } on LocationServiceDisabledException {
+      errorMsg = '位置服务未开启';
+    } on TimeoutException {
+      errorMsg = '获取位置超时（30秒），请检查GPS信号或手动选择城市';
+    } catch (e) {
+      errorMsg = '获取位置失败: $e';
     } finally {
       if (mounted) setState(() => _fetchingLocation = false);
+    }
+
+    if (errorMsg != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(errorMsg), duration: const Duration(seconds: 4)),
+      );
     }
   }
 
@@ -201,7 +250,7 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
     setState(() => _saving = true);
 
     try {
-      // 如果没有手动获取位置，尝试自动获取（静默）
+      // 如果没有手动获取位置，尝试自动获取（静默，带超时）
       Position? position = _position;
       if (position == null) {
         try {
@@ -212,11 +261,14 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
                 perm == LocationPermission.always) {
               position = await Geolocator.getCurrentPosition(
                 locationSettings: const LocationSettings(
-                    accuracy: LocationAccuracy.low),
+                    accuracy: LocationAccuracy.medium,
+                    timeLimit: Duration(seconds: 15)),
               );
             }
           }
-        } catch (_) {}
+        } catch (_) {
+          // 位置获取失败/超时，不影响保存
+        }
       }
 
       await PartnerService.add(
@@ -320,8 +372,8 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
             // ---- 备注 ----
             TaTextField(
               controller: _noteController,
-              label: '备注（可选）',
-              hint: '关于Ta的一些备注...',
+              label: '一句话描述（可选）',
+              hint: '用一句话描述Ta，比如"我最好的朋友"',
               prefixIcon: Icons.notes_rounded,
               maxLines: 3,
             ).animate().fadeIn(
@@ -343,11 +395,25 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         )
-                      : Text(
-                          '已获取: ${_position!.latitude.toStringAsFixed(4)}, ${_position!.longitude.toStringAsFixed(4)}',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.primary,
-                          ),
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_address != null)
+                              Text(
+                                '已获取: $_address',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              )
+                            else
+                              Text(
+                                '已获取: ${_position!.latitude.toStringAsFixed(4)}, ${_position!.longitude.toStringAsFixed(4)}',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                          ],
                         ),
                 ),
                 TextButton.icon(

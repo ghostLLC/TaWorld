@@ -36,7 +36,7 @@ class CacheStats {
 
 abstract final class AiService {
   static const _defaultBaseUrl = 'https://api.deepseek.com';
-  static const _defaultModel = 'deepseek-v4-flash';
+  static const _defaultModel = 'deepseek-v4-pro';
   static const _proModel = 'deepseek-v4-pro';
 
   // ==================== Prompt 模板 ====================
@@ -143,7 +143,144 @@ abstract final class AiService {
         },
       },
     },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'create_partner',
+        'description': '帮用户添加一个新的关心的人。如果用户提到了城市，一定要同时传入city参数。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'nickname': {'type': 'string', 'description': '关心的人的名字或昵称'},
+            'relationship': {
+              'type': 'string',
+              'enum': ['couple', 'partner', 'family', 'friend'],
+              'description': '关系类型：couple情侣、partner伴侣、family家人、friend朋友',
+            },
+            'city': {'type': 'string', 'description': '对方所在城市（如用户提到则填写，用简洁城市名如"上海"不要加"市"）'},
+            'note': {'type': 'string', 'description': '一句话描述（可选）'},
+          },
+          'required': ['nickname', 'relationship'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'get_partner_detail',
+        'description': '查看某个关心的人的详细信息，包括城市、提醒配置等。在声称操作成功之前，用这个工具验证数据。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'partner_name': {'type': 'string', 'description': '关心的人的名字'},
+          },
+          'required': ['partner_name'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'update_partner',
+        'description': '修改某个关心的人的信息（城市、关系类型、备注等）。用户说"把XX的城市改成北京"或"XX不是朋友是家人"时使用。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'partner_name': {'type': 'string', 'description': '要修改的人的当前名字'},
+            'new_nickname': {'type': 'string', 'description': '新的名字/昵称（可选，不改则不传）'},
+            'relationship': {
+              'type': 'string',
+              'enum': ['couple', 'partner', 'family', 'friend'],
+              'description': '新的关系类型（可选，不改则不传）',
+            },
+            'city': {'type': 'string', 'description': '新的城市（可选，用简洁城市名如"上海"不要加"市"，不改则不传）'},
+            'note': {'type': 'string', 'description': '新的一句话描述（可选，不改则不传）'},
+          },
+          'required': ['partner_name'],
+        },
+      },
+    },
   ];
+
+  // ==================== Token 估算与动态上下文 ====================
+
+  /// 估算文本的 token 数量（中英文混合场景）
+  /// 中文每字约 2 token，英文每词约 1.3 token
+  static int _estimateTokens(String text) {
+    int tokens = 0;
+    for (int i = 0; i < text.length; i++) {
+      final code = text.codeUnitAt(i);
+      if (code >= 0x4e00 && code <= 0x9fff) {
+        tokens += 2; // CJK 字符
+      } else if (code < 128) {
+        tokens += 1; // ASCII
+      } else {
+        tokens += 2; // 其他 unicode
+      }
+    }
+    return tokens;
+  }
+
+  /// 动态加载历史消息：在 token 预算内尽可能多加载
+  ///
+  /// [tokenBudget] 历史消息的 token 上限（默认 200K，DeepSeek-v4 支持 1M 上下文）
+  /// [maxMessages] 最大消息条数（默认 2000）
+  static Future<List<Map<String, String>>> _loadDynamicHistory({
+    int tokenBudget = 200000,
+    int maxMessages = 2000,
+  }) async {
+    final db = await DatabaseHelper.database;
+
+    // 如果已有对话摘要，只加载摘要之后的消息（旧消息已被摘要覆盖）
+    final prefs = await SharedPreferences.getInstance();
+    final cutoff = prefs.getString('summarized_up_to');
+
+    final historyRows = cutoff != null
+        ? await db.query(
+            'chat_history',
+            where: 'created_at > ?',
+            whereArgs: [cutoff],
+            orderBy: 'created_at DESC',
+            limit: maxMessages,
+          )
+        : await db.query(
+            'chat_history',
+            orderBy: 'created_at DESC',
+            limit: maxMessages,
+          );
+
+    final messages = <Map<String, String>>[];
+    int usedTokens = 0;
+
+    for (final row in historyRows) {
+      final content = row['content'] as String;
+      final msgTokens = _estimateTokens(content);
+      if (usedTokens + msgTokens > tokenBudget) break;
+      usedTokens += msgTokens;
+      messages.add({
+        'role': row['role'] as String,
+        'content': content,
+      });
+    }
+
+    return messages.reversed.toList(); // 恢复时间正序
+  }
+
+  /// 构建完整消息列表（system prompt + 动态历史 + 当前消息）
+  static Future<List<Map<String, String>>> _buildMessages(
+    String userMessage, {
+    int historyTokenBudget = 200000,
+  }) async {
+    final dynamicPrompt = await AiMemoryService.buildSystemPrompt(userMessage: userMessage);
+    final history = await _loadDynamicHistory(tokenBudget: historyTokenBudget);
+
+    final messages = <Map<String, String>>[
+      {'role': 'system', 'content': dynamicPrompt},
+      ...history,
+      {'role': 'user', 'content': userMessage},
+    ];
+    return messages;
+  }
 
   // ==================== API Key 管理 ====================
 
@@ -229,7 +366,7 @@ abstract final class AiService {
         data: {
           'model': _defaultModel,
           'temperature': 0.8,
-          'max_tokens': 500,
+          'max_tokens': 4000,
           'messages': [
             {'role': 'user', 'content': prompt},
           ],
@@ -255,31 +392,11 @@ abstract final class AiService {
   static Future<String> chat(String userMessage) async {
     final key = await getApiKey();
     if (key == null || key.isEmpty) {
-      return '我是Ta世界的AI关怀助手\n目前AI服务尚未配置，请先在设置中填入 DeepSeek API Key。';
+      return '我是小念，你的专属关怀搭子\n目前AI服务尚未配置，请先在设置中填入 DeepSeek API Key。';
     }
 
-    // 1. 读取最近 10 条对话历史
+    // 1. 保存用户消息到 DB
     final db = await DatabaseHelper.database;
-    final historyRows = await db.query(
-      'chat_history',
-      orderBy: 'created_at DESC',
-      limit: 10,
-    );
-
-    // 2. 构建消息列表（动态 system prompt + history + 当前消息）
-    final dynamicPrompt = await AiMemoryService.buildSystemPrompt(userMessage: userMessage);
-    final messages = <Map<String, String>>[
-      {'role': 'system', 'content': dynamicPrompt},
-    ];
-    for (final row in historyRows.reversed) {
-      messages.add({
-        'role': row['role'] as String,
-        'content': row['content'] as String,
-      });
-    }
-    messages.add({'role': 'user', 'content': userMessage});
-
-    // 3. 保存用户消息到 DB
     await db.insert('chat_history', {
       'id': DatabaseHelper.newId(),
       'role': 'user',
@@ -287,8 +404,11 @@ abstract final class AiService {
       'created_at': DateTime.now().toIso8601String(),
     });
 
+    // 2. 构建消息列表（动态 system prompt + 动态历史 + 当前消息）
+    final messages = await _buildMessages(userMessage);
+
     try {
-      // 4. 调用 API
+      // 3. 调用 API
       final dio = Dio();
       final response = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
@@ -299,7 +419,7 @@ abstract final class AiService {
         data: {
           'model': _defaultModel,
           'temperature': 0.7,
-          'max_tokens': 500,
+          'max_tokens': 4000,
           'messages': messages,
         },
       );
@@ -316,6 +436,9 @@ abstract final class AiService {
         'content': reply,
         'created_at': DateTime.now().toIso8601String(),
       });
+
+      // 异步检查是否需要生成对话摘要
+      AiMemoryService.checkAndSummarize();
 
       return reply;
     } catch (_) {
@@ -337,28 +460,8 @@ abstract final class AiService {
       return 'AI 服务未配置';
     }
 
-    // 1. 读取最近 10 条历史
+    // 1. 保存用户消息
     final db = await DatabaseHelper.database;
-    final historyRows = await db.query(
-      'chat_history',
-      orderBy: 'created_at DESC',
-      limit: 10,
-    );
-
-    // 2. 构建消息列表（动态 prompt）
-    final dynamicPrompt = await AiMemoryService.buildSystemPrompt(userMessage: userMessage);
-    final messages = <Map<String, String>>[
-      {'role': 'system', 'content': dynamicPrompt},
-    ];
-    for (final row in historyRows.reversed) {
-      messages.add({
-        'role': row['role'] as String,
-        'content': row['content'] as String,
-      });
-    }
-    messages.add({'role': 'user', 'content': userMessage});
-
-    // 3. 保存用户消息
     await db.insert('chat_history', {
       'id': DatabaseHelper.newId(),
       'role': 'user',
@@ -366,8 +469,11 @@ abstract final class AiService {
       'created_at': DateTime.now().toIso8601String(),
     });
 
+    // 2. 构建消息列表（动态 prompt + 动态历史）
+    final messages = await _buildMessages(userMessage);
+
     try {
-      // 4. 流式调用 API
+      // 3. 流式调用 API
       final dio = Dio();
       final response = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
@@ -381,7 +487,7 @@ abstract final class AiService {
         data: {
           'model': _defaultModel,
           'temperature': 0.7,
-          'max_tokens': 500,
+          'max_tokens': 4000,
           'stream': true,
           'stream_options': {'include_usage': true},
           'messages': messages,
@@ -423,6 +529,9 @@ abstract final class AiService {
         'created_at': DateTime.now().toIso8601String(),
       });
 
+      // 异步检查是否需要生成对话摘要
+      AiMemoryService.checkAndSummarize();
+
       return reply;
     } catch (_) {
       onToken('抱歉，网络好像出了点问题，请检查网络连接');
@@ -450,28 +559,8 @@ abstract final class AiService {
       return 'AI 服务未配置';
     }
 
-    // 1. 读取最近 10 条历史
+    // 1. 保存用户消息
     final db = await DatabaseHelper.database;
-    final historyRows = await db.query(
-      'chat_history',
-      orderBy: 'created_at DESC',
-      limit: 10,
-    );
-
-    // 2. 构建消息列表（动态 prompt + 历史）
-    final dynamicPrompt = await AiMemoryService.buildSystemPrompt(userMessage: userMessage);
-    final messages = <Map<String, dynamic>>[
-      {'role': 'system', 'content': dynamicPrompt},
-    ];
-    for (final row in historyRows.reversed) {
-      messages.add({
-        'role': row['role'] as String,
-        'content': row['content'] as String,
-      });
-    }
-    messages.add({'role': 'user', 'content': userMessage});
-
-    // 3. 保存用户消息
     await db.insert('chat_history', {
       'id': DatabaseHelper.newId(),
       'role': 'user',
@@ -479,10 +568,14 @@ abstract final class AiService {
       'created_at': DateTime.now().toIso8601String(),
     });
 
+    // 2. 构建消息列表（动态 prompt + 动态历史）
+    final baseMessages = await _buildMessages(userMessage);
+    final messages = baseMessages.map((m) => Map<String, dynamic>.from(m)).toList();
+
     final dio = Dio();
 
     try {
-      // 4. 第一轮调用（非流式），检查工具调用
+      // 3. 第一轮调用（非流式），检查工具调用
       final firstResponse = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
         options: Options(headers: {
@@ -492,7 +585,7 @@ abstract final class AiService {
         data: {
           'model': _defaultModel,
           'temperature': 0.7,
-          'max_tokens': 500,
+          'max_tokens': 4000,
           'stream': false,
           'messages': messages,
           'tools': _toolDefinitions,
@@ -551,7 +644,7 @@ abstract final class AiService {
             data: {
               'model': _defaultModel,
               'temperature': 0.7,
-              'max_tokens': 500,
+              'max_tokens': 4000,
               'stream': false,
               'messages': messages,
               'tools': _toolDefinitions,
@@ -582,6 +675,7 @@ abstract final class AiService {
               'content': finalContent,
               'created_at': DateTime.now().toIso8601String(),
             });
+            AiMemoryService.checkAndSummarize();
             return finalContent;
           }
           break;
@@ -599,6 +693,7 @@ abstract final class AiService {
           'content': directContent,
           'created_at': DateTime.now().toIso8601String(),
         });
+        AiMemoryService.checkAndSummarize();
         return directContent;
       }
 
@@ -615,7 +710,7 @@ abstract final class AiService {
         data: {
           'model': _defaultModel,
           'temperature': 0.7,
-          'max_tokens': 500,
+          'max_tokens': 4000,
           'stream': true,
           'messages': messages,
         },
@@ -650,6 +745,7 @@ abstract final class AiService {
           'created_at': DateTime.now().toIso8601String(),
         });
       }
+      AiMemoryService.checkAndSummarize();
       return reply;
     } catch (_) {
       onToken('抱歉，网络好像出了点问题，请检查网络连接');
@@ -715,6 +811,10 @@ abstract final class AiService {
   static Future<void> clearChatHistory() async {
     final db = await DatabaseHelper.database;
     await db.delete('chat_history');
+    // 重置摘要轮次计数
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('conversation_turns', 0);
+    await prefs.remove('summarized_up_to');
   }
 
   /// 清空所有记忆数据（Wiki 事实 + 摘要 + chunks）
@@ -723,6 +823,9 @@ abstract final class AiService {
     await db.delete('ai_wiki_facts');
     await db.delete('ai_conversation_summaries');
     await db.delete('conversation_chunks');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('conversation_turns', 0);
+    await prefs.remove('summarized_up_to');
   }
 
   /// 降级方案

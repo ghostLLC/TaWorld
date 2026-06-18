@@ -46,13 +46,13 @@ abstract final class AiProactiveService {
       final elapsed = now.difference(
         DateTime.fromMillisecondsSinceEpoch(lastProactive),
       );
-      if (elapsed.inHours < 4) return false;
+      if (elapsed.inHours < 3) return false;
     }
 
     // 每日上限检查（最多 2 条/天）
     final todayKey = 'proactive_count_${now.year}${now.month}${now.day}';
     final todayCount = prefs.getInt(todayKey) ?? 0;
-    if (todayCount >= 2) return false;
+    if (todayCount >= 3) return false;
 
     // 夜间静默（22:00~08:00）
     if (now.hour >= 22 || now.hour < 8) return false;
@@ -116,17 +116,22 @@ abstract final class AiProactiveService {
 
     final prompt = '''你正在评估是否需要主动给用户发一条关怀消息。
 
-当前时间: ${now.hour}:${now.hour.toString().padLeft(2, '0')} ($timeContext)
+当前时间: ${now.hour}:${now.minute.toString().padLeft(2, '0')} ($timeContext)
 用户关心的人:
 ${contexts.join('\n')}
 
-请评估是否需要主动提醒用户关心某个人。
+请评估是否需要主动提醒用户关心某个人。你可以考虑：
+1. 天气变化（降温、下雨、极端天气等）
+2. 适合的时间问候（早上问好、中午提醒吃饭、晚上提醒休息）
+3. 长时间未联系的人（关心是否疏远了）
+4. 根据提醒配置推测关系，给出贴心建议（比如有晚安提醒的可能是亲密的人）
+5. 节日或特殊日子的问候
 
 规则:
-1. 只有在有明确理由时才建议主动联系（天气变化、合适的时间问候等）
-2. 不要为了发消息而发消息
-3. 消息要简短自然，像朋友发微信
-4. 不使用emoji和markdown
+1. 有合理理由就建议联系，不必过于保守
+2. 消息要简短自然，像朋友发微信
+3. 不使用emoji和markdown
+4. 可以结合天气和时间给出个性化的关怀建议
 
 返回JSON格式（只返回JSON，不要其他文字）:
 {"should_notify": true/false, "partner_id": "xxx或null", "category": "weather/greeting/care", "message": "消息内容", "confidence": 0.0-1.0}
@@ -160,7 +165,7 @@ ${contexts.join('\n')}
       if (result['should_notify'] != true) return false;
 
       final confidence = (result['confidence'] as num?)?.toDouble() ?? 0.0;
-      if (confidence < 0.7) return false;
+      if (confidence < 0.6) return false;
 
       final message = result['message'] as String? ?? '';
       if (message.isEmpty) return false;

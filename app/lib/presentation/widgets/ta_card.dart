@@ -66,7 +66,7 @@ class TaCard extends StatelessWidget {
     final cardColor = color ?? theme.cardTheme.color ?? theme.colorScheme.surface;
 
     final Gradient? effectiveGradient =
-        _hasGradient ? (_gradient ?? TaGradients.warm) : null;
+        _hasGradient ? (_gradient ?? TaGradients.warm(theme.brightness)) : null;
 
     Widget card = Container(
       margin: margin,

@@ -95,7 +95,7 @@ class TaAchievementBadge extends StatelessWidget {
                       width: 20,
                       height: 20,
                       decoration: BoxDecoration(
-                        gradient: TaGradients.gold,
+                        gradient: TaGradients.gold(Theme.of(context).brightness),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(

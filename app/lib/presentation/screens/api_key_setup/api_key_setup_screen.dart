@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart';
 
 import '../../../app/design_tokens.dart';
@@ -18,7 +19,6 @@ class ApiKeySetupScreen extends StatefulWidget {
 
 class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   final _aiKeyController = TextEditingController();
-  bool _aiKeyVisible = false;
   bool _aiConfigured = false;
   String? _aiTestResult;
   bool _aiTesting = false;
@@ -57,8 +57,12 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
     setState(() => _aiConfigured = true);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('DeepSeek API Key 已保存')),
+      const SnackBar(content: Text('DeepSeek API Key 已保存，即将返回...')),
     );
+    // 2 秒后自动返回上一页
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+    context.pop(true);
   }
 
   Future<void> _testAiKey() async {
@@ -181,17 +185,7 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                       controller: _aiKeyController,
                       label: 'API Key',
                       hint: 'sk-...',
-                      obscureText: !_aiKeyVisible,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _aiKeyVisible
-                              ? Icons.visibility_off_rounded
-                              : Icons.visibility_rounded,
-                          size: 20,
-                        ),
-                        onPressed: () =>
-                            setState(() => _aiKeyVisible = !_aiKeyVisible),
-                      ),
+                      prefixIcon: Icons.key_rounded,
                     ),
                     const SizedBox(height: TaSpacing.sm),
                     Row(

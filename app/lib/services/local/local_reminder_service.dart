@@ -322,8 +322,8 @@ abstract final class LocalReminderService {
       );
       if (partnerRows.isEmpty) return _generateMessage(config);
 
-      final lat = partnerRows.first['latitude'] as double?;
-      final lng = partnerRows.first['longitude'] as double?;
+      final lat = (partnerRows.first['latitude'] as num?)?.toDouble();
+      final lng = (partnerRows.first['longitude'] as num?)?.toDouble();
       final city = partnerRows.first['city'] as String?;
 
       WeatherResult? weather;

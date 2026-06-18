@@ -44,6 +44,7 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
 
   static const _types = <_PartnerType>[
     _PartnerType('couple', '\u2764\uFE0F', '情侣', 'assets/images/type_couple.png'),
+    _PartnerType('partner', '\uD83D\uDC91', '伴侣', 'assets/images/type_couple.png'),
     _PartnerType('family', '\uD83C\uDFE0', '家人', 'assets/images/type_family.png'),
     _PartnerType('friend', '\uD83E\uDD1D', '朋友', 'assets/images/type_friend.png'),
   ];
@@ -105,6 +106,17 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
         );
       } else if (partner.city != null && partner.city!.isNotEmpty) {
         weather = await WeatherService.getCurrentWeatherByCity(partner.city!);
+      }
+
+      // 天气查询失败时弹提示（不阻塞主流程）
+      if (weather == null && WeatherService.lastError != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('天气：${WeatherService.lastError}'),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
 
       final hint = await CareSuggestionService.generate(
@@ -441,7 +453,7 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
                         ),
                         const SizedBox(width: TaSpacing.xs),
                         Text(
-                          '备注',
+                          '一句话描述',
                           style: theme.textTheme.labelLarge?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                             fontWeight: FontWeight.w600,
@@ -487,8 +499,8 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
           ] else ...[
             TaTextField(
               controller: _noteController,
-              label: '备注（可选）',
-              hint: '关于Ta的一些备注...',
+              label: '一句话描述（可选）',
+              hint: '用一句话描述Ta，比如"我最好的朋友"',
               prefixIcon: Icons.notes_rounded,
               maxLines: 3,
             ).animate().fadeIn(

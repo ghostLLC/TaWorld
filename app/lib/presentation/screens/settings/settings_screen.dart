@@ -1,4 +1,4 @@
-/// TaWorld 设置页面（单机版）
+/// TaWorld 设置页面（单机版）— 中心辐射式两级导航
 library;
 
 import 'dart:io';
@@ -21,164 +21,34 @@ import '../../../services/ai_proactive_service.dart';
 import '../../../services/ai_memory_service.dart';
 import '../../../services/ai_memory_dreamer.dart';
 import '../../../services/ai_service.dart';
+import '../../../services/data_backup_service.dart';
 import '../../../services/local/local_user_service.dart';
 
-/// 设置页面
-class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+// ============================================================
+// 设置子页面路由
+// ============================================================
 
-  @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+/// 设置子页面路由常量
+abstract final class SettingsRoutes {
+  static const notifications = '/settings/notifications';
+  static const appearance = '/settings/appearance';
+  static const aiData = '/settings/ai-data';
+  static const account = '/settings/account';
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
-  bool _pushEnabled = true;
-  ThemeMode _themeMode = ThemeMode.system;
-  LocalUser? _user;
-  bool _notificationsEnabled = true;
-  bool _exactAlarmsAllowed = true;
-  bool _aiProactiveEnabled = true;
-  MemoryStats? _memoryStats;
-  CacheStats? _cacheStats;
-  bool _dreaming = false;
+// ============================================================
+// 主设置页面（Hub）
+// ============================================================
 
-  @override
-  void initState() {
-    super.initState();
-    _themeMode = ThemeService.instance.mode;
-    _pushEnabled = ThemeService.instance.pushEnabled;
-    ThemeService.instance.addListener(_onThemeChanged);
-    _loadUser();
-    _checkPermissions();
-    _loadAiProactiveSetting();
-    _loadMemoryStats();
-  }
+/// 设置页面 — 中心辐射入口
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
 
-  Future<void> _loadAiProactiveSetting() async {
-    final enabled = await AiProactiveService.isEnabled();
-    if (mounted) setState(() => _aiProactiveEnabled = enabled);
-  }
-
-  Future<void> _loadMemoryStats() async {
-    final stats = await AiMemoryDreamer.getStats();
-    final cache = await AiService.getCacheStats();
-    if (mounted) {
-      setState(() {
-        _memoryStats = stats;
-        _cacheStats = cache;
-      });
-    }
-  }
-
-  Future<void> _runDreamNow() async {
-    if (_dreaming) return;
-    setState(() => _dreaming = true);
-    try {
-      await AiMemoryDreamer.dream();
-      await _loadMemoryStats();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('记忆整合完成')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('整合失败: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _dreaming = false);
-    }
-  }
-
-  Future<void> _clearAiMemory() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
-        title: const Text('清除 AI 记忆'),
-        content: const Text('将清除 AI 记住的所有信息（事实、对话摘要、历史片段），但不会删除对话记录本身。确定吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('确认清除'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      await AiMemoryService.clearAllMemory();
-      await AiService.resetCacheStats();
-      await _loadMemoryStats();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('AI 记忆已清除')),
-        );
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    ThemeService.instance.removeListener(_onThemeChanged);
-    super.dispose();
-  }
-
-  void _onThemeChanged() {
-    if (!mounted) return;
-    setState(() {
-      _themeMode = ThemeService.instance.mode;
-      _pushEnabled = ThemeService.instance.pushEnabled;
-    });
-  }
-
-  Future<void> _loadUser() async {
-    final user = await LocalUserService.getUser();
-    if (!mounted) return;
-    setState(() => _user = user);
-  }
-
-  Future<void> _checkPermissions() async {
-    final (enabled, canSchedule) = await NotificationService.checkPermission();
-    if (!mounted) return;
-    setState(() {
-      _notificationsEnabled = enabled;
-      _exactAlarmsAllowed = canSchedule;
-    });
-  }
-
-  Future<void> _pickAvatar() async {
-    final picker = ImagePicker();
-    final image = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 512,
-      maxHeight: 512,
-      imageQuality: 85,
-    );
-    if (image == null) return;
-
-    // 复制到 App 私有目录
-    final appDir = await getApplicationDocumentsDirectory();
-    final avatarDir = Directory('${appDir.path}/avatars');
-    if (!await avatarDir.exists()) {
-      await avatarDir.create(recursive: true);
-    }
-    final ext = p.extension(image.path);
-    final destPath = '${avatarDir.path}/user_avatar$ext';
-    await File(image.path).copy(destPath);
-
-    await LocalUserService.updateAvatar(destPath);
-    _loadUser();
-  }
+  /// 子页面构建器，供路由配置引用
+  static Widget buildNotificationsPage() => const _NotificationsSettings();
+  static Widget buildAppearancePage() => const _AppearanceSettings();
+  static Widget buildAiDataPage() => const _AiDataSettings();
+  static Widget buildAccountPage() => const _AccountSettings();
 
   @override
   Widget build(BuildContext context) {
@@ -193,53 +63,160 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: TaSpacing.page,
         children: [
           const SizedBox(height: TaSpacing.sm),
-
-          // 头像区域
-          Center(
-            child: GestureDetector(
-              onTap: _pickAvatar,
-              child: Stack(
-                children: [
-                  TaAvatar(
-                    name: _user?.nickname ?? '我',
-                    imageUrl: _user?.avatarPath,
-                    size: TaSizes.avatarXl,
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.camera_alt_rounded,
-                        color: theme.colorScheme.onPrimary,
-                        size: 18,
-                      ),
-                    ),
-                  ),
-                ],
+          TaCard(
+            padding: EdgeInsets.zero,
+            onTap: () => context.push(SettingsRoutes.notifications),
+            child: ListTile(
+              leading: Icon(Icons.notifications_rounded,
+                  color: theme.colorScheme.primary),
+              title: const Text('通知与关怀'),
+              subtitle: Text(
+                '推送通知、AI 主动关怀',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
+              trailing: Icon(Icons.chevron_right_rounded,
+                  color: theme.colorScheme.onSurfaceVariant),
             ),
           ),
-          const SizedBox(height: TaSpacing.xs),
-          Center(
-            child: Text(
-              '点击更换头像',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(height: TaSpacing.sm),
+          TaCard(
+            padding: EdgeInsets.zero,
+            onTap: () => context.push(SettingsRoutes.appearance),
+            child: ListTile(
+              leading: Icon(Icons.palette_rounded,
+                  color: theme.colorScheme.primary),
+              title: const Text('外观'),
+              subtitle: Text(
+                '主题模式、配色方案',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
+              trailing: Icon(Icons.chevron_right_rounded,
+                  color: theme.colorScheme.onSurfaceVariant),
             ),
           ),
+          const SizedBox(height: TaSpacing.sm),
+          TaCard(
+            padding: EdgeInsets.zero,
+            onTap: () => context.push(SettingsRoutes.aiData),
+            child: ListTile(
+              leading: Icon(Icons.memory_rounded,
+                  color: theme.colorScheme.primary),
+              title: const Text('AI 与数据'),
+              subtitle: Text(
+                'API Key、AI 记忆、数据备份',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: Icon(Icons.chevron_right_rounded,
+                  color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          const SizedBox(height: TaSpacing.sm),
+          TaCard(
+            padding: EdgeInsets.zero,
+            onTap: () => context.push(SettingsRoutes.account),
+            child: ListTile(
+              leading: Icon(Icons.person_rounded,
+                  color: theme.colorScheme.primary),
+              title: const Text('账户'),
+              subtitle: Text(
+                '头像、昵称、版本、法律条款',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: Icon(Icons.chevron_right_rounded,
+                  color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          const SizedBox(height: TaSpacing.xxl),
+        ],
+      ),
+    );
+  }
+}
 
-          const SizedBox(height: TaSpacing.lg),
+// ============================================================
+// 通知与关怀 子页面
+// ============================================================
 
-          // 通知设置
-          _SectionTitle(title: '通知'),
-          const SizedBox(height: TaSpacing.xs),
+class _NotificationsSettings extends StatefulWidget {
+  const _NotificationsSettings();
+
+  @override
+  State<_NotificationsSettings> createState() =>
+      _NotificationsSettingsState();
+}
+
+class _NotificationsSettingsState extends State<_NotificationsSettings> {
+  bool _pushEnabled = true;
+  bool _notificationsEnabled = true;
+  bool _exactAlarmsAllowed = true;
+  bool _aiProactiveEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _pushEnabled = ThemeService.instance.pushEnabled;
+    ThemeService.instance.addListener(_onThemeChanged);
+    _checkPermissions();
+    _loadAiProactiveSetting();
+  }
+
+  @override
+  void dispose() {
+    ThemeService.instance.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() {
+    if (!mounted) return;
+    setState(() {
+      _pushEnabled = ThemeService.instance.pushEnabled;
+    });
+  }
+
+  Future<void> _checkPermissions() async {
+    final (enabled, canSchedule) =
+        await NotificationService.checkPermission();
+    if (!mounted) return;
+    setState(() {
+      _notificationsEnabled = enabled;
+      _exactAlarmsAllowed = canSchedule;
+    });
+  }
+
+  Future<void> _loadAiProactiveSetting() async {
+    final enabled = await AiProactiveService.isEnabled();
+    if (mounted) setState(() => _aiProactiveEnabled = enabled);
+  }
+
+  Future<void> _onPushChanged(bool v) async {
+    if (v) {
+      final granted = await NotificationService.requestPermission();
+      if (!granted) return;
+    }
+    await ThemeService.instance.setPushEnabled(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('通知与关怀'),
+        centerTitle: true,
+      ),
+      body: ListView(
+        padding: TaSpacing.page,
+        children: [
+          const SizedBox(height: TaSpacing.sm),
           TaCard(
             padding: EdgeInsets.zero,
             child: Column(
@@ -257,7 +234,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: _onPushChanged,
                 ),
                 if (!_notificationsEnabled || !_exactAlarmsAllowed) ...[
-                  Divider(height: 1, color: theme.colorScheme.error.withValues(alpha: 0.3)),
+                  Divider(
+                      height: 1,
+                      color: theme.colorScheme.error.withValues(alpha: 0.3)),
                   ListTile(
                     leading: Icon(Icons.warning_amber_rounded,
                         color: theme.colorScheme.error, size: 22),
@@ -265,7 +244,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       !_notificationsEnabled
                           ? '通知权限未开启'
                           : '精确定时权限未开启',
-                      style: TextStyle(color: theme.colorScheme.error),
+                      style:
+                          TextStyle(color: theme.colorScheme.error),
                     ),
                     subtitle: Text(
                       !_notificationsEnabled
@@ -288,7 +268,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
-                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.3)),
                 SwitchListTile(
                   title: const Text('AI 主动关怀'),
                   subtitle: Text(
@@ -301,18 +284,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   activeTrackColor: theme.colorScheme.primary,
                   onChanged: (v) async {
                     await AiProactiveService.setEnabled(v);
-                    if (mounted) setState(() => _aiProactiveEnabled = v);
+                    if (mounted) {
+                      setState(() => _aiProactiveEnabled = v);
+                    }
                   },
                 ),
               ],
             ),
           ),
+          const SizedBox(height: TaSpacing.xxl),
+        ],
+      ),
+    );
+  }
+}
 
-          const SizedBox(height: TaSpacing.lg),
+// ============================================================
+// 外观 子页面
+// ============================================================
 
-          // 外观设置
-          _SectionTitle(title: '外观'),
-          const SizedBox(height: TaSpacing.xs),
+class _AppearanceSettings extends StatefulWidget {
+  const _AppearanceSettings();
+
+  @override
+  State<_AppearanceSettings> createState() => _AppearanceSettingsState();
+}
+
+class _AppearanceSettingsState extends State<_AppearanceSettings> {
+  ThemeMode _themeMode = ThemeMode.system;
+
+  @override
+  void initState() {
+    super.initState();
+    _themeMode = ThemeService.instance.mode;
+    ThemeService.instance.addListener(_onThemeChanged);
+  }
+
+  @override
+  void dispose() {
+    ThemeService.instance.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() {
+    if (!mounted) return;
+    setState(() {
+      _themeMode = ThemeService.instance.mode;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('外观'),
+        centerTitle: true,
+      ),
+      body: ListView(
+        padding: TaSpacing.page,
+        children: [
+          const SizedBox(height: TaSpacing.sm),
           TaCard(
             padding: const EdgeInsets.all(TaSpacing.sm),
             child: Column(
@@ -393,11 +426,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: TaSpacing.xs),
                 Text(
                   kTaPalettes
-                      .where(
-                          (p) => p.id == ThemeService.instance.paletteId)
-                      .map((p) => p.label)
-                      .firstOrNull ??
-                  '',
+                          .where((p) =>
+                              p.id == ThemeService.instance.paletteId)
+                          .map((p) => p.label)
+                          .firstOrNull ??
+                      '',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -405,8 +438,227 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
+          const SizedBox(height: TaSpacing.xxl),
+        ],
+      ),
+    );
+  }
+}
 
-          const SizedBox(height: TaSpacing.lg),
+// ============================================================
+// AI 与数据 子页面
+// ============================================================
+
+class _AiDataSettings extends StatefulWidget {
+  const _AiDataSettings();
+
+  @override
+  State<_AiDataSettings> createState() => _AiDataSettingsState();
+}
+
+class _AiDataSettingsState extends State<_AiDataSettings> {
+  MemoryStats? _memoryStats;
+  CacheStats? _cacheStats;
+  bool _dreaming = false;
+  DateTime? _lastBackupTime;
+  bool _exporting = false;
+  bool _importing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMemoryStats();
+    _loadLastBackupTime();
+  }
+
+  Future<void> _loadLastBackupTime() async {
+    final time = await DataBackupService.getLastBackupTime();
+    if (mounted) setState(() => _lastBackupTime = time);
+  }
+
+  Future<void> _loadMemoryStats() async {
+    final stats = await AiMemoryDreamer.getStats();
+    final cache = await AiService.getCacheStats();
+    if (mounted) {
+      setState(() {
+        _memoryStats = stats;
+        _cacheStats = cache;
+      });
+    }
+  }
+
+  Future<void> _runDreamNow() async {
+    if (_dreaming) return;
+    setState(() => _dreaming = true);
+    try {
+      await AiMemoryDreamer.dream();
+      await _loadMemoryStats();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('记忆整合完成')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('整合失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _dreaming = false);
+    }
+  }
+
+  Future<void> _clearAiMemory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        title: const Text('清除 AI 记忆'),
+        content: const Text(
+            '将清除 AI 记住的所有信息（事实、对话摘要、历史片段），但不会删除对话记录本身。确定吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('确认清除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await AiMemoryService.clearAllMemory();
+      await AiService.resetCacheStats();
+      await _loadMemoryStats();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI 记忆已清除')),
+        );
+      }
+    }
+  }
+
+  /// 导出备份文件
+  Future<void> _exportBackup() async {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    try {
+      await DataBackupService.exportAndShare();
+      await _loadLastBackupTime();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('备份已保存，可分享到微信文件传输助手等渠道')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  /// 导入备份文件
+  Future<void> _importBackup() async {
+    if (_importing) return;
+    try {
+      // 1. 让用户选择文件
+      final filePath = await DataBackupService.pickBackupFile();
+      if (filePath == null) return; // 用户取消
+
+      setState(() => _importing = true);
+
+      // 2. 验证备份文件
+      final info = await DataBackupService.validateBackup(filePath);
+
+      if (!mounted) return;
+
+      // 3. 显示确认对话框
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          title: const Text('导入备份'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(info.summary),
+              const SizedBox(height: 12),
+              Text(
+                '导入将覆盖当前所有数据（用户信息、AI 记忆、对话记录等），API Key 需要重新配置。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+              child: const Text('确认导入'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      // 4. 执行导入
+      await DataBackupService.importBackup(filePath);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('数据导入成功，请重启 APP')),
+        );
+        // 刷新页面状态
+        _loadMemoryStats();
+        _loadLastBackupTime();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('AI 与数据'),
+        centerTitle: true,
+      ),
+      body: ListView(
+        padding: TaSpacing.page,
+        children: [
+          const SizedBox(height: TaSpacing.sm),
 
           // 服务配置
           _SectionTitle(title: '服务配置'),
@@ -455,7 +707,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.3)),
                 ListTile(
                   leading: Icon(Icons.cached_rounded,
                       color: theme.colorScheme.tertiary),
@@ -475,14 +730,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       await _loadMemoryStats();
                       if (mounted) {
                         messenger.showSnackBar(
-                          const SnackBar(content: Text('缓存统计已重置')),
+                          const SnackBar(
+                              content: Text('缓存统计已重置')),
                         );
                       }
                     },
                     child: const Text('重置'),
                   ),
                 ),
-                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.3)),
                 ListTile(
                   leading: Icon(Icons.auto_fix_high_rounded,
                       color: theme.colorScheme.secondary),
@@ -503,16 +762,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         )
                       : Icon(Icons.play_arrow_rounded,
-                          color: theme.colorScheme.onSurfaceVariant),
+                          color:
+                              theme.colorScheme.onSurfaceVariant),
                   onTap: _dreaming ? null : _runDreamNow,
                 ),
-                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.3)),
                 ListTile(
                   leading: Icon(Icons.memory_rounded,
                       color: theme.colorScheme.error),
                   title: Text(
                     '清除 AI 记忆',
-                    style: TextStyle(color: theme.colorScheme.error),
+                    style:
+                        TextStyle(color: theme.colorScheme.error),
                   ),
                   subtitle: Text(
                     '删除所有记忆数据，重新开始',
@@ -523,6 +787,294 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: _clearAiMemory,
                 ),
               ],
+            ),
+          ),
+
+          const SizedBox(height: TaSpacing.lg),
+
+          // 数据管理
+          _SectionTitle(title: '数据管理'),
+          const SizedBox(height: TaSpacing.xs),
+          TaCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.upload_rounded,
+                      color: theme.colorScheme.primary),
+                  title: const Text('导出备份'),
+                  subtitle: Text(
+                    _lastBackupTime != null
+                        ? '上次备份: ${_lastBackupTime!.month}/${_lastBackupTime!.day} ${_lastBackupTime!.hour.toString().padLeft(2, '0')}:${_lastBackupTime!.minute.toString().padLeft(2, '0')}'
+                        : '导出所有数据为备份文件，可分享到微信等',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  trailing: _exporting
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: theme.colorScheme.primary,
+                          ),
+                        )
+                      : Icon(Icons.chevron_right_rounded,
+                          color:
+                              theme.colorScheme.onSurfaceVariant),
+                  onTap: _exporting ? null : _exportBackup,
+                ),
+                Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.3)),
+                ListTile(
+                  leading: Icon(Icons.download_rounded,
+                      color: theme.colorScheme.secondary),
+                  title: const Text('导入备份'),
+                  subtitle: Text(
+                    '从备份文件恢复数据（支持微信/QQ接收的文件）',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  trailing: _importing
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: theme.colorScheme.secondary,
+                          ),
+                        )
+                      : Icon(Icons.chevron_right_rounded,
+                          color:
+                              theme.colorScheme.onSurfaceVariant),
+                  onTap: _importing ? null : _importBackup,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: TaSpacing.xxl),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// 账户与关于 子页面
+// ============================================================
+
+class _AccountSettings extends StatefulWidget {
+  const _AccountSettings();
+
+  @override
+  State<_AccountSettings> createState() => _AccountSettingsState();
+}
+
+class _AccountSettingsState extends State<_AccountSettings> {
+  LocalUser? _user;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUser();
+  }
+
+  Future<void> _loadUser() async {
+    final user = await LocalUserService.getUser();
+    if (!mounted) return;
+    setState(() => _user = user);
+  }
+
+  Future<void> _pickAvatar() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 85,
+    );
+    if (image == null) return;
+
+    // 复制到 App 私有目录
+    final appDir = await getApplicationDocumentsDirectory();
+    final avatarDir = Directory('${appDir.path}/avatars');
+    if (!await avatarDir.exists()) {
+      await avatarDir.create(recursive: true);
+    }
+    final ext = p.extension(image.path);
+    final destPath = '${avatarDir.path}/user_avatar$ext';
+    await File(image.path).copy(destPath);
+
+    await LocalUserService.updateAvatar(destPath);
+    _loadUser();
+  }
+
+  Future<void> _showNicknameDialog() async {
+    final user = await LocalUserService.getUser();
+    if (!mounted) return;
+
+    final controller =
+        TextEditingController(text: user?.nickname ?? '');
+    final newNickname = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        title: const Text('修改昵称'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '请输入新昵称',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(controller.text),
+            child: const Text('确认'),
+          ),
+        ],
+      ),
+    );
+
+    if (newNickname != null && newNickname.trim().isNotEmpty) {
+      await LocalUserService.updateNickname(newNickname.trim());
+      _loadUser();
+    }
+  }
+
+  /// 显示用户协议
+  void _showTermsOfService() {
+    showDialog(
+      context: context,
+      builder: (context) => _LegalDocumentDialog(
+        title: '用户协议',
+        content: _termsOfServiceText,
+      ),
+    );
+  }
+
+  /// 显示隐私政策
+  void _showPrivacyPolicy() {
+    showDialog(
+      context: context,
+      builder: (context) => _LegalDocumentDialog(
+        title: '隐私政策',
+        content: _privacyPolicyText,
+      ),
+    );
+  }
+
+  Future<void> _confirmReset() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        title: const Text('确认重置'),
+        content: const Text(
+            '这将清除所有本地数据（用户信息、关心的人、提醒记录等），操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('确认重置'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final db = await DatabaseHelper.database;
+      // 清除所有业务数据表
+      for (final table in [
+        'user_achievements',
+        'reminder_logs',
+        'reminder_configs',
+        'chat_history',
+        'ai_pending_messages',
+        'partners',
+        'users',
+        'ai_wiki_facts',
+        'ai_conversation_summaries',
+        'conversation_chunks',
+      ]) {
+        await db.delete(table);
+      }
+      // 重新创建默认用户
+      await LocalUserService.createUser(nickname: '');
+      if (mounted) context.go(Routes.home);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('账户'),
+        centerTitle: true,
+      ),
+      body: ListView(
+        padding: TaSpacing.page,
+        children: [
+          const SizedBox(height: TaSpacing.sm),
+
+          // 头像区域
+          Center(
+            child: GestureDetector(
+              onTap: _pickAvatar,
+              child: Stack(
+                children: [
+                  TaAvatar(
+                    name: _user?.nickname ?? '我',
+                    imageUrl: _user?.avatarPath,
+                    size: TaSizes.avatarXl,
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.camera_alt_rounded,
+                        color: theme.colorScheme.onPrimary,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: TaSpacing.xs),
+          Center(
+            child: Text(
+              '点击更换头像',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
 
@@ -602,111 +1154,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _onPushChanged(bool v) async {
-    if (v) {
-      final granted = await NotificationService.requestPermission();
-      if (!granted) return;
-    }
-    await ThemeService.instance.setPushEnabled(v);
-  }
-
-  Future<void> _confirmReset() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
-        title: const Text('确认重置'),
-        content: const Text('这将清除所有本地数据（用户信息、关心的人、提醒记录等），操作不可恢复。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('确认重置'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      final db = await DatabaseHelper.database;
-      // 清除所有业务数据表
-      for (final table in [
-        'user_achievements', 'reminder_logs', 'reminder_configs',
-        'chat_history', 'ai_pending_messages', 'partners', 'users',
-        'ai_wiki_facts', 'ai_conversation_summaries', 'conversation_chunks',
-      ]) {
-        await db.delete(table);
-      }
-      // 重新创建默认用户
-      await LocalUserService.createUser(nickname: '');
-      if (mounted) context.go(Routes.home);
-    }
-  }
-
-  Future<void> _showNicknameDialog() async {
-    final user = await LocalUserService.getUser();
-    if (!mounted) return;
-
-    final controller = TextEditingController(text: user?.nickname ?? '');
-    final newNickname = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
-        title: const Text('修改昵称'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '请输入新昵称',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('确认'),
-          ),
-        ],
-      ),
-    );
-
-    if (newNickname != null && newNickname.trim().isNotEmpty) {
-      await LocalUserService.updateNickname(newNickname.trim());
-      _loadUser();
-    }
-  }
-
-  /// 显示用户协议
-  void _showTermsOfService() {
-    showDialog(
-      context: context,
-      builder: (context) => _LegalDocumentDialog(
-        title: '用户协议',
-        content: _termsOfServiceText,
-      ),
-    );
-  }
-
-  /// 显示隐私政策
-  void _showPrivacyPolicy() {
-    showDialog(
-      context: context,
-      builder: (context) => _LegalDocumentDialog(
-        title: '隐私政策',
-        content: _privacyPolicyText,
-      ),
-    );
-  }
-
   // ==================== 法律文本 ====================
 
   static const _termsOfServiceText = '''
@@ -723,7 +1170,7 @@ Ta的世界 用户服务协议
 
 1. 本应用提供以下功能：联系人管理、提醒配置与调度、AI 关怀建议（需自行配置 DeepSeek API）、天气查询（使用免费开源服务，无需配置）、成就系统、本地数据存储等。
 2. 本应用为纯本地应用，所有用户数据（包括但不限于联系人信息、提醒记录、对话历史等）均存储在您的设备本地，不会上传至任何服务器。
-3. AI 关怀助手功能需要您自行申请并配置 DeepSeek API 密钥，相关服务由第三方提供，本应用不对第三方服务的可用性、准确性承担责任。天气查询功能使用开源 Open-Meteo 服务，无需额外配置。
+3. 小念智能助手功能需要您自行申请并配置 DeepSeek API 密钥，相关服务由第三方提供，本应用不对第三方服务的可用性、准确性承担责任。天气查询功能使用开源 Open-Meteo 服务，无需额外配置。
 
 三、用户行为规范
 
@@ -805,6 +1252,10 @@ Ta的世界 隐私政策
 ''';
 }
 
+// ============================================================
+// 共享辅助组件
+// ============================================================
+
 /// 法律文档弹窗
 class _LegalDocumentDialog extends StatelessWidget {
   const _LegalDocumentDialog({
@@ -845,6 +1296,7 @@ class _LegalDocumentDialog extends StatelessWidget {
   }
 }
 
+/// 区块标题
 class _SectionTitle extends StatelessWidget {
   const _SectionTitle({required this.title});
   final String title;
