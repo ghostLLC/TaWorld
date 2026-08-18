@@ -587,9 +587,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final type = args['relationship'] as String? ?? 'other';
     final rawCity = args['city'] as String?;
     // 城市名清理：去空格、去掉"市"后缀
-    final city = rawCity != null
-        ? rawCity.trim().replaceAll(RegExp(r'[市]$'), '')
-        : null;
+    final city = rawCity?.trim().replaceAll(RegExp(r'[市]$'), '');
     final note = args['note'] as String?;
 
     if (nickname.isEmpty) {
@@ -691,9 +689,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final newNickname = args['new_nickname'] as String?;
     final newType = args['relationship'] as String?;
     final rawCity = args['city'] as String?;
-    final city = rawCity != null
-        ? rawCity.trim().replaceAll(RegExp(r'[市县区]$'), '')
-        : null;
+    final city = rawCity?.trim().replaceAll(RegExp(r'[市县区]$'), '');
     final note = args['note'] as String?;
 
     final partners = await PartnerService.getAll();
