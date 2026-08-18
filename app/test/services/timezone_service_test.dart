@@ -1,10 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:timezone/timezone.dart' as tz;
 
+import 'package:taworld/services/notification_service.dart';
 import 'package:taworld/services/timezone_service.dart';
 
 void main() {
   tearDown(TimezoneService.resetForTesting);
+
+  test('notification readiness is false before notification initialization', () {
+    expect(NotificationService.isInitialized, isFalse);
+  });
 
   test('initializes the injected Asia/Shanghai location', () async {
     final identifier = await TimezoneService.initialize(
@@ -81,4 +88,64 @@ void main() {
       expect(tz.local, same(tz.UTC));
     },
   );
+
+  test('concurrent initialization shares the first in-flight result', () async {
+    final loaderStarted = Completer<void>();
+    final releaseLoader = Completer<void>();
+    var loaderCalls = 0;
+
+    Future<String> firstLoader() async {
+      loaderCalls++;
+      loaderStarted.complete();
+      await releaseLoader.future;
+      return 'Asia/Shanghai';
+    }
+
+    final firstInitialization = TimezoneService.initialize(
+      identifierLoader: firstLoader,
+    );
+    await loaderStarted.future;
+
+    final secondInitialization = TimezoneService.initialize(
+      identifierLoader: () async {
+        loaderCalls++;
+        return 'America/Los_Angeles';
+      },
+    );
+    releaseLoader.complete();
+
+    expect(await firstInitialization, 'Asia/Shanghai');
+    expect(await secondInitialization, 'Asia/Shanghai');
+    expect(loaderCalls, 1);
+    expect(tz.local.name, 'Asia/Shanghai');
+  });
+
+  test('failed initialization clears in-flight state for a successful retry',
+      () async {
+    var loaderCalls = 0;
+
+    await expectLater(
+      TimezoneService.initialize(
+        identifierLoader: () async {
+          loaderCalls++;
+          throw StateError('temporary timezone discovery failure');
+        },
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(TimezoneService.isInitialized, isFalse);
+
+    final identifier = await TimezoneService.initialize(
+      identifierLoader: () async {
+        loaderCalls++;
+        return 'Asia/Shanghai';
+      },
+    );
+
+    expect(identifier, 'Asia/Shanghai');
+    expect(loaderCalls, 2);
+    expect(TimezoneService.isInitialized, isTrue);
+    expect(tz.local.name, 'Asia/Shanghai');
+  });
 }

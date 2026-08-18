@@ -12,6 +12,8 @@ abstract final class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
 
+  static bool get isInitialized => _initialized;
+
   /// 全局 GoRouter 引用，用于通知点击跳转
   static GoRouter? router;
 

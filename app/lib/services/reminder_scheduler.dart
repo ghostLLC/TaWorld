@@ -25,8 +25,11 @@ abstract final class ReminderScheduler {
   ///
   /// 在 App 启动时调用，读取所有 enabled=1 的配置并调度。
   static Future<void> scheduleAll() async {
-    if (!TimezoneService.isInitialized) {
-      dev.log('跳过提醒调度：设备时区尚未初始化', name: 'TaWorld');
+    if (!TimezoneService.isInitialized || !NotificationService.isInitialized) {
+      dev.log(
+        '跳过提醒调度：设备时区或通知服务尚未初始化',
+        name: 'TaWorld',
+      );
       return;
     }
 

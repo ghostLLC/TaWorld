@@ -8,10 +8,28 @@ typedef TimezoneIdentifierLoader = Future<String> Function();
 /// Initializes the timezone database and selects the device's IANA timezone.
 abstract final class TimezoneService {
   static bool _isInitialized = false;
+  static Future<String>? _initializationInFlight;
 
   static bool get isInitialized => _isInitialized;
 
   static Future<String> initialize({
+    TimezoneIdentifierLoader? identifierLoader,
+  }) {
+    final inFlight = _initializationInFlight;
+    if (inFlight != null) return inFlight;
+
+    late final Future<String> initialization;
+    initialization = _initialize(identifierLoader: identifierLoader)
+        .whenComplete(() {
+          if (identical(_initializationInFlight, initialization)) {
+            _initializationInFlight = null;
+          }
+        });
+    _initializationInFlight = initialization;
+    return initialization;
+  }
+
+  static Future<String> _initialize({
     TimezoneIdentifierLoader? identifierLoader,
   }) async {
     _isInitialized = false;
