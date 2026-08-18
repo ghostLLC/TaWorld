@@ -134,7 +134,7 @@ class DatabaseHelper {
       CREATE TABLE reminder_logs (
         id TEXT PRIMARY KEY,
         config_id TEXT NOT NULL REFERENCES reminder_configs(id) ON DELETE CASCADE,
-        partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+        partner_id TEXT NOT NULL REFERENCES partners(id),
         message TEXT,
         status TEXT NOT NULL DEFAULT 'triggered',
         triggered_at TEXT NOT NULL,
