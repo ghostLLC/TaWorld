@@ -104,16 +104,16 @@ abstract final class NotificationService {
   /// 定时通知（用于睡觉/吃饭/天气提醒）
   ///
   /// 使用 zonedSchedule 精确定时，底层依赖 Android AlarmManager。
-  /// [scheduledTime] 为本地时间，内部自动转换为 TZDateTime。
+  /// [scheduledTime] 已经包含要使用的 IANA 时区位置。
   static Future<void> schedule({
     required int id,
     required String title,
     required String body,
-    required DateTime scheduledTime,
+    required tz.TZDateTime scheduledTime,
     String? payload,
   }) async {
     // 如果调度时间已过，跳过
-    if (scheduledTime.isBefore(DateTime.now())) return;
+    if (scheduledTime.isBefore(tz.TZDateTime.now(tz.local))) return;
 
     const androidDetails = AndroidNotificationDetails(
       'taworld_reminders',
@@ -132,7 +132,7 @@ abstract final class NotificationService {
       id,
       title,
       body,
-      tz.TZDateTime.from(scheduledTime, tz.local),
+      scheduledTime,
       const NotificationDetails(
         android: androidDetails,
         iOS: iosDetails,
