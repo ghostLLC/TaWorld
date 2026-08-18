@@ -32,6 +32,14 @@ void main() {
     expect(BackupArchiveCodec.decode(archiveBytes).preferences, isEmpty);
   });
 
+  test('decodes both stored and deflated TaWorld entries', () {
+    final deflated = BackupArchiveCodec.decode(_encodeArchive());
+    final stored = BackupArchiveCodec.decode(_encodeArchive(useStored: true));
+
+    expect(deflated.databaseBytes, [1, 2, 3]);
+    expect(stored.databaseBytes, [1, 2, 3]);
+  });
+
   test('rejects an archive without a manifest', () {
     final archiveBytes = _encodeArchive(includeManifest: false);
 
@@ -64,6 +72,115 @@ void main() {
         reason: 'duplicate $duplicateName must be rejected',
       );
     }
+  });
+
+  test('rejects a true duplicate with a second local payload', () {
+    final archiveBytes = _encodeArchiveWithDuplicate('database.db');
+
+    expect(
+      () => BackupArchiveCodec.decode(archiveBytes),
+      throwsA(isA<BackupFormatException>()),
+    );
+  });
+
+  test('rejects encrypted entries and unsupported compression methods', () {
+    final encrypted = _mutateCentralEntry(
+      _encodeArchive(),
+      'database.db',
+      (bytes, offset) =>
+          _writeUint16(bytes, offset + 8, _readUint16(bytes, offset + 8) | 0x1),
+    );
+    final unsupportedMethod = _mutateCentralEntry(
+      _encodeArchive(),
+      'database.db',
+      (bytes, offset) => _writeUint16(bytes, offset + 10, 99),
+    );
+
+    for (final archiveBytes in [encrypted, unsupportedMethod]) {
+      expect(
+        () => BackupArchiveCodec.decode(archiveBytes),
+        throwsA(isA<BackupFormatException>()),
+      );
+    }
+  });
+
+  test('rejects symlink attributes and unsupported data descriptors', () {
+    final symlink = _mutateCentralEntry(
+      _encodeArchive(),
+      'database.db',
+      (bytes, offset) => _writeUint32(bytes, offset + 38, 0xa0000000),
+    );
+    final dataDescriptor = _mutateCentralEntry(
+      _encodeArchive(),
+      'database.db',
+      (bytes, offset) =>
+          _writeUint16(bytes, offset + 8, _readUint16(bytes, offset + 8) | 0x8),
+    );
+
+    for (final archiveBytes in [symlink, dataDescriptor]) {
+      expect(
+        () => BackupArchiveCodec.decode(archiveBytes),
+        throwsA(isA<BackupFormatException>()),
+      );
+    }
+  });
+
+  test('rejects central-directory count and padding inconsistencies', () {
+    final countMismatch = _mutateArchive(
+      _encodeArchive(),
+      (bytes, eocd) =>
+          _writeUint16(bytes, eocd + 10, _readUint16(bytes, eocd + 10) - 1),
+    );
+    final centralPadding = _insertBeforeEocd(_encodeArchive(), 0xa5);
+
+    for (final archiveBytes in [countMismatch, centralPadding]) {
+      expect(
+        () => BackupArchiveCodec.decode(archiveBytes),
+        throwsA(isA<BackupFormatException>()),
+      );
+    }
+  });
+
+  test('rejects ZIP64 sentinel metadata', () {
+    final zip64 = _mutateArchive(
+      _encodeArchive(),
+      (bytes, eocd) => _writeUint32(bytes, eocd + 12, 0xffffffff),
+    );
+
+    expect(
+      () => BackupArchiveCodec.decode(zip64),
+      throwsA(isA<BackupFormatException>()),
+    );
+  });
+
+  test('rejects central and local CRC disagreements', () {
+    final mismatchedCrc = _mutateCentralEntry(
+      _encodeArchive(),
+      'database.db',
+      (bytes, offset) =>
+          _writeUint32(bytes, offset + 16, _readUint32(bytes, offset + 16) ^ 1),
+    );
+
+    expect(
+      () => BackupArchiveCodec.decode(mismatchedCrc),
+      throwsA(isA<BackupFormatException>()),
+    );
+  });
+
+  test('rejects a deflate stream that exceeds its declaration', () {
+    final oversizedContent = _encodeArchive(
+      databaseBytes: Uint8List.fromList(List<int>.filled(4096, 7)),
+    );
+    final malformedDeclaration = _mutateEntrySizes(
+      oversizedContent,
+      'database.db',
+      1,
+    );
+
+    expect(
+      () => BackupArchiveCodec.decode(malformedDeclaration),
+      throwsA(isA<BackupFormatException>()),
+    );
   });
 
   test('rejects path-like and non-canonical entry names', () {
@@ -182,6 +299,9 @@ void main() {
     final cases = <Map<String, Object?>>[
       {..._manifest(), 'created_at': 'not-a-date'},
       {..._manifest(), 'created_at': '2026-02-30T08:00:00.000Z'},
+      {..._manifest(), 'created_at': '2026-08-18T25:00:00'},
+      {..._manifest(), 'created_at': '2026-08-18T23:59:60'},
+      {..._manifest(), 'created_at': '2026-08-18T08:00:00+99:99'},
       {..._manifest(), 'created_at': 123},
       {..._manifest(), 'schema_version': '4'},
       {..._manifest(), 'schema_version': 1.5},
@@ -254,23 +374,29 @@ Uint8List _encodeArchive({
   List<int>? manifestBytes,
   Uint8List? databaseBytes,
   Map<String, Object?>? preferences,
+  bool useStored = false,
   Map<String, List<int>> extraEntries = const {},
 }) {
   final archive = Archive();
   if (includeManifest) {
     final bytes = manifestBytes ?? utf8.encode(jsonEncode(_manifest()));
-    archive.addFile(ArchiveFile.bytes('manifest.json', bytes));
+    archive.addFile(_archiveFile('manifest.json', bytes, useStored: useStored));
   }
   if (includeDatabase) {
     archive.addFile(
-      ArchiveFile.bytes('database.db', databaseBytes ?? [1, 2, 3]),
+      _archiveFile(
+        'database.db',
+        databaseBytes ?? [1, 2, 3],
+        useStored: useStored,
+      ),
     );
   }
   if (includePreferences) {
     archive.addFile(
-      ArchiveFile.bytes(
+      _archiveFile(
         'preferences.json',
         utf8.encode(jsonEncode(preferences ?? {'theme_mode': 'system'})),
+        useStored: useStored,
       ),
     );
   }
@@ -278,6 +404,16 @@ Uint8List _encodeArchive({
     archive.addFile(ArchiveFile.bytes(entry.key, entry.value));
   }
   return _encode(archive);
+}
+
+ArchiveFile _archiveFile(
+  String name,
+  List<int> bytes, {
+  bool useStored = false,
+}) {
+  final file = ArchiveFile.bytes(name, bytes);
+  if (useStored) file.compression = CompressionType.none;
+  return file;
 }
 
 Uint8List _encodeArchiveWithDeclaredSize(String name, int declaredSize) {
@@ -308,70 +444,40 @@ Uint8List _encode(Archive archive) =>
     Uint8List.fromList(ZipEncoder().encode(archive));
 
 Uint8List _duplicateZipEntry(Uint8List zip, String name) {
-  // This fixture is intentionally small and uses the standard ZIP layout
-  // emitted by archive. The codec must inspect central-directory entries
-  // rather than relying on Archive.find, which deduplicates by name.
-  final decoder = ZipDecoder();
-  decoder.decodeBytes(zip);
-  final headers = decoder.directory.fileHeaders;
-  final headerIndex = headers.indexWhere(
-    (candidate) => candidate.filename == name,
-  );
-  final header = headers[headerIndex];
-  final file = header.file!;
-  final localName = utf8.encode(name);
-  final content = file.getRawContent();
-  final duplicateLocal = <int>[
-    0x50,
-    0x4b,
-    0x03,
-    0x04,
-    20,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    file.crc32 & 0xff,
-    (file.crc32 >> 8) & 0xff,
-    (file.crc32 >> 16) & 0xff,
-    (file.crc32 >> 24) & 0xff,
-    content.length & 0xff,
-    (content.length >> 8) & 0xff,
-    (content.length >> 16) & 0xff,
-    (content.length >> 24) & 0xff,
-    file.uncompressedSize & 0xff,
-    (file.uncompressedSize >> 8) & 0xff,
-    (file.uncompressedSize >> 16) & 0xff,
-    (file.uncompressedSize >> 24) & 0xff,
-    localName.length & 0xff,
-    (localName.length >> 8) & 0xff,
-    0,
-    0,
-    ...localName,
-    ...content,
-  ];
-
-  // Locate the existing central directory and EOCD. We insert the duplicate
-  // local file immediately before the central directory, then duplicate the
-  // selected central-directory record and update EOCD count/size/offset.
+  // Copy the complete existing local record, including its real compressed
+  // payload. This makes the duplicate a genuine second payload rather than a
+  // central-directory-only duplicate.
   final eocd = _findSignature(zip, [0x50, 0x4b, 0x05, 0x06]);
   final centralOffset = _readUint32(zip, eocd + 16);
   final centralSize = _readUint32(zip, eocd + 12);
   final central = zip.sublist(centralOffset, centralOffset + centralSize);
-  final duplicateCentral = _centralRecordAt(central, headerIndex);
+  final recordOffset = _centralRecordOffsetForName(zip, name);
+  final recordLength = _centralRecordLength(zip, recordOffset);
+  final localOffset = _readUint32(zip, recordOffset + 42);
+  final localLength =
+      30 +
+      _readUint16(zip, localOffset + 26) +
+      _readUint16(zip, localOffset + 28) +
+      _readUint32(zip, localOffset + 18);
+  final duplicateLocal = zip.sublist(localOffset, localOffset + localLength);
+  final duplicateCentral = zip.sublist(
+    recordOffset,
+    recordOffset + recordLength,
+  );
+
+  // Locate the existing central directory and EOCD. We insert the duplicate
+  // local file immediately before the central directory, then duplicate the
+  // selected central-directory record and update EOCD count/size/offset.
   final duplicateLocalOffset = centralOffset;
-  final rewrittenCentral = <int>[...central, ...duplicateCentral];
   _writeUint32(duplicateCentral, 42, duplicateLocalOffset);
+  final rewrittenCentral = <int>[...central, ...duplicateCentral];
   final output = <int>[
     ...zip.sublist(0, centralOffset),
     ...duplicateLocal,
     ...rewrittenCentral,
     ...zip.sublist(eocd, zip.length),
   ];
-  final newEocd = eocd + duplicateLocal.length;
+  final newEocd = eocd + duplicateLocal.length + duplicateCentral.length;
   _writeUint16(output, newEocd + 8, _readUint16(output, newEocd + 8) + 1);
   _writeUint16(output, newEocd + 10, _readUint16(output, newEocd + 10) + 1);
   _writeUint32(output, newEocd + 12, rewrittenCentral.length);
@@ -379,32 +485,68 @@ Uint8List _duplicateZipEntry(Uint8List zip, String name) {
   return Uint8List.fromList(output);
 }
 
-List<int> _centralRecordAt(List<int> central, int targetIndex) {
-  var offset = 0;
-  for (var index = 0; index < targetIndex; index++) {
-    if (offset + 46 > central.length) {
-      throw StateError('central record not found');
-    }
-    final length =
-        46 +
-        _readUint16(central, offset + 28) +
-        _readUint16(central, offset + 30) +
-        _readUint16(central, offset + 32);
-    offset += length;
-  }
-  if (offset + 46 > central.length) {
-    throw StateError('central record not found');
-  }
-  final length =
-      46 +
-      _readUint16(central, offset + 28) +
-      _readUint16(central, offset + 30) +
-      _readUint16(central, offset + 32);
-  if (offset + length > central.length) {
-    throw StateError('central record not found');
-  }
-  return central.sublist(offset, offset + length);
+Uint8List _mutateArchive(
+  Uint8List zip,
+  void Function(Uint8List bytes, int eocdOffset) mutate,
+) {
+  final bytes = Uint8List.fromList(zip);
+  mutate(bytes, _findSignature(bytes, [0x50, 0x4b, 0x05, 0x06]));
+  return bytes;
 }
+
+Uint8List _insertBeforeEocd(Uint8List zip, int value) {
+  final eocd = _findSignature(zip, [0x50, 0x4b, 0x05, 0x06]);
+  return Uint8List.fromList([
+    ...zip.sublist(0, eocd),
+    value,
+    ...zip.sublist(eocd),
+  ]);
+}
+
+Uint8List _mutateCentralEntry(
+  Uint8List zip,
+  String name,
+  void Function(Uint8List bytes, int centralOffset) mutate,
+) {
+  final bytes = Uint8List.fromList(zip);
+  mutate(bytes, _centralRecordOffsetForName(bytes, name));
+  return bytes;
+}
+
+Uint8List _mutateEntrySizes(Uint8List zip, String name, int size) {
+  final bytes = Uint8List.fromList(zip);
+  final centralOffset = _centralRecordOffsetForName(bytes, name);
+  final localOffset = _readUint32(bytes, centralOffset + 42);
+  _writeUint32(bytes, centralOffset + 24, size);
+  _writeUint32(bytes, localOffset + 22, size);
+  return bytes;
+}
+
+int _centralRecordOffsetForName(List<int> zip, String name) {
+  final eocd = _findSignature(zip, [0x50, 0x4b, 0x05, 0x06]);
+  final centralOffset = _readUint32(zip, eocd + 16);
+  final centralSize = _readUint32(zip, eocd + 12);
+  final centralEnd = centralOffset + centralSize;
+  var offset = centralOffset;
+  final count = _readUint16(zip, eocd + 10);
+  for (var index = 0; index < count; index++) {
+    final recordLength = _centralRecordLength(zip, offset);
+    final nameLength = _readUint16(zip, offset + 28);
+    final candidate = utf8.decode(
+      zip.sublist(offset + 46, offset + 46 + nameLength),
+    );
+    if (candidate == name) return offset;
+    offset += recordLength;
+  }
+  if (offset > centralEnd) throw StateError('central directory overflow');
+  throw StateError('central record not found');
+}
+
+int _centralRecordLength(List<int> zip, int offset) =>
+    46 +
+    _readUint16(zip, offset + 28) +
+    _readUint16(zip, offset + 30) +
+    _readUint16(zip, offset + 32);
 
 int _findSignature(List<int> bytes, List<int> signature) {
   for (var i = bytes.length - signature.length; i >= 0; i--) {

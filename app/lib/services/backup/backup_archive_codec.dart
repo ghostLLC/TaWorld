@@ -55,6 +55,138 @@ class BackupFormatException implements Exception {
   String toString() => 'BackupFormatException: $message';
 }
 
+class _ZipEntry {
+  final String name;
+  final Uint8List nameBytes;
+  final int flags;
+  final int compressionMethod;
+  final int crc32;
+  final int compressedSize;
+  final int uncompressedSize;
+  final int localHeaderOffset;
+
+  const _ZipEntry({
+    required this.name,
+    required this.nameBytes,
+    required this.flags,
+    required this.compressionMethod,
+    required this.crc32,
+    required this.compressedSize,
+    required this.uncompressedSize,
+    required this.localHeaderOffset,
+  });
+}
+
+class _LocalZipEntry {
+  final _ZipEntry entry;
+  final int dataStart;
+  final int dataEnd;
+
+  const _LocalZipEntry({
+    required this.entry,
+    required this.dataStart,
+    required this.dataEnd,
+  });
+}
+
+class _ZipDirectory {
+  final int centralOffset;
+  final Map<String, _ZipEntry> entries;
+
+  const _ZipDirectory({required this.centralOffset, required this.entries});
+}
+
+/// Output buffer that refuses to retain more than the entry's declared limit.
+///
+/// archive's pure-Dart [Inflate] catches output exceptions internally, so the
+/// [exceeded] flag is checked after inflation as the authoritative signal.
+class _BoundedOutputStream extends OutputStream {
+  final int limit;
+  Uint8List _buffer;
+  @override
+  int length = 0;
+  bool exceeded = false;
+
+  _BoundedOutputStream(this.limit)
+    : _buffer = Uint8List(limit < 0x8000 ? limit : 0x8000),
+      super(byteOrder: ByteOrder.littleEndian);
+
+  void _requireCapacity(int additional) {
+    if (additional < 0 || additional > limit - length) {
+      exceeded = true;
+      throw ArchiveException('decompressed output exceeds limit');
+    }
+    final required = length + additional;
+    if (required <= _buffer.length) return;
+
+    var nextLength = _buffer.isEmpty ? 1 : _buffer.length;
+    while (nextLength < required) {
+      final doubled = nextLength * 2;
+      nextLength = doubled > limit ? limit : doubled;
+    }
+    _buffer = Uint8List(nextLength)..setRange(0, length, _buffer);
+  }
+
+  @override
+  void clear() {
+    length = 0;
+    exceeded = false;
+  }
+
+  @override
+  void flush() {}
+
+  @override
+  void writeByte(int value) {
+    _requireCapacity(1);
+    _buffer[length++] = value;
+  }
+
+  @override
+  void writeBytes(List<int> bytes, {int? length}) {
+    final count = length ?? bytes.length;
+    _requireCapacity(count);
+    _buffer.setRange(this.length, this.length + count, bytes);
+    this.length += count;
+  }
+
+  @override
+  void writeStream(InputStream stream) {
+    _requireCapacity(stream.length);
+    if (stream is InputMemoryStream && stream.buffer != null) {
+      _buffer.setRange(
+        length,
+        length + stream.length,
+        stream.buffer!,
+        stream.position,
+      );
+    } else {
+      _buffer.setRange(length, length + stream.length, stream.toUint8List());
+    }
+    length += stream.length;
+  }
+
+  @override
+  Uint8List subset(int start, [int? end]) {
+    if (start < 0) start = length + start;
+    end ??= length;
+    if (end < 0) end = length + end;
+    if (start < 0 || end < start || end > length) {
+      throw RangeError.range(start, 0, length, 'start');
+    }
+    return Uint8List.view(
+      _buffer.buffer,
+      _buffer.offsetInBytes + start,
+      end - start,
+    );
+  }
+
+  @override
+  Uint8List getBytes() {
+    return Uint8List.view(_buffer.buffer, _buffer.offsetInBytes, length);
+  }
+}
+
 /// Whitelist-only, in-memory backup archive decoder.
 abstract final class BackupArchiveCodec {
   static const int maxArchiveBytes = 128 * 1024 * 1024;
@@ -65,6 +197,14 @@ abstract final class BackupArchiveCodec {
   static const _databaseName = 'database.db';
   static const _preferencesName = 'preferences.json';
   static const _allowedNames = {_manifestName, _databaseName, _preferencesName};
+
+  static const _eocdSignature = 0x06054b50;
+  static const _centralSignature = 0x02014b50;
+  static const _localSignature = 0x04034b50;
+  static const _eocdLength = 22;
+  static const _maxZipCommentLength = 0xffff;
+  static const _zip64Uint16 = 0xffff;
+  static const _zip64Uint32 = 0xffffffff;
 
   /// Decodes and validates a backup archive without touching the filesystem.
   static ValidatedBackupArchive decode(Uint8List bytes) {
@@ -85,96 +225,209 @@ abstract final class BackupArchiveCodec {
   }
 
   static ValidatedBackupArchive _decode(Uint8List bytes) {
-    final decoder = ZipDecoder();
+    final directory = _readDirectory(bytes);
+    final entries = directory.entries;
 
-    // archive exposes ZIP integrity verification through this flag. The
-    // installed implementation performs the CRC check when entry content is
-    // read below, so both the API-level request and the explicit check are
-    // retained here.
-    final archive = decoder.decodeBytes(bytes, verify: true);
-    final headers = decoder.directory.fileHeaders;
-    final entries = <String, ZipFileHeader>{};
-
-    // Validate every central-directory entry before reading any allowed
-    // content. Archive itself deduplicates names, therefore the raw directory
-    // headers are used for duplicate detection.
-    for (final header in headers) {
-      _validateEntry(header, archive, entries);
-    }
-
-    final manifestHeader = entries[_manifestName];
-    if (manifestHeader == null) {
+    final manifestEntry = entries[_manifestName];
+    if (manifestEntry == null) {
       throw const BackupFormatException('缺少 manifest.json');
     }
-    final databaseHeader = entries[_databaseName];
-    if (databaseHeader == null) {
+    final databaseEntry = entries[_databaseName];
+    if (databaseEntry == null) {
       throw const BackupFormatException('缺少 database.db');
     }
+
+    // All local records are checked before any compressed content is read.
+    final localEntries = _readLocalEntries(bytes, directory);
 
     // Parse metadata before obtaining database bytes. In particular, schema
     // compatibility is decided before any database lifecycle operation can be
     // introduced by a caller.
-    final info = _parseManifest(_readEntry(manifestHeader, _manifestName));
-    final databaseBytes = _readEntry(databaseHeader, _databaseName);
+    final info = _parseManifest(
+      _readEntry(bytes, localEntries[_manifestName]!),
+    );
+    final databaseBytes = _readEntry(bytes, localEntries[_databaseName]!);
     if (databaseBytes.isEmpty) {
       throw const BackupFormatException('database.db 不能为空');
     }
 
-    final preferencesHeader = entries[_preferencesName];
-    final preferences = preferencesHeader == null
+    final preferencesEntry = localEntries[_preferencesName];
+    final preferences = preferencesEntry == null
         ? <String, Object?>{}
-        : _parsePreferences(_readEntry(preferencesHeader, _preferencesName));
+        : _parsePreferences(_readEntry(bytes, preferencesEntry));
 
     return ValidatedBackupArchive(
       info: info,
-      // _readEntry already copies the decompressed bytes out of the archive.
       databaseBytes: databaseBytes,
       preferences: preferences,
     );
   }
 
-  static void _validateEntry(
-    ZipFileHeader header,
-    Archive archive,
-    Map<String, ZipFileHeader> entries,
+  static _ZipDirectory _readDirectory(Uint8List bytes) {
+    final eocdOffset = _findEocd(bytes);
+    _requireRange(bytes, eocdOffset, _eocdLength, 'ZIP 结束记录');
+
+    final diskNumber = _readUint16(bytes, eocdOffset + 4);
+    final centralDisk = _readUint16(bytes, eocdOffset + 6);
+    final entriesOnDisk = _readUint16(bytes, eocdOffset + 8);
+    final entryCount = _readUint16(bytes, eocdOffset + 10);
+    final centralSize = _readUint32(bytes, eocdOffset + 12);
+    final centralOffset = _readUint32(bytes, eocdOffset + 16);
+
+    if (diskNumber != 0 || centralDisk != 0 || entriesOnDisk != entryCount) {
+      throw const BackupFormatException('不支持多卷 ZIP 归档');
+    }
+    if (entriesOnDisk == _zip64Uint16 ||
+        entryCount == _zip64Uint16 ||
+        centralSize == _zip64Uint32 ||
+        centralOffset == _zip64Uint32) {
+      throw const BackupFormatException('不支持 ZIP64 备份归档');
+    }
+    if (entryCount < 1 || entryCount > _allowedNames.length) {
+      throw const BackupFormatException('ZIP 条目数量无效');
+    }
+    _requireRange(bytes, centralOffset, centralSize, 'ZIP 中央目录');
+    final centralEnd = centralOffset + centralSize;
+    if (centralEnd != eocdOffset) {
+      throw const BackupFormatException('ZIP 中央目录范围不一致');
+    }
+
+    final entries = <String, _ZipEntry>{};
+    final localOffsets = <int>{};
+    var offset = centralOffset;
+    for (var index = 0; index < entryCount; index++) {
+      _requireRange(bytes, offset, 46, 'ZIP 中央目录条目');
+      if (_readUint32(bytes, offset) != _centralSignature) {
+        throw const BackupFormatException('ZIP 中央目录签名无效');
+      }
+
+      final flags = _readUint16(bytes, offset + 8);
+      final method = _readUint16(bytes, offset + 10);
+      final crc32 = _readUint32(bytes, offset + 16);
+      final compressedSize = _readUint32(bytes, offset + 20);
+      final uncompressedSize = _readUint32(bytes, offset + 24);
+      final nameLength = _readUint16(bytes, offset + 28);
+      final extraLength = _readUint16(bytes, offset + 30);
+      final commentLength = _readUint16(bytes, offset + 32);
+      final diskStart = _readUint16(bytes, offset + 34);
+      final externalAttributes = _readUint32(bytes, offset + 38);
+      final localOffset = _readUint32(bytes, offset + 42);
+      final recordLength = 46 + nameLength + extraLength + commentLength;
+      _requireRange(bytes, offset, recordLength, 'ZIP 中央目录条目');
+      if (offset + recordLength > centralEnd) {
+        throw const BackupFormatException('ZIP 中央目录条目越界');
+      }
+
+      if (compressedSize == _zip64Uint32 ||
+          uncompressedSize == _zip64Uint32 ||
+          localOffset == _zip64Uint32 ||
+          diskStart == _zip64Uint16) {
+        throw const BackupFormatException('不支持 ZIP64 备份条目');
+      }
+      if (diskStart != 0) {
+        throw const BackupFormatException('不支持跨卷 ZIP 条目');
+      }
+
+      final nameBytes = Uint8List.fromList(
+        bytes.sublist(offset + 46, offset + 46 + nameLength),
+      );
+      final String name;
+      try {
+        name = utf8.decode(nameBytes, allowMalformed: false);
+      } catch (_) {
+        throw const BackupFormatException('ZIP 条目名称不是有效 UTF-8');
+      }
+      _validateEntryName(name);
+      _validateFlagsAndMethod(name, flags, method);
+      _validateAttributes(name, externalAttributes);
+      _validateDeclaredSize(name, compressedSize, uncompressedSize);
+
+      if (entries.containsKey(name)) {
+        throw BackupFormatException('归档条目重复: $name');
+      }
+      if (!localOffsets.add(localOffset)) {
+        throw const BackupFormatException('多个条目引用同一本地记录');
+      }
+
+      entries[name] = _ZipEntry(
+        name: name,
+        nameBytes: nameBytes,
+        flags: flags,
+        compressionMethod: method,
+        crc32: crc32,
+        compressedSize: compressedSize,
+        uncompressedSize: uncompressedSize,
+        localHeaderOffset: localOffset,
+      );
+      offset += recordLength;
+    }
+
+    if (offset != centralEnd) {
+      throw const BackupFormatException('ZIP 中央目录包含未解析数据');
+    }
+    return _ZipDirectory(centralOffset: centralOffset, entries: entries);
+  }
+
+  static Map<String, _LocalZipEntry> _readLocalEntries(
+    Uint8List bytes,
+    _ZipDirectory directory,
   ) {
-    final name = header.filename;
-    _validateEntryName(name);
+    final localEntries = <String, _LocalZipEntry>{};
+    final ordered = directory.entries.values.toList()
+      ..sort((a, b) => a.localHeaderOffset.compareTo(b.localHeaderOffset));
 
-    final file = header.file;
-    if (file == null) {
-      throw BackupFormatException('归档条目缺少本地文件头: $name');
-    }
-    if (file.filename != name) {
-      throw BackupFormatException('归档条目名称不一致: $name');
+    var expectedOffset = 0;
+    for (final entry in ordered) {
+      final offset = entry.localHeaderOffset;
+      if (offset != expectedOffset) {
+        throw const BackupFormatException('ZIP 本地记录范围不连续');
+      }
+      _requireRange(bytes, offset, 30, 'ZIP 本地文件头');
+      if (_readUint32(bytes, offset) != _localSignature) {
+        throw BackupFormatException('ZIP 本地文件头无效: ${entry.name}');
+      }
+
+      final flags = _readUint16(bytes, offset + 6);
+      final method = _readUint16(bytes, offset + 8);
+      final crc32 = _readUint32(bytes, offset + 14);
+      final compressedSize = _readUint32(bytes, offset + 18);
+      final uncompressedSize = _readUint32(bytes, offset + 22);
+      final nameLength = _readUint16(bytes, offset + 26);
+      final extraLength = _readUint16(bytes, offset + 28);
+      final headerLength = 30 + nameLength + extraLength;
+      _requireRange(bytes, offset, headerLength, 'ZIP 本地文件头');
+
+      final localNameBytes = bytes.sublist(
+        offset + 30,
+        offset + 30 + nameLength,
+      );
+      if (!_bytesEqual(localNameBytes, entry.nameBytes) ||
+          flags != entry.flags ||
+          method != entry.compressionMethod ||
+          crc32 != entry.crc32 ||
+          compressedSize != entry.compressedSize ||
+          uncompressedSize != entry.uncompressedSize) {
+        throw BackupFormatException('ZIP 中央目录与本地记录不一致: ${entry.name}');
+      }
+
+      final dataStart = offset + headerLength;
+      _requireRange(bytes, dataStart, entry.compressedSize, 'ZIP 压缩数据');
+      final dataEnd = dataStart + entry.compressedSize;
+      if (dataEnd > directory.centralOffset) {
+        throw BackupFormatException('ZIP 压缩数据越界: ${entry.name}');
+      }
+      expectedOffset = dataEnd;
+      localEntries[entry.name] = _LocalZipEntry(
+        entry: entry,
+        dataStart: dataStart,
+        dataEnd: dataEnd,
+      );
     }
 
-    final archiveEntry = archive.find(name);
-    if (archiveEntry == null) {
-      throw BackupFormatException('无法读取归档条目: $name');
+    if (expectedOffset != directory.centralOffset) {
+      throw const BackupFormatException('ZIP 本地记录与中央目录之间包含隐藏数据');
     }
-    if (!archiveEntry.isFile ||
-        archiveEntry.isSymbolicLink ||
-        _hasDirectoryOrSymlinkAttributes(header)) {
-      throw BackupFormatException('不允许目录或链接条目: $name');
-    }
-    if (!entries.containsKey(name)) {
-      entries[name] = header;
-    } else {
-      throw BackupFormatException('归档条目重复: $name');
-    }
-
-    final size = header.uncompressedSize;
-    if (size < 0) {
-      throw BackupFormatException('归档条目大小无效: $name');
-    }
-    if (name == _databaseName && size > maxDatabaseBytes) {
-      throw const BackupFormatException('database.db 超过大小限制');
-    }
-    if ((name == _manifestName || name == _preferencesName) &&
-        size > maxMetadataBytes) {
-      throw BackupFormatException('$name 超过大小限制');
-    }
+    return localEntries;
   }
 
   static void _validateEntryName(String name) {
@@ -192,27 +445,139 @@ abstract final class BackupArchiveCodec {
     }
   }
 
-  static bool _hasDirectoryOrSymlinkAttributes(ZipFileHeader header) {
-    final unixMode = header.externalFileAttributes >> 16;
-    final fileType = unixMode & 0xf000;
-    final dosDirectory = (header.externalFileAttributes & 0x10) != 0;
-    return fileType == 0x4000 || fileType == 0xa000 || dosDirectory;
+  static void _validateFlagsAndMethod(String name, int flags, int method) {
+    if ((flags & 0x0001) != 0 || (flags & 0x0040) != 0) {
+      throw BackupFormatException('不支持加密 ZIP 条目: $name');
+    }
+    if ((flags & 0x0008) != 0) {
+      throw BackupFormatException('不支持 data descriptor ZIP 条目: $name');
+    }
+    if (method != 0 && method != 8) {
+      throw BackupFormatException('不支持的 ZIP 压缩方法: $name');
+    }
+    final supportedFlags = method == 8 ? 0x0806 : 0x0800;
+    if ((flags & ~supportedFlags) != 0) {
+      throw BackupFormatException('ZIP 条目标志不受支持: $name');
+    }
   }
 
-  static Uint8List _readEntry(ZipFileHeader header, String name) {
-    final file = header.file;
-    if (file == null) {
-      throw BackupFormatException('归档条目不可读: $name');
+  static void _validateAttributes(String name, int externalAttributes) {
+    final unixMode = externalAttributes >> 16;
+    final fileType = unixMode & 0xf000;
+    final dosDirectory = (externalAttributes & 0x10) != 0;
+    if (fileType == 0x4000 || fileType == 0xa000 || dosDirectory) {
+      throw BackupFormatException('不允许目录或链接条目: $name');
+    }
+  }
+
+  static void _validateDeclaredSize(
+    String name,
+    int compressedSize,
+    int uncompressedSize,
+  ) {
+    if (compressedSize < 0 || uncompressedSize < 0) {
+      throw BackupFormatException('归档条目大小无效: $name');
+    }
+    if (name == _databaseName && uncompressedSize > maxDatabaseBytes) {
+      throw const BackupFormatException('database.db 超过大小限制');
+    }
+    if ((name == _manifestName || name == _preferencesName) &&
+        uncompressedSize > maxMetadataBytes) {
+      throw BackupFormatException('$name 超过大小限制');
+    }
+    if (compressedSize > maxArchiveBytes) {
+      throw BackupFormatException('$name 压缩数据超过大小限制');
+    }
+    if (name != _databaseName &&
+        name != _manifestName &&
+        name != _preferencesName) {
+      throw BackupFormatException('不允许的归档条目: $name');
+    }
+  }
+
+  static Uint8List _readEntry(Uint8List archiveBytes, _LocalZipEntry local) {
+    final entry = local.entry;
+    final compressed = Uint8List.sublistView(
+      archiveBytes,
+      local.dataStart,
+      local.dataEnd,
+    );
+    final Uint8List output;
+    if (entry.compressionMethod == 0) {
+      if (entry.compressedSize != entry.uncompressedSize) {
+        throw BackupFormatException('stored ZIP 条目大小不一致: ${entry.name}');
+      }
+      output = Uint8List.fromList(compressed);
+    } else {
+      final bounded = _BoundedOutputStream(entry.uncompressedSize);
+      Inflate(compressed, output: bounded);
+      if (bounded.exceeded) {
+        throw BackupFormatException('归档条目解压后超过声明大小: ${entry.name}');
+      }
+      output = Uint8List.fromList(bounded.getBytes());
     }
 
-    final bytes = file.readBytes();
-    if (bytes.length != header.uncompressedSize) {
-      throw BackupFormatException('归档条目大小与声明不一致: $name');
+    if (output.length != entry.uncompressedSize) {
+      throw BackupFormatException('归档条目大小与声明不一致: ${entry.name}');
     }
-    if (!file.verifyCrc32()) {
-      throw BackupFormatException('归档条目校验失败: $name');
+    if (getCrc32(output) != entry.crc32) {
+      throw BackupFormatException('归档条目校验失败: ${entry.name}');
     }
-    return Uint8List.fromList(bytes);
+    return output;
+  }
+
+  static int _findEocd(Uint8List bytes) {
+    if (bytes.length < _eocdLength) {
+      throw const BackupFormatException('ZIP 归档缺少结束记录');
+    }
+    final firstCandidate = bytes.length - _eocdLength;
+    final earliestCandidate =
+        bytes.length - _eocdLength - _maxZipCommentLength < 0
+        ? 0
+        : bytes.length - _eocdLength - _maxZipCommentLength;
+    for (var offset = firstCandidate; offset >= earliestCandidate; offset--) {
+      if (_readUint32(bytes, offset) != _eocdSignature) continue;
+      final commentLength = _readUint16(bytes, offset + 20);
+      if (offset + _eocdLength + commentLength == bytes.length) {
+        return offset;
+      }
+    }
+    throw const BackupFormatException('ZIP 归档缺少有效结束记录');
+  }
+
+  static void _requireRange(
+    Uint8List bytes,
+    int offset,
+    int length,
+    String label,
+  ) {
+    if (offset < 0 ||
+        length < 0 ||
+        offset > bytes.length ||
+        length > bytes.length - offset) {
+      throw BackupFormatException('$label 越界');
+    }
+  }
+
+  static int _readUint16(Uint8List bytes, int offset) {
+    _requireRange(bytes, offset, 2, 'ZIP uint16');
+    return bytes[offset] | (bytes[offset + 1] << 8);
+  }
+
+  static int _readUint32(Uint8List bytes, int offset) {
+    _requireRange(bytes, offset, 4, 'ZIP uint32');
+    return bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24);
+  }
+
+  static bool _bytesEqual(List<int> first, List<int> second) {
+    if (first.length != second.length) return false;
+    for (var index = 0; index < first.length; index++) {
+      if (first[index] != second[index]) return false;
+    }
+    return true;
   }
 
   static BackupInfo _parseManifest(Uint8List bytes) {
@@ -239,24 +604,42 @@ abstract final class BackupArchiveCodec {
     if (createdAtValue is! String || createdAtValue.isEmpty) {
       throw const BackupFormatException('created_at 无效');
     }
-    final DateTime createdAt;
-    try {
-      createdAt = DateTime.parse(createdAtValue);
-    } catch (_) {
+    final timestampParts = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})'
+      r'(?:\.\d{1,6})?(?:Z|([+-])(\d{2}):(\d{2}))?$',
+    ).firstMatch(createdAtValue);
+    if (timestampParts == null) {
       throw const BackupFormatException('created_at 无效');
     }
-    final dateParts = RegExp(r'^(\d{4})-(\d{2})-(\d{2})')
-        .firstMatch(createdAtValue);
-    if (dateParts == null) {
+    final inputYear = int.parse(timestampParts.group(1)!);
+    final inputMonth = int.parse(timestampParts.group(2)!);
+    final inputDay = int.parse(timestampParts.group(3)!);
+    final inputHour = int.parse(timestampParts.group(4)!);
+    final inputMinute = int.parse(timestampParts.group(5)!);
+    final inputSecond = int.parse(timestampParts.group(6)!);
+    final offsetHour = timestampParts.group(8) == null
+        ? 0
+        : int.parse(timestampParts.group(8)!);
+    final offsetMinute = timestampParts.group(9) == null
+        ? 0
+        : int.parse(timestampParts.group(9)!);
+    if (inputHour > 23 ||
+        inputMinute > 59 ||
+        inputSecond > 59 ||
+        offsetHour > 23 ||
+        offsetMinute > 59) {
       throw const BackupFormatException('created_at 无效');
     }
-    final inputYear = int.parse(dateParts.group(1)!);
-    final inputMonth = int.parse(dateParts.group(2)!);
-    final inputDay = int.parse(dateParts.group(3)!);
     final calendarDate = DateTime.utc(inputYear, inputMonth, inputDay);
     if (calendarDate.year != inputYear ||
         calendarDate.month != inputMonth ||
         calendarDate.day != inputDay) {
+      throw const BackupFormatException('created_at 无效');
+    }
+    final DateTime createdAt;
+    try {
+      createdAt = DateTime.parse(createdAtValue);
+    } catch (_) {
       throw const BackupFormatException('created_at 无效');
     }
 
