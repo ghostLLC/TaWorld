@@ -19,28 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../data/local/database_helper.dart';
-
-/// 备份文件元信息
-class BackupInfo {
-  final int schemaVersion;
-  final String appVersion;
-  final DateTime createdAt;
-  final Map<String, int> rowCounts;
-
-  const BackupInfo({
-    required this.schemaVersion,
-    required this.appVersion,
-    required this.createdAt,
-    required this.rowCounts,
-  });
-
-  /// 格式化为可读的摘要文本
-  String get summary {
-    final dateStr = DateFormat('yyyy-MM-dd HH:mm').format(createdAt);
-    final totalEntries = rowCounts.values.fold(0, (a, b) => a + b);
-    return 'v$appVersion · schema v$schemaVersion · $dateStr\n共 $totalEntries 条数据记录';
-  }
-}
+import 'backup/backup_archive_codec.dart';
 
 /// 数据备份与恢复
 abstract final class DataBackupService {
