@@ -1,21 +1,13 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Tool')]
 param(
     [switch]$Gradle,
     [switch]$UseProxy,
+    [Parameter(ParameterSetName = 'Proxy', Mandatory = $true)]
     [string]$ProxyUri = 'http://127.0.0.1:7897',
-    [Parameter(ValueFromRemainingArguments = $true)]
+    [Parameter(ParameterSetName = 'Tool', ValueFromRemainingArguments = $true)]
+    [Parameter(ParameterSetName = 'Proxy', ValueFromRemainingArguments = $true)]
     [string[]]$ToolArgs
 )
-
-# PowerShell assigns otherwise-unqualified string parameters positional
-# binding precedence. Preserve the public parameter list above while making
-# ordinary calls such as `taworld.ps1 pub get` reach the child tool: a ProxyUri
-# is considered supplied only when its parameter name appears in the call.
-$proxyUriWasNamed = $MyInvocation.Line -match '(?i)(?:^|\s)-ProxyUri(?:\s|=|:)'
-if (-not $proxyUriWasNamed -and $PSBoundParameters.ContainsKey('ProxyUri')) {
-    $ToolArgs = @($ProxyUri) + @($ToolArgs)
-    $ProxyUri = 'http://127.0.0.1:7897'
-}
 
 $ErrorActionPreference = 'Stop'
 
@@ -251,7 +243,10 @@ try {
 
     $childExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
 } catch {
-    Write-Error $_
+    # Write directly to stderr so the diagnostic cannot become a second
+    # terminating error while ErrorActionPreference is Stop. The explicit
+    # exit below must remain reachable for wrapper/preflight failures.
+    [Console]::Error.WriteLine($_.Exception.Message)
     $childExitCode = 1
 } finally {
     if ($locationPushed) {
