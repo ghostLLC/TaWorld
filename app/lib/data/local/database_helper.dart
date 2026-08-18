@@ -14,22 +14,48 @@ class DatabaseHelper {
   static const _dbName = 'taworld.db';
   static const _dbVersion = 4;
   static const _uuid = Uuid();
+  static DatabaseFactory? _databaseFactoryOverride;
+  static String? _databasePathOverride;
+
+  /// Current local database schema version.
+  static int get schemaVersion => _dbVersion;
 
   /// 数据库文件名（供备份/恢复服务使用）
   static String get dbFileName => _dbName;
 
   /// 获取数据库完整路径
   static Future<String> getDatabasePath() async {
+    final overridePath = _databasePathOverride;
+    if (overridePath != null) return overridePath;
+
     final dbPath = await getDatabasesPath();
     return p.join(dbPath, _dbName);
   }
 
-  /// 强制关闭并重新打开数据库（导入备份后使用）
-  static Future<void> forceReopen() async {
-    if (_database != null) {
-      await _database!.close();
+  /// Configure the database factory and path for isolated tests.
+  static Future<void> configureForTesting({
+    required DatabaseFactory factory,
+    required String path,
+  }) async {
+    await close();
+    _databaseFactoryOverride = factory;
+    _databasePathOverride = path;
+  }
+
+  /// Close the test database and restore production defaults.
+  static Future<void> resetForTesting() async {
+    final db = _database;
+    if (db != null) {
+      await db.close();
       _database = null;
     }
+    _databaseFactoryOverride = null;
+    _databasePathOverride = null;
+  }
+
+  /// 强制关闭并重新打开数据库（导入备份后使用）
+  static Future<void> forceReopen() async {
+    await close();
     await database;
   }
 
@@ -41,18 +67,22 @@ class DatabaseHelper {
   }
 
   static Future<Database> _initDatabase() async {
-    final dbPath = await getDatabasesPath();
-    final path = p.join(dbPath, _dbName);
+    final factory = _databaseFactoryOverride ?? databaseFactory;
+    final path = await getDatabasePath();
 
-    return openDatabase(
+    return factory.openDatabase(
       path,
-      version: _dbVersion,
-      onCreate: _onCreate,
-      onUpgrade: _onUpgrade,
-      onConfigure: (db) async {
-        await db.execute('PRAGMA foreign_keys = ON');
-      },
+      options: OpenDatabaseOptions(
+        version: _dbVersion,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+        onConfigure: _onConfigure,
+      ),
     );
+  }
+
+  static Future<void> _onConfigure(Database db) async {
+    await db.execute('PRAGMA foreign_keys = ON');
   }
 
   static Future<void> _onCreate(Database db, int version) async {
@@ -104,7 +134,7 @@ class DatabaseHelper {
       CREATE TABLE reminder_logs (
         id TEXT PRIMARY KEY,
         config_id TEXT NOT NULL REFERENCES reminder_configs(id) ON DELETE CASCADE,
-        partner_id TEXT NOT NULL REFERENCES partners(id),
+        partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
         message TEXT,
         status TEXT NOT NULL DEFAULT 'triggered',
         triggered_at TEXT NOT NULL,
@@ -230,7 +260,11 @@ class DatabaseHelper {
     await _seedAchievements(db);
   }
 
-  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+  static Future<void> _onUpgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
     if (oldVersion < 2) {
       await db.execute('''
         CREATE TABLE IF NOT EXISTS ai_pending_messages (
@@ -299,10 +333,7 @@ class DatabaseHelper {
   static Future<void> _seedAchievements(Database db) async {
     final batch = db.batch();
     for (final seed in kSeedAchievements) {
-      batch.insert('achievements', {
-        'id': _uuid.v4(),
-        ...seed,
-      });
+      batch.insert('achievements', {'id': _uuid.v4(), ...seed});
     }
     await batch.commit(noResult: true);
   }
@@ -312,7 +343,8 @@ class DatabaseHelper {
 
   /// 关闭数据库（测试/清理用）
   static Future<void> close() async {
-    final db = await database;
+    final db = _database;
+    if (db == null) return;
     await db.close();
     _database = null;
   }
