@@ -11,7 +11,6 @@ import 'dart:developer' as dev;
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:workmanager/workmanager.dart';
 
 import '../services/local/local_reminder_service.dart';
@@ -20,6 +19,7 @@ import '../services/reminder_scheduler.dart';
 import '../services/weather_service.dart';
 import '../services/ai_proactive_service.dart';
 import '../services/ai_memory_dreamer.dart';
+import '../services/timezone_service.dart';
 
 /// 后台任务名称常量
 const _taskWeatherCheck = 'taworld_weather_check';
@@ -87,12 +87,12 @@ abstract final class BackgroundTaskService {
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
-    // 初始化时区数据（后台 Isolate 中静态变量为空）
-    tz_data.initializeTimeZones();
-
     dev.log('后台任务开始: $taskName', name: 'TaWorld');
 
     try {
+      // 后台 Isolate 的静态变量为空，必须在任务内初始化设备时区。
+      await TimezoneService.initialize();
+
       switch (taskName) {
         case _taskWeatherCheck:
           await _runWeatherCheck();

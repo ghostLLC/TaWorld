@@ -12,16 +12,24 @@
 /// 通知 ID 策略：使用 configId.hashCode XOR 时间偏移量，确保唯一性。
 library;
 
+import 'dart:developer' as dev;
+
 import '../data/models/reminder_config.dart';
 import 'notification_service.dart';
 import 'local/local_reminder_service.dart';
 import 'local/partner_service.dart';
+import 'timezone_service.dart';
 
 abstract final class ReminderScheduler {
   /// 初始化：调度所有启用的提醒
   ///
   /// 在 App 启动时调用，读取所有 enabled=1 的配置并调度。
   static Future<void> scheduleAll() async {
+    if (!TimezoneService.isInitialized) {
+      dev.log('跳过提醒调度：设备时区尚未初始化', name: 'TaWorld');
+      return;
+    }
+
     // 先清除所有旧的调度通知
     await NotificationService.cancelAll();
 
