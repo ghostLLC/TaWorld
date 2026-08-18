@@ -65,6 +65,9 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .packages
 .pub-cache/
+# TaWorld local build caches
+/.pub-cache/
+/app/android/.kotlin/
 .pub/
 /build/
 app/.flutter-plugins
@@ -80,6 +83,9 @@ docker-compose.override.yml
 
 # ==================== OMC ====================
 .omc/
+
+# ==================== Competition ====================
+competition/
 
 # ==================== OS ====================
 Thumbs.db
