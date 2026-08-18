@@ -22,6 +22,7 @@ import '../../../services/ai_memory_service.dart';
 import '../../../services/ai_memory_dreamer.dart';
 import '../../../services/ai_service.dart';
 import '../../../services/data_backup_service.dart';
+import '../../../services/backup/backup_importer.dart';
 import '../../../services/local/local_user_service.dart';
 
 // ============================================================
@@ -55,10 +56,7 @@ class SettingsScreen extends StatelessWidget {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('设置'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('设置'), centerTitle: true),
       body: ListView(
         padding: TaSpacing.page,
         children: [
@@ -67,8 +65,10 @@ class SettingsScreen extends StatelessWidget {
             padding: EdgeInsets.zero,
             onTap: () => context.push(SettingsRoutes.notifications),
             child: ListTile(
-              leading: Icon(Icons.notifications_rounded,
-                  color: theme.colorScheme.primary),
+              leading: Icon(
+                Icons.notifications_rounded,
+                color: theme.colorScheme.primary,
+              ),
               title: const Text('通知与关怀'),
               subtitle: Text(
                 '推送通知、AI 主动关怀',
@@ -76,8 +76,10 @@ class SettingsScreen extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Icon(Icons.chevron_right_rounded,
-                  color: theme.colorScheme.onSurfaceVariant),
+              trailing: Icon(
+                Icons.chevron_right_rounded,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
           const SizedBox(height: TaSpacing.sm),
@@ -85,8 +87,10 @@ class SettingsScreen extends StatelessWidget {
             padding: EdgeInsets.zero,
             onTap: () => context.push(SettingsRoutes.appearance),
             child: ListTile(
-              leading: Icon(Icons.palette_rounded,
-                  color: theme.colorScheme.primary),
+              leading: Icon(
+                Icons.palette_rounded,
+                color: theme.colorScheme.primary,
+              ),
               title: const Text('外观'),
               subtitle: Text(
                 '主题模式、配色方案',
@@ -94,8 +98,10 @@ class SettingsScreen extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Icon(Icons.chevron_right_rounded,
-                  color: theme.colorScheme.onSurfaceVariant),
+              trailing: Icon(
+                Icons.chevron_right_rounded,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
           const SizedBox(height: TaSpacing.sm),
@@ -103,8 +109,10 @@ class SettingsScreen extends StatelessWidget {
             padding: EdgeInsets.zero,
             onTap: () => context.push(SettingsRoutes.aiData),
             child: ListTile(
-              leading: Icon(Icons.memory_rounded,
-                  color: theme.colorScheme.primary),
+              leading: Icon(
+                Icons.memory_rounded,
+                color: theme.colorScheme.primary,
+              ),
               title: const Text('AI 与数据'),
               subtitle: Text(
                 'API Key、AI 记忆、数据备份',
@@ -112,8 +120,10 @@ class SettingsScreen extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Icon(Icons.chevron_right_rounded,
-                  color: theme.colorScheme.onSurfaceVariant),
+              trailing: Icon(
+                Icons.chevron_right_rounded,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
           const SizedBox(height: TaSpacing.sm),
@@ -121,8 +131,10 @@ class SettingsScreen extends StatelessWidget {
             padding: EdgeInsets.zero,
             onTap: () => context.push(SettingsRoutes.account),
             child: ListTile(
-              leading: Icon(Icons.person_rounded,
-                  color: theme.colorScheme.primary),
+              leading: Icon(
+                Icons.person_rounded,
+                color: theme.colorScheme.primary,
+              ),
               title: const Text('账户'),
               subtitle: Text(
                 '头像、昵称、版本、法律条款',
@@ -130,8 +142,10 @@ class SettingsScreen extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Icon(Icons.chevron_right_rounded,
-                  color: theme.colorScheme.onSurfaceVariant),
+              trailing: Icon(
+                Icons.chevron_right_rounded,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
           const SizedBox(height: TaSpacing.xxl),
@@ -149,8 +163,7 @@ class _NotificationsSettings extends StatefulWidget {
   const _NotificationsSettings();
 
   @override
-  State<_NotificationsSettings> createState() =>
-      _NotificationsSettingsState();
+  State<_NotificationsSettings> createState() => _NotificationsSettingsState();
 }
 
 class _NotificationsSettingsState extends State<_NotificationsSettings> {
@@ -182,8 +195,7 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
   }
 
   Future<void> _checkPermissions() async {
-    final (enabled, canSchedule) =
-        await NotificationService.checkPermission();
+    final (enabled, canSchedule) = await NotificationService.checkPermission();
     if (!mounted) return;
     setState(() {
       _notificationsEnabled = enabled;
@@ -209,10 +221,7 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('通知与关怀'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('通知与关怀'), centerTitle: true),
       body: ListView(
         padding: TaSpacing.page,
         children: [
@@ -235,17 +244,18 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
                 ),
                 if (!_notificationsEnabled || !_exactAlarmsAllowed) ...[
                   Divider(
-                      height: 1,
-                      color: theme.colorScheme.error.withValues(alpha: 0.3)),
+                    height: 1,
+                    color: theme.colorScheme.error.withValues(alpha: 0.3),
+                  ),
                   ListTile(
-                    leading: Icon(Icons.warning_amber_rounded,
-                        color: theme.colorScheme.error, size: 22),
+                    leading: Icon(
+                      Icons.warning_amber_rounded,
+                      color: theme.colorScheme.error,
+                      size: 22,
+                    ),
                     title: Text(
-                      !_notificationsEnabled
-                          ? '通知权限未开启'
-                          : '精确定时权限未开启',
-                      style:
-                          TextStyle(color: theme.colorScheme.error),
+                      !_notificationsEnabled ? '通知权限未开启' : '精确定时权限未开启',
+                      style: TextStyle(color: theme.colorScheme.error),
                     ),
                     subtitle: Text(
                       !_notificationsEnabled
@@ -269,9 +279,11 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
                   ),
                 ],
                 Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant
-                        .withValues(alpha: 0.3)),
+                  height: 1,
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.3,
+                  ),
+                ),
                 SwitchListTile(
                   title: const Text('AI 主动关怀'),
                   subtitle: Text(
@@ -338,10 +350,7 @@ class _AppearanceSettingsState extends State<_AppearanceSettings> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('外观'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('外观'), centerTitle: true),
       body: ListView(
         padding: TaSpacing.page,
         children: [
@@ -399,8 +408,7 @@ class _AppearanceSettingsState extends State<_AppearanceSettings> {
                     final isSelected =
                         ThemeService.instance.paletteId == palette.id;
                     return GestureDetector(
-                      onTap: () =>
-                          ThemeService.instance.setPalette(palette.id),
+                      onTap: () => ThemeService.instance.setPalette(palette.id),
                       child: AnimatedContainer(
                         duration: TaAnimation.fast,
                         width: 56,
@@ -416,8 +424,11 @@ class _AppearanceSettingsState extends State<_AppearanceSettings> {
                           ),
                         ),
                         child: isSelected
-                            ? Icon(Icons.check_rounded,
-                                color: Colors.white, size: 22)
+                            ? Icon(
+                                Icons.check_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              )
                             : null,
                       ),
                     );
@@ -426,8 +437,7 @@ class _AppearanceSettingsState extends State<_AppearanceSettings> {
                 const SizedBox(height: TaSpacing.xs),
                 Text(
                   kTaPalettes
-                          .where((p) =>
-                              p.id == ThemeService.instance.paletteId)
+                          .where((p) => p.id == ThemeService.instance.paletteId)
                           .map((p) => p.label)
                           .firstOrNull ??
                       '',
@@ -494,15 +504,15 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       await AiMemoryDreamer.dream();
       await _loadMemoryStats();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('记忆整合完成')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('记忆整合完成')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('整合失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('整合失败: $e')));
       }
     } finally {
       if (mounted) setState(() => _dreaming = false);
@@ -515,8 +525,7 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
         title: const Text('清除 AI 记忆'),
-        content: const Text(
-            '将清除 AI 记住的所有信息（事实、对话摘要、历史片段），但不会删除对话记录本身。确定吗？'),
+        content: const Text('将清除 AI 记住的所有信息（事实、对话摘要、历史片段），但不会删除对话记录本身。确定吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -538,9 +547,9 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       await AiService.resetCacheStats();
       await _loadMemoryStats();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('AI 记忆已清除')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('AI 记忆已清除')));
       }
     }
   }
@@ -553,16 +562,15 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       await DataBackupService.exportAndShare();
       await _loadLastBackupTime();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('备份已保存，可分享到微信文件传输助手等渠道')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('备份已保存，可分享到微信文件传输助手等渠道')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导出失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('导出失败: $e')));
       }
     } finally {
       if (mounted) setState(() => _exporting = false);
@@ -588,8 +596,7 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
           title: const Text('导入备份'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -598,7 +605,7 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
               Text(info.summary),
               const SizedBox(height: 12),
               Text(
-                '导入将覆盖当前所有数据（用户信息、AI 记忆、对话记录等），API Key 需要重新配置。',
+                '导入将覆盖当前所有数据（用户信息、AI 记忆、对话记录等）。API Key 仅保留在本机，不会从备份导入。',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.error,
                   fontSize: 13,
@@ -628,18 +635,35 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       await DataBackupService.importBackup(filePath);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('数据导入成功，请重启 APP')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('数据导入成功，请重启 APP')));
         // 刷新页面状态
         _loadMemoryStats();
         _loadLastBackupTime();
       }
-    } catch (e) {
+    } on BackupImportException catch (e, stackTrace) {
+      debugPrint('Backup import failed: ${e.cause}');
+      debugPrintStack(stackTrace: e.causeStackTrace);
+      if (e.rollbackCause != null) {
+        debugPrint('Backup rollback failed: ${e.rollbackCause}');
+        debugPrintStack(stackTrace: e.rollbackStackTrace ?? stackTrace);
+      }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导入失败: $e')),
-        );
+        final message = e.rollbackSucceeded
+            ? '导入失败，原数据已恢复'
+            : '导入和自动恢复均失败，请勿继续编辑数据，并保留导入前备份文件';
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      }
+    } catch (e, stackTrace) {
+      debugPrint('Backup validation/import failed: $e');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('导入失败，备份文件未通过安全检查')));
       }
     } finally {
       if (mounted) setState(() => _importing = false);
@@ -651,10 +675,7 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI 与数据'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('AI 与数据'), centerTitle: true),
       body: ListView(
         padding: TaSpacing.page,
         children: [
@@ -668,8 +689,10 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
             child: Column(
               children: [
                 ListTile(
-                  leading: Icon(Icons.key_rounded,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.key_rounded,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('API Key 管理'),
                   subtitle: Text(
                     '配置 DeepSeek AI 密钥',
@@ -677,8 +700,10 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  trailing: Icon(Icons.chevron_right_rounded,
-                      color: theme.colorScheme.onSurfaceVariant),
+                  trailing: Icon(
+                    Icons.chevron_right_rounded,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                   onTap: () => context.push(Routes.apiKeys),
                 ),
               ],
@@ -695,8 +720,10 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
             child: Column(
               children: [
                 ListTile(
-                  leading: Icon(Icons.psychology_rounded,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.psychology_rounded,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('记忆统计'),
                   subtitle: Text(
                     _memoryStats != null
@@ -708,12 +735,16 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                   ),
                 ),
                 Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant
-                        .withValues(alpha: 0.3)),
+                  height: 1,
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.3,
+                  ),
+                ),
                 ListTile(
-                  leading: Icon(Icons.cached_rounded,
-                      color: theme.colorScheme.tertiary),
+                  leading: Icon(
+                    Icons.cached_rounded,
+                    color: theme.colorScheme.tertiary,
+                  ),
                   title: const Text('DeepSeek 缓存命中率'),
                   subtitle: Text(
                     _cacheStats != null
@@ -730,8 +761,7 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                       await _loadMemoryStats();
                       if (mounted) {
                         messenger.showSnackBar(
-                          const SnackBar(
-                              content: Text('缓存统计已重置')),
+                          const SnackBar(content: Text('缓存统计已重置')),
                         );
                       }
                     },
@@ -739,12 +769,16 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                   ),
                 ),
                 Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant
-                        .withValues(alpha: 0.3)),
+                  height: 1,
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.3,
+                  ),
+                ),
                 ListTile(
-                  leading: Icon(Icons.auto_fix_high_rounded,
-                      color: theme.colorScheme.secondary),
+                  leading: Icon(
+                    Icons.auto_fix_high_rounded,
+                    color: theme.colorScheme.secondary,
+                  ),
                   title: const Text('立即整合记忆'),
                   subtitle: Text(
                     '去重、合并、衰减，提升记忆质量',
@@ -761,22 +795,26 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                             color: theme.colorScheme.primary,
                           ),
                         )
-                      : Icon(Icons.play_arrow_rounded,
-                          color:
-                              theme.colorScheme.onSurfaceVariant),
+                      : Icon(
+                          Icons.play_arrow_rounded,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                   onTap: _dreaming ? null : _runDreamNow,
                 ),
                 Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant
-                        .withValues(alpha: 0.3)),
+                  height: 1,
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.3,
+                  ),
+                ),
                 ListTile(
-                  leading: Icon(Icons.memory_rounded,
-                      color: theme.colorScheme.error),
+                  leading: Icon(
+                    Icons.memory_rounded,
+                    color: theme.colorScheme.error,
+                  ),
                   title: Text(
                     '清除 AI 记忆',
-                    style:
-                        TextStyle(color: theme.colorScheme.error),
+                    style: TextStyle(color: theme.colorScheme.error),
                   ),
                   subtitle: Text(
                     '删除所有记忆数据，重新开始',
@@ -800,8 +838,10 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
             child: Column(
               children: [
                 ListTile(
-                  leading: Icon(Icons.upload_rounded,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.upload_rounded,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('导出备份'),
                   subtitle: Text(
                     _lastBackupTime != null
@@ -820,18 +860,23 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                             color: theme.colorScheme.primary,
                           ),
                         )
-                      : Icon(Icons.chevron_right_rounded,
-                          color:
-                              theme.colorScheme.onSurfaceVariant),
+                      : Icon(
+                          Icons.chevron_right_rounded,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                   onTap: _exporting ? null : _exportBackup,
                 ),
                 Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant
-                        .withValues(alpha: 0.3)),
+                  height: 1,
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.3,
+                  ),
+                ),
                 ListTile(
-                  leading: Icon(Icons.download_rounded,
-                      color: theme.colorScheme.secondary),
+                  leading: Icon(
+                    Icons.download_rounded,
+                    color: theme.colorScheme.secondary,
+                  ),
                   title: const Text('导入备份'),
                   subtitle: Text(
                     '从备份文件恢复数据（支持微信/QQ接收的文件）',
@@ -848,9 +893,10 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
                             color: theme.colorScheme.secondary,
                           ),
                         )
-                      : Icon(Icons.chevron_right_rounded,
-                          color:
-                              theme.colorScheme.onSurfaceVariant),
+                      : Icon(
+                          Icons.chevron_right_rounded,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                   onTap: _importing ? null : _importBackup,
                 ),
               ],
@@ -918,20 +964,16 @@ class _AccountSettingsState extends State<_AccountSettings> {
     final user = await LocalUserService.getUser();
     if (!mounted) return;
 
-    final controller =
-        TextEditingController(text: user?.nickname ?? '');
+    final controller = TextEditingController(text: user?.nickname ?? '');
     final newNickname = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
         title: const Text('修改昵称'),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '请输入新昵称',
-          ),
+          decoration: const InputDecoration(hintText: '请输入新昵称'),
         ),
         actions: [
           TextButton(
@@ -939,8 +981,7 @@ class _AccountSettingsState extends State<_AccountSettings> {
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () =>
-                Navigator.of(context).pop(controller.text),
+            onPressed: () => Navigator.of(context).pop(controller.text),
             child: const Text('确认'),
           ),
         ],
@@ -957,10 +998,8 @@ class _AccountSettingsState extends State<_AccountSettings> {
   void _showTermsOfService() {
     showDialog(
       context: context,
-      builder: (context) => _LegalDocumentDialog(
-        title: '用户协议',
-        content: _termsOfServiceText,
-      ),
+      builder: (context) =>
+          _LegalDocumentDialog(title: '用户协议', content: _termsOfServiceText),
     );
   }
 
@@ -968,10 +1007,8 @@ class _AccountSettingsState extends State<_AccountSettings> {
   void _showPrivacyPolicy() {
     showDialog(
       context: context,
-      builder: (context) => _LegalDocumentDialog(
-        title: '隐私政策',
-        content: _privacyPolicyText,
-      ),
+      builder: (context) =>
+          _LegalDocumentDialog(title: '隐私政策', content: _privacyPolicyText),
     );
   }
 
@@ -979,11 +1016,9 @@ class _AccountSettingsState extends State<_AccountSettings> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
         title: const Text('确认重置'),
-        content: const Text(
-            '这将清除所有本地数据（用户信息、关心的人、提醒记录等），操作不可恢复。'),
+        content: const Text('这将清除所有本地数据（用户信息、关心的人、提醒记录等），操作不可恢复。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -1028,10 +1063,7 @@ class _AccountSettingsState extends State<_AccountSettings> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('账户'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('账户'), centerTitle: true),
       body: ListView(
         padding: TaSpacing.page,
         children: [
@@ -1088,11 +1120,15 @@ class _AccountSettingsState extends State<_AccountSettings> {
             child: Column(
               children: [
                 ListTile(
-                  leading: Icon(Icons.edit_outlined,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.edit_outlined,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('修改昵称'),
-                  trailing: Icon(Icons.chevron_right_rounded,
-                      color: theme.colorScheme.onSurfaceVariant),
+                  trailing: Icon(
+                    Icons.chevron_right_rounded,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                   onTap: _showNicknameDialog,
                 ),
               ],
@@ -1109,8 +1145,10 @@ class _AccountSettingsState extends State<_AccountSettings> {
             child: Column(
               children: [
                 ListTile(
-                  leading: Icon(Icons.info_outline_rounded,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.info_outline_rounded,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('版本'),
                   trailing: Text(
                     'v0.1.0',
@@ -1120,19 +1158,27 @@ class _AccountSettingsState extends State<_AccountSettings> {
                   ),
                 ),
                 ListTile(
-                  leading: Icon(Icons.description_outlined,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.description_outlined,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('用户协议'),
-                  trailing: Icon(Icons.chevron_right_rounded,
-                      color: theme.colorScheme.onSurfaceVariant),
+                  trailing: Icon(
+                    Icons.chevron_right_rounded,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                   onTap: _showTermsOfService,
                 ),
                 ListTile(
-                  leading: Icon(Icons.privacy_tip_outlined,
-                      color: theme.colorScheme.primary),
+                  leading: Icon(
+                    Icons.privacy_tip_outlined,
+                    color: theme.colorScheme.primary,
+                  ),
                   title: const Text('隐私政策'),
-                  trailing: Icon(Icons.chevron_right_rounded,
-                      color: theme.colorScheme.onSurfaceVariant),
+                  trailing: Icon(
+                    Icons.chevron_right_rounded,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                   onTap: _showPrivacyPolicy,
                 ),
               ],
@@ -1258,10 +1304,7 @@ Ta的世界 隐私政策
 
 /// 法律文档弹窗
 class _LegalDocumentDialog extends StatelessWidget {
-  const _LegalDocumentDialog({
-    required this.title,
-    required this.content,
-  });
+  const _LegalDocumentDialog({required this.title, required this.content});
 
   final String title;
   final String content;
@@ -1306,9 +1349,9 @@ class _SectionTitle extends StatelessWidget {
     return Text(
       title,
       style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-            fontWeight: FontWeight.w600,
-          ),
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+        fontWeight: FontWeight.w600,
+      ),
     );
   }
 }
