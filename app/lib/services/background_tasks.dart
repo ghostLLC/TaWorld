@@ -15,6 +15,7 @@ import 'package:workmanager/workmanager.dart';
 
 import '../services/local/local_reminder_service.dart';
 import '../services/local/partner_service.dart';
+import '../services/notification_service.dart';
 import '../services/reminder_scheduler.dart';
 import '../services/weather_service.dart';
 import '../services/ai_proactive_service.dart';
@@ -207,6 +208,7 @@ int _makeAlertId(String partnerId, String condition) {
 
 /// 补充调度 zonedSchedule 通知，防止 7 天窗口过期后通知断档
 Future<void> _runNotificationRenew() async {
+  await NotificationService.init();
   await ReminderScheduler.scheduleAll();
   dev.log('通知续期完成', name: 'TaWorld');
 }
