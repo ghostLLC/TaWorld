@@ -10,6 +10,8 @@ library;
 import 'package:dio/dio.dart';
 import 'package:geocoding/geocoding.dart';
 
+import 'stale_while_revalidate_cache.dart';
+
 // ==================== 城市坐标映射 ====================
 
 /// 城市中文名 → [纬度, 经度]
@@ -187,10 +189,10 @@ const _cityCoords = <String, List<double>>{
 
 /// 天气查询结果
 class WeatherResult {
-  final String text;       // 天气描述（中文）
-  final int temp;          // 温度（°C）
-  final String? windDir;   // 风向
-  final int? humidity;     // 湿度（%）
+  final String text; // 天气描述（中文）
+  final int temp; // 温度（°C）
+  final String? windDir; // 风向
+  final int? humidity; // 湿度（%）
   const WeatherResult({
     required this.text,
     required this.temp,
@@ -213,11 +215,11 @@ class WeatherCheckResult {
 
 /// 逐时预报项
 class HourlyForecast {
-  final int hour;           // 0-23
-  final String text;        // 天气描述（中文）
-  final int temp;           // 温度（°C）
-  final int chanceOfRain;   // 降水概率（%）
-  final double precipMM;    // 降水量（mm）
+  final int hour; // 0-23
+  final String text; // 天气描述（中文）
+  final int temp; // 温度（°C）
+  final int chanceOfRain; // 降水概率（%）
+  final double precipMM; // 降水量（mm）
   const HourlyForecast({
     required this.hour,
     required this.text,
@@ -229,9 +231,9 @@ class HourlyForecast {
 
 /// 每日预报
 class DailyForecast {
-  final String date;              // yyyy-MM-dd
-  final int maxTemp;              // 最高温（°C）
-  final int minTemp;              // 最低温（°C）
+  final String date; // yyyy-MM-dd
+  final int maxTemp; // 最高温（°C）
+  final int minTemp; // 最低温（°C）
   final List<HourlyForecast> hourly;
   const DailyForecast({
     required this.date,
@@ -245,16 +247,16 @@ class DailyForecast {
 class FullWeatherResult {
   final WeatherResult current;
   final List<DailyForecast> forecast; // 最多 3 天
-  const FullWeatherResult({
-    required this.current,
-    required this.forecast,
-  });
+  const FullWeatherResult({required this.current, required this.forecast});
 }
 
 // ==================== 天气服务 ====================
 
 abstract final class WeatherService {
   static const _baseUrl = 'https://api.open-meteo.com/v1/forecast';
+  static const cacheTtl = Duration(minutes: 10);
+  static final StaleWhileRevalidateCache<String, FullWeatherResult>
+  _fullWeatherCache = StaleWhileRevalidateCache(ttl: cacheTtl);
 
   /// 最后一次查询失败的原因（中文，可直接展示给用户）
   static String? lastError;
@@ -279,23 +281,33 @@ abstract final class WeatherService {
   }
 
   /// 获取完整天气数据（城市名，当前 + 3 天预报）
-  static Future<FullWeatherResult?> getFullWeather(String location) async {
+  static Future<FullWeatherResult?> getFullWeather(
+    String location, {
+    bool forceRefresh = false,
+  }) {
     lastError = null;
+    final cacheKey = 'location:${location.trim().toLowerCase()}';
+    Future<FullWeatherResult?> loader() => _loadFullWeather(location);
+    return forceRefresh
+        ? _fullWeatherCache.refresh(cacheKey, loader)
+        : _fullWeatherCache.get(cacheKey, loader);
+  }
 
+  static Future<FullWeatherResult?> _loadFullWeather(String location) async {
     // 0. 清理城市名：去空格、去掉"市"/"县"/"区"后缀
     final cleaned = location.trim().replaceAll(RegExp(r'[市县区]$'), '');
 
     // 1. 先查坐标映射表（用清理后的名字）
     final coords = _cityCoords[cleaned];
     if (coords != null) {
-      return getFullWeatherByCoords(coords[0], coords[1]);
+      return _loadFullWeatherByCoords(coords[0], coords[1]);
     }
 
     // 1b. 也尝试原始名字（以防万一）
     if (cleaned != location.trim()) {
       final coords2 = _cityCoords[location.trim()];
       if (coords2 != null) {
-        return getFullWeatherByCoords(coords2[0], coords2[1]);
+        return _loadFullWeatherByCoords(coords2[0], coords2[1]);
       }
     }
 
@@ -306,17 +318,18 @@ abstract final class WeatherService {
         final lat = double.tryParse(parts[0].trim());
         final lon = double.tryParse(parts[1].trim());
         if (lat != null && lon != null) {
-          return getFullWeatherByCoords(lat, lon);
+          return _loadFullWeatherByCoords(lat, lon);
         }
       }
     }
 
     // 3. 通过 geocoding 将城市名转为坐标（用清理后的名字）
     try {
-      final locations = await locationFromAddress(cleaned)
-          .timeout(const Duration(seconds: 8));
+      final locations = await locationFromAddress(
+        cleaned,
+      ).timeout(const Duration(seconds: 8));
       if (locations.isNotEmpty) {
-        return getFullWeatherByCoords(
+        return _loadFullWeatherByCoords(
           locations.first.latitude,
           locations.first.longitude,
         );
@@ -332,6 +345,21 @@ abstract final class WeatherService {
   /// 获取完整天气数据（坐标，当前 + 3 天预报）
   static Future<FullWeatherResult?> getFullWeatherByCoords(
     double latitude,
+    double longitude, {
+    bool forceRefresh = false,
+  }) {
+    lastError = null;
+    final cacheKey =
+        'coords:${latitude.toStringAsFixed(4)},${longitude.toStringAsFixed(4)}';
+    Future<FullWeatherResult?> loader() =>
+        _loadFullWeatherByCoords(latitude, longitude);
+    return forceRefresh
+        ? _fullWeatherCache.refresh(cacheKey, loader)
+        : _fullWeatherCache.get(cacheKey, loader);
+  }
+
+  static Future<FullWeatherResult?> _loadFullWeatherByCoords(
+    double latitude,
     double longitude,
   ) async {
     final dio = Dio();
@@ -341,9 +369,12 @@ abstract final class WeatherService {
         queryParameters: {
           'latitude': latitude,
           'longitude': longitude,
-          'current': 'temperature_2m,relative_humidity_2m,weather_code,wind_direction_10m',
-          'hourly': 'temperature_2m,weather_code,precipitation_probability,precipitation',
-          'daily': 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum',
+          'current':
+              'temperature_2m,relative_humidity_2m,weather_code,wind_direction_10m',
+          'hourly':
+              'temperature_2m,weather_code,precipitation_probability,precipitation',
+          'daily':
+              'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum',
           'timezone': 'auto',
           'forecast_days': 3,
         },
@@ -384,12 +415,16 @@ abstract final class WeatherService {
 
       if (daily != null) {
         final dates = (daily['time'] as List?)?.cast<String>() ?? [];
-        final maxTemps = (daily['temperature_2m_max'] as List?)?.cast<num>() ?? [];
-        final minTemps = (daily['temperature_2m_min'] as List?)?.cast<num>() ?? [];
+        final maxTemps =
+            (daily['temperature_2m_max'] as List?)?.cast<num>() ?? [];
+        final minTemps =
+            (daily['temperature_2m_min'] as List?)?.cast<num>() ?? [];
         // 预读逐时数据，按日分组
         final hourlyTimes = (hourly?['time'] as List?)?.cast<String>() ?? [];
-        final hourlyTemps = (hourly?['temperature_2m'] as List?)?.cast<num>() ?? [];
-        final hourlyCodes = (hourly?['weather_code'] as List?)?.cast<int>() ?? [];
+        final hourlyTemps =
+            (hourly?['temperature_2m'] as List?)?.cast<num>() ?? [];
+        final hourlyCodes =
+            (hourly?['weather_code'] as List?)?.cast<int>() ?? [];
         final hourlyPrecipProb =
             (hourly?['precipitation_probability'] as List?)?.cast<num>() ?? [];
         final hourlyPrecip =
@@ -402,26 +437,30 @@ abstract final class WeatherService {
           for (int h = 0; h < hourlyTimes.length; h++) {
             if (!hourlyTimes[h].startsWith(datePrefix)) continue;
             final hour = int.tryParse(hourlyTimes[h].substring(11, 13)) ?? 0;
-            hourlyForecasts.add(HourlyForecast(
-              hour: hour,
-              text: _wmoToChinese(
-                h < hourlyCodes.length ? hourlyCodes[h] : 0,
+            hourlyForecasts.add(
+              HourlyForecast(
+                hour: hour,
+                text: _wmoToChinese(
+                  h < hourlyCodes.length ? hourlyCodes[h] : 0,
+                ),
+                temp: (h < hourlyTemps.length ? hourlyTemps[h] : 0).round(),
+                chanceOfRain:
+                    (h < hourlyPrecipProb.length ? hourlyPrecipProb[h] : 0)
+                        .round(),
+                precipMM: (h < hourlyPrecip.length ? hourlyPrecip[h] : 0)
+                    .toDouble(),
               ),
-              temp: (h < hourlyTemps.length ? hourlyTemps[h] : 0).round(),
-              chanceOfRain:
-                  (h < hourlyPrecipProb.length ? hourlyPrecipProb[h] : 0)
-                      .round(),
-              precipMM:
-                  (h < hourlyPrecip.length ? hourlyPrecip[h] : 0).toDouble(),
-            ));
+            );
           }
 
-          forecast.add(DailyForecast(
-            date: datePrefix,
-            maxTemp: (d < maxTemps.length ? maxTemps[d] : 0).round(),
-            minTemp: (d < minTemps.length ? minTemps[d] : 0).round(),
-            hourly: hourlyForecasts,
-          ));
+          forecast.add(
+            DailyForecast(
+              date: datePrefix,
+              maxTemp: (d < maxTemps.length ? maxTemps[d] : 0).round(),
+              minTemp: (d < minTemps.length ? minTemps[d] : 0).round(),
+              hourly: hourlyForecasts,
+            ),
+          );
         }
       }
 
@@ -495,8 +534,16 @@ abstract final class WeatherService {
 
   static bool _isRainy(String text) {
     const keywords = [
-      '小雨', '中雨', '大雨', '暴雨', '阵雨', '雷阵雨',
-      '毛毛雨', '冻雨', '雨夹雪', '细雨',
+      '小雨',
+      '中雨',
+      '大雨',
+      '暴雨',
+      '阵雨',
+      '雷阵雨',
+      '毛毛雨',
+      '冻雨',
+      '雨夹雪',
+      '细雨',
     ];
     return keywords.any(text.contains);
   }
@@ -513,33 +560,33 @@ abstract final class WeatherService {
   static String _wmoToChinese(int code) {
     return switch (code) {
       0 => '晴',
-      1 => '晴',          // Mainly clear
-      2 => '多云',        // Partly cloudy
-      3 => '阴',          // Overcast
-      45 => '雾',         // Fog
-      48 => '雾凇',       // Depositing rime fog
-      51 => '毛毛雨',     // Light drizzle
-      53 => '毛毛雨',     // Moderate drizzle
-      55 => '细雨',       // Dense drizzle
-      56 => '冻毛毛雨',   // Light freezing drizzle
-      57 => '冻毛毛雨',   // Dense freezing drizzle
-      61 => '小雨',       // Slight rain
-      63 => '中雨',       // Moderate rain
-      65 => '大雨',       // Heavy rain
-      66 => '冻雨',       // Light freezing rain
-      67 => '冻雨',       // Heavy freezing rain
-      71 => '小雪',       // Slight snow
-      73 => '中雪',       // Moderate snow
-      75 => '大雪',       // Heavy snow
-      77 => '雪粒',       // Snow grains
-      80 => '阵雨',       // Slight rain showers
-      81 => '阵雨',       // Moderate rain showers
-      82 => '暴雨',       // Violent rain showers
-      85 => '阵雪',       // Slight snow showers
-      86 => '阵雪',       // Heavy snow showers
-      95 => '雷阵雨',     // Thunderstorm
-      96 => '雷阵雨',     // Thunderstorm with slight hail
-      99 => '雷阵雨',     // Thunderstorm with heavy hail
+      1 => '晴', // Mainly clear
+      2 => '多云', // Partly cloudy
+      3 => '阴', // Overcast
+      45 => '雾', // Fog
+      48 => '雾凇', // Depositing rime fog
+      51 => '毛毛雨', // Light drizzle
+      53 => '毛毛雨', // Moderate drizzle
+      55 => '细雨', // Dense drizzle
+      56 => '冻毛毛雨', // Light freezing drizzle
+      57 => '冻毛毛雨', // Dense freezing drizzle
+      61 => '小雨', // Slight rain
+      63 => '中雨', // Moderate rain
+      65 => '大雨', // Heavy rain
+      66 => '冻雨', // Light freezing rain
+      67 => '冻雨', // Heavy freezing rain
+      71 => '小雪', // Slight snow
+      73 => '中雪', // Moderate snow
+      75 => '大雪', // Heavy snow
+      77 => '雪粒', // Snow grains
+      80 => '阵雨', // Slight rain showers
+      81 => '阵雨', // Moderate rain showers
+      82 => '暴雨', // Violent rain showers
+      85 => '阵雪', // Slight snow showers
+      86 => '阵雪', // Heavy snow showers
+      95 => '雷阵雨', // Thunderstorm
+      96 => '雷阵雨', // Thunderstorm with slight hail
+      99 => '雷阵雨', // Thunderstorm with heavy hail
       _ => '未知',
     };
   }

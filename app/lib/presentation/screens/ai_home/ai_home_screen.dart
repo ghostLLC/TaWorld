@@ -25,6 +25,8 @@ import '../../../services/weather_service.dart';
 import '../../../data/models/partner.dart';
 import '../../../data/models/reminder_config.dart';
 import '../../widgets/widgets.dart';
+import 'conversation_presentation.dart';
+import 'onboarding_prompt_bubble.dart';
 
 // ============================================================
 // 消息模型
@@ -40,6 +42,7 @@ class _ChatMessage {
     this.weatherData,
     this.actionLabel,
     this.streaming = false,
+    this.onboardingPrompt = false,
   });
   final String role;
   final String content;
@@ -47,6 +50,7 @@ class _ChatMessage {
   final Map<String, dynamic>? weatherData;
   final String? actionLabel;
   final bool streaming;
+  final bool onboardingPrompt;
 }
 
 // ============================================================
@@ -60,11 +64,14 @@ class AiHomeScreen extends StatefulWidget {
   State<AiHomeScreen> createState() => _AiHomeScreenState();
 }
 
-class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClientMixin {
+class _AiHomeScreenState extends State<AiHomeScreen>
+    with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 
   final _controller = TextEditingController();
+  final _onboardingController = TextEditingController();
+  final _onboardingFocusNode = FocusNode();
   final _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
 
@@ -159,34 +166,48 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     if (partners.isEmpty) {
       if (!mounted) return;
 
-      // 检查是否已经展示过欢迎消息（持久化，防止切 Tab 重复播放）
       final prefs = await SharedPreferences.getInstance();
-      final welcomeShown = prefs.getBool('welcome_shown') ?? false;
-      if (welcomeShown) return;
+      // 兼容旧版本：welcome_shown 只表示开场介绍曾展示，不代表已完成引导。
+      final introShown =
+          prefs.getBool('welcome_intro_shown') ??
+          prefs.getBool('welcome_shown') ??
+          false;
+      final plan = planOnboardingEntry(
+        hasPartners: false,
+        introShown: introShown,
+      );
 
-      // 以 AI 消息形式逐条发送欢迎语，沉浸式引导
-      final welcomeMessages = [
-        '你好呀，我是小念',
-        '我可以帮你关注在乎的人的天气、写温暖的关怀语、设置贴心提醒',
-        '不过你现在还没有添加关心的人，先来告诉我一个你在意的人吧',
-      ];
-      for (int i = 0; i < welcomeMessages.length; i++) {
-        if (i > 0) {
-          final charCount = welcomeMessages[i].length;
-          final delayMs = (charCount * 100).clamp(2000, 8000);
-          await Future.delayed(Duration(milliseconds: delayMs));
+      if (plan == OnboardingEntryPlan.introAndPrompt) {
+        const welcomeMessages = ['你好呀，我是小念', '我可以帮你关注在乎的人的天气、写温暖的关怀语、设置贴心提醒'];
+        for (var index = 0; index < welcomeMessages.length; index++) {
+          if (index > 0) {
+            final charCount = welcomeMessages[index].length;
+            final delayMs = (charCount * 100).clamp(2000, 8000);
+            await Future.delayed(Duration(milliseconds: delayMs));
+          }
+          if (!mounted) return;
+          setState(() {
+            _messages.add(
+              _ChatMessage(role: 'assistant', content: welcomeMessages[index]),
+            );
+          });
+          _scrollToBottom();
         }
-        if (!mounted) break;
-        setState(() {
-          _messages.add(_ChatMessage(
-            role: 'assistant',
-            content: welcomeMessages[i],
-          ));
-        });
-        _scrollToBottom();
+        await prefs.setBool('welcome_intro_shown', true);
       }
-      // 标记欢迎消息已展示
-      await prefs.setBool('welcome_shown', true);
+
+      if (!mounted || plan == OnboardingEntryPlan.none) return;
+      setState(() {
+        _messages.add(
+          const _ChatMessage(
+            role: 'assistant',
+            content: '先来告诉我一个你在意的人吧：',
+            onboardingPrompt: true,
+          ),
+        );
+      });
+      _scrollToBottom();
+      _focusOnboardingPrompt();
       return;
     }
 
@@ -228,7 +249,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
         WeatherResult? weather;
         if (partner.latitude != null && partner.longitude != null) {
           weather = await WeatherService.getCurrentWeather(
-              partner.longitude!, partner.latitude!);
+            partner.longitude!,
+            partner.latitude!,
+          );
         } else if (partner.city != null && partner.city!.isNotEmpty) {
           weather = await WeatherService.getCurrentWeatherByCity(partner.city!);
         }
@@ -238,15 +261,17 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
         final weatherConfigs = configs.where((c) => c.category == 'weather');
         final conditions = weatherConfigs.isNotEmpty
             ? (weatherConfigs.first.config['notify_conditions'] as List?)
-                    ?.cast<String>() ??
-                ['rain', 'snow', 'extreme_cold', 'extreme_heat']
+                      ?.cast<String>() ??
+                  ['rain', 'snow', 'extreme_cold', 'extreme_heat']
             : ['rain', 'snow', 'extreme_cold', 'extreme_heat'];
 
         final check = WeatherService.checkConditions(weather, conditions);
         if (check.shouldRemind && check.message != null) {
           alerts.add(check.message!);
         } else {
-          normalWeather.add('${partner.nickname} 那边 ${weather.temp}\u00B0C ${weather.text}');
+          normalWeather.add(
+            '${partner.nickname} 那边 ${weather.temp}\u00B0C ${weather.text}',
+          );
         }
       } catch (_) {}
     }
@@ -307,11 +332,13 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
         }
 
         setState(() {
-          _messages.add(_ChatMessage(
-            role: 'assistant',
-            content: content,
-            proactiveType: type,
-          ));
+          _messages.add(
+            _ChatMessage(
+              role: 'assistant',
+              content: content,
+              proactiveType: type,
+            ),
+          );
         });
 
         await AiProactiveService.markAsShown(id);
@@ -327,14 +354,25 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final text = _controller.text.trim();
     if (text.isEmpty || _sending) return;
 
+    _controller.clear();
+    await _sendText(text);
+  }
+
+  Future<void> _submitOnboardingPrompt(String text) async {
+    if (text.trim().isEmpty || _sending) return;
+    _onboardingController.clear();
+    _onboardingFocusNode.unfocus();
+    await _sendText(text.trim());
+  }
+
+  Future<void> _sendText(String text) async {
+    if (text.trim().isEmpty || _sending) return;
+
     setState(() {
       _messages.add(_ChatMessage(role: 'user', content: text));
-      _messages.add(const _ChatMessage(
-        role: 'assistant',
-        content: '',
-        streaming: true,
-      ));
-      _controller.clear();
+      _messages.add(
+        const _ChatMessage(role: 'assistant', content: '', streaming: true),
+      );
       _sending = true;
       _executingTool = null;
     });
@@ -387,7 +425,8 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     if (hour > 23 || minute > 59) {
       return '时间无效：$time，小时应在0-23之间，分钟应在0-59之间';
     }
-    time = '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+    time =
+        '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 
     // 按名字查找 partner
     final partners = await PartnerService.getAll();
@@ -397,15 +436,18 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     }
 
     // 检查是否已有同类别提醒
-    final existingConfigs =
-        await LocalReminderService.getConfigs(partner.first.id);
+    final existingConfigs = await LocalReminderService.getConfigs(
+      partner.first.id,
+    );
     final sameCategory = existingConfigs
         .where((c) => c.category == category && c.enabled)
         .toList();
     if (sameCategory.isNotEmpty) {
       final config = sameCategory.first.config;
-      final existingTime = config['target_sleep_time'] ??
-          config['meals']?[0]?['target_time'] ?? '';
+      final existingTime =
+          config['target_sleep_time'] ??
+          config['meals']?[0]?['target_time'] ??
+          '';
       return '$partnerName 已有${_categoryLabel(category)}提醒（$existingTime），如需修改请先删除旧的';
     }
 
@@ -413,10 +455,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     Map<String, dynamic> configData;
     switch (category) {
       case 'sleep':
-        configData = {
-          'target_sleep_time': time,
-          'advance_minutes': 30,
-        };
+        configData = {'target_sleep_time': time, 'advance_minutes': 30};
         break;
       case 'meal':
         configData = {
@@ -488,9 +527,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
           lines.add('${p.nickname}: 天气查询失败${err != null ? "（$err）" : ""}');
         }
       }
-      return partners.isEmpty
-          ? '还没有添加关心的人'
-          : lines.join('; ');
+      return partners.isEmpty ? '还没有添加关心的人' : lines.join('; ');
     }
 
     final partners = await PartnerService.getAll();
@@ -516,8 +553,8 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final weatherConfigs = configs.where((c) => c.category == 'weather');
     final conditions = weatherConfigs.isNotEmpty
         ? (weatherConfigs.first.config['notify_conditions'] as List?)
-                ?.cast<String>() ??
-            ['rain', 'snow', 'extreme_cold', 'extreme_heat']
+                  ?.cast<String>() ??
+              ['rain', 'snow', 'extreme_cold', 'extreme_heat']
         : ['rain', 'snow', 'extreme_cold', 'extreme_heat'];
 
     final check = WeatherService.checkConditions(weather, conditions);
@@ -536,7 +573,8 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     try {
       if (partner.latitude != null && partner.longitude != null) {
         return await WeatherService.getCurrentWeather(
-          partner.longitude!, partner.latitude!,
+          partner.longitude!,
+          partner.latitude!,
         );
       } else if (partner.city != null && partner.city!.isNotEmpty) {
         // 清理城市名：去空格、去掉"市"后缀
@@ -555,7 +593,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final lines = <String>[];
     for (final p in partners) {
       final days = DateTime.now().difference(p.createdAt).inDays;
-      final cityInfo = p.city != null && p.city!.isNotEmpty ? '，城市: ${p.city}' : '，城市: 未设置';
+      final cityInfo = p.city != null && p.city!.isNotEmpty
+          ? '，城市: ${p.city}'
+          : '，城市: 未设置';
       lines.add('${p.nickname}（${p.typeLabel}，认识 $days 天$cityInfo）');
     }
     return '关心的人: ${lines.join('、')}';
@@ -617,7 +657,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final p = created.first;
 
     final typeLabel = _relationshipLabel(type);
-    final cityInfo = p.city != null && p.city!.isNotEmpty ? '，城市已设为${p.city}' : '';
+    final cityInfo = p.city != null && p.city!.isNotEmpty
+        ? '，城市已设为${p.city}'
+        : '';
 
     if (city != null && city.isNotEmpty) {
       return '已成功添加 $nickname（$typeLabel$cityInfo）。\n'
@@ -642,9 +684,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
 
     final p = partner.first;
     final days = DateTime.now().difference(p.createdAt).inDays;
-    final parts = <String>[
-      '$partnerName（${p.typeLabel}，认识 $days 天）',
-    ];
+    final parts = <String>['$partnerName（${p.typeLabel}，认识 $days 天）'];
     if (p.city != null && p.city!.isNotEmpty) {
       parts.add('城市: ${p.city}');
     } else {
@@ -658,23 +698,25 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final configs = await LocalReminderService.getConfigs(p.id);
     final enabled = configs.where((c) => c.enabled).toList();
     if (enabled.isNotEmpty) {
-      final categories = enabled.map((c) {
-        switch (c.category) {
-          case 'sleep':
-            final time = c.config['target_sleep_time'] ?? '';
-            return '睡觉提醒${time.isNotEmpty ? "($time)" : ""}';
-          case 'meal':
-            final meals = c.config['meals'] as List?;
-            final time = meals != null && meals.isNotEmpty
-                ? meals[0]['target_time'] ?? ''
-                : '';
-            return '吃饭提醒${time.isNotEmpty ? "($time)" : ""}';
-          case 'weather':
-            return '天气提醒';
-          default:
-            return c.category;
-        }
-      }).join('、');
+      final categories = enabled
+          .map((c) {
+            switch (c.category) {
+              case 'sleep':
+                final time = c.config['target_sleep_time'] ?? '';
+                return '睡觉提醒${time.isNotEmpty ? "($time)" : ""}';
+              case 'meal':
+                final meals = c.config['meals'] as List?;
+                final time = meals != null && meals.isNotEmpty
+                    ? meals[0]['target_time'] ?? ''
+                    : '';
+                return '吃饭提醒${time.isNotEmpty ? "($time)" : ""}';
+              case 'weather':
+                return '天气提醒';
+              default:
+                return c.category;
+            }
+          })
+          .join('、');
       parts.add('提醒: $categories');
     } else {
       parts.add('提醒: 暂无');
@@ -796,27 +838,13 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
   // ---- 快捷芯片 ----
 
   /// 用户点击选择题按钮，直接发送选项内容（不经过输入框）
-  void _sendChoiceMessage(String choice) {
-    if (_sending) return;
-
-    setState(() {
-      _messages.add(_ChatMessage(role: 'user', content: choice));
-      _messages.add(const _ChatMessage(
-        role: 'assistant',
-        content: '',
-        streaming: true,
-      ));
-      _sending = true;
-      _executingTool = null;
-    });
-    _scrollToBottom();
-    _processAiResponse(choice);
-  }
+  Future<void> _sendChoiceMessage(String choice) => _sendText(choice);
 
   /// 处理 AI 回复（从 _sendMessage 中提取的公共逻辑）
   Future<void> _processAiResponse(String text) async {
     try {
-      await AiService.chatWithTools(text,
+      await AiService.chatWithTools(
+        text,
         onToolCall: (name, args) async {
           if (!mounted) return '操作已取消';
           setState(() => _executingTool = name);
@@ -858,10 +886,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
             .toList();
 
         if (parts.isEmpty) {
-          _messages.add(_ChatMessage(
-            role: 'assistant',
-            content: fullContent.trim(),
-          ));
+          _messages.add(
+            _ChatMessage(role: 'assistant', content: fullContent.trim()),
+          );
         } else {
           for (int i = 0; i < parts.length; i++) {
             if (i > 0) {
@@ -883,10 +910,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
       if (idx >= 0) _messages.removeAt(idx);
 
       setState(() {
-        _messages.add(_ChatMessage(
-          role: 'assistant',
-          content: '抱歉，网络好像出了点问题：$e',
-        ));
+        _messages.add(
+          _ChatMessage(role: 'assistant', content: '抱歉，网络好像出了点问题：$e'),
+        );
       });
     } finally {
       if (mounted) {
@@ -938,7 +964,8 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
                 children: [
                   Checkbox(
                     value: dontAskAgain,
-                    onChanged: (v) => setDialogState(() => dontAskAgain = v ?? false),
+                    onChanged: (v) =>
+                        setDialogState(() => dontAskAgain = v ?? false),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   const SizedBox(width: 4),
@@ -1052,9 +1079,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     if (confirmed != true || !mounted) return;
 
     // 1. 收集当前所有对话内容
-    final conversationMessages = _messages.where(
-      (m) => m.role == 'user' || m.role == 'assistant',
-    ).toList();
+    final conversationMessages = _messages
+        .where((m) => m.role == 'user' || m.role == 'assistant')
+        .toList();
 
     if (conversationMessages.isNotEmpty) {
       final userParts = conversationMessages
@@ -1084,9 +1111,9 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
       setState(() {
         _messages.clear();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('对话已总结并存入长期记忆')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('对话已总结并存入长期记忆')));
     }
   }
 
@@ -1102,9 +1129,22 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     });
   }
 
+  void _focusOnboardingPrompt() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Future<void>.delayed(TaAnimation.fast, () {
+        if (mounted && _onboardingFocusNode.canRequestFocus) {
+          _onboardingFocusNode.requestFocus();
+        }
+      });
+    });
+  }
+
   @override
   void dispose() {
     _controller.dispose();
+    _onboardingController.dispose();
+    _onboardingFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -1151,7 +1191,10 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
 
     return Container(
       padding: const EdgeInsets.fromLTRB(
-        TaSpacing.pagePadding, TaSpacing.sm, TaSpacing.pagePadding, TaSpacing.xs,
+        TaSpacing.pagePadding,
+        TaSpacing.sm,
+        TaSpacing.pagePadding,
+        TaSpacing.xs,
       ),
       child: Row(
         children: [
@@ -1279,8 +1322,11 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
       ),
       child: Row(
         children: [
-          Icon(Icons.warning_amber_rounded,
-              size: 18, color: theme.colorScheme.error),
+          Icon(
+            Icons.warning_amber_rounded,
+            size: 18,
+            color: theme.colorScheme.error,
+          ),
           const SizedBox(width: TaSpacing.xs),
           Expanded(
             child: Text(
@@ -1337,6 +1383,16 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
       );
     }
 
+    final snapshots = _messages
+        .map(
+          (message) => ConversationMessageSnapshot(
+            role: message.role,
+            content: message.content,
+          ),
+        )
+        .toList(growable: false);
+    final activeChoiceIndex = findLatestUnansweredChoiceIndex(snapshots);
+
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(
@@ -1346,13 +1402,27 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
       itemCount: _messages.length,
       itemBuilder: (context, index) {
         final msg = _messages[index];
+        if (msg.onboardingPrompt && !hasUserReplyAfter(snapshots, index)) {
+          return OnboardingPromptBubble(
+            controller: _onboardingController,
+            focusNode: _onboardingFocusNode,
+            enabled: !_sending,
+            onSubmitted: _submitOnboardingPrompt,
+          ).animate().fadeIn(
+            duration: TaAnimation.fast,
+            curve: TaAnimation.curve,
+          );
+        }
         if (msg.proactiveType != ProactiveType.none) {
-          return _buildProactiveCard(msg, theme)
-              .animate()
-              .fadeIn(duration: TaAnimation.normal);
+          return _buildProactiveCard(
+            msg,
+            theme,
+          ).animate().fadeIn(duration: TaAnimation.normal);
         }
         return _ChatBubble(
           message: msg,
+          showChoices: index == activeChoiceIndex,
+          choiceEnabled: !_sending,
           onChoiceSelected: (choice) => _sendChoiceMessage(choice),
         );
       },
@@ -1382,12 +1452,14 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.auto_awesome_rounded,
-                  size: 20, color: theme.colorScheme.primary),
+              Icon(
+                Icons.auto_awesome_rounded,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: TaSpacing.xs),
               Expanded(
-                child: Text(msg.content,
-                    style: theme.textTheme.bodyMedium),
+                child: Text(msg.content, style: theme.textTheme.bodyMedium),
               ),
             ],
           ),
@@ -1400,9 +1472,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
     final label = _executingTool != null
         ? '正在${_toolNameLabel(_executingTool!)}...'
         : 'AI 正在思考...';
-    final icon = _executingTool != null
-        ? Icons.build_rounded
-        : null;
+    final icon = _executingTool != null ? Icons.build_rounded : null;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: TaSpacing.xs),
@@ -1414,10 +1484,12 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
           if (icon != null)
             Icon(icon, size: 14, color: theme.colorScheme.primary),
           if (icon != null) const SizedBox(width: 4),
-          Text(label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              )),
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
         ],
       ),
     );
@@ -1453,14 +1525,12 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: chips.length,
-              separatorBuilder: (_, _) =>
-                  const SizedBox(width: TaSpacing.xs),
+              separatorBuilder: (_, _) => const SizedBox(width: TaSpacing.xs),
               itemBuilder: (_, i) {
                 final chip = chips[i];
                 return ActionChip(
                   avatar: Image.asset(chip.$1, width: 18, height: 18),
-                  label: Text(chip.$2,
-                      style: const TextStyle(fontSize: 13)),
+                  label: Text(chip.$2, style: const TextStyle(fontSize: 13)),
                   onPressed: () => _handleChip(chip.$3),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   visualDensity: VisualDensity.compact,
@@ -1502,8 +1572,7 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
                 ),
                 child: IconButton(
                   onPressed: _sending ? null : _sendMessage,
-                  icon:
-                      const Icon(Icons.send_rounded, color: Colors.white),
+                  icon: const Icon(Icons.send_rounded, color: Colors.white),
                 ),
               ),
             ],
@@ -1534,8 +1603,15 @@ class _AiHomeScreenState extends State<AiHomeScreen> with AutomaticKeepAliveClie
 // ============================================================
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({required this.message, this.onChoiceSelected});
+  const _ChatBubble({
+    required this.message,
+    required this.showChoices,
+    required this.choiceEnabled,
+    this.onChoiceSelected,
+  });
   final _ChatMessage message;
+  final bool showChoices;
+  final bool choiceEnabled;
   final ValueChanged<String>? onChoiceSelected;
 
   /// 从消息内容中提取选择题选项
@@ -1565,7 +1641,7 @@ class _ChatBubble extends StatelessWidget {
         .replaceAll(RegExp(r'\[选项:[^\]]+\]'), '')
         .trim();
 
-    final choices = _parseChoices(message.content);
+    final choices = showChoices ? _parseChoices(message.content) : <String>[];
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -1611,10 +1687,11 @@ class _ChatBubble extends StatelessWidget {
                           height: 5,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: (isUser
-                                    ? theme.colorScheme.onPrimary
-                                    : theme.colorScheme.onSurface)
-                                .withValues(alpha: 0.4),
+                            color:
+                                (isUser
+                                        ? theme.colorScheme.onPrimary
+                                        : theme.colorScheme.onSurface)
+                                    .withValues(alpha: 0.4),
                           ),
                         ),
                       );
@@ -1638,7 +1715,11 @@ class _ChatBubble extends StatelessWidget {
     ).animate().fadeIn(duration: TaAnimation.fast, curve: TaAnimation.curve);
   }
 
-  List<Widget> _buildChoiceButtons(ThemeData theme, bool isUser, List<String> choices) {
+  List<Widget> _buildChoiceButtons(
+    ThemeData theme,
+    bool isUser,
+    List<String> choices,
+  ) {
     return [
       Wrap(
         spacing: TaSpacing.xs,
@@ -1651,7 +1732,9 @@ class _ChatBubble extends StatelessWidget {
             borderRadius: TaRadius.borderFull,
             child: InkWell(
               borderRadius: TaRadius.borderFull,
-              onTap: () => onChoiceSelected?.call(choice),
+              onTap: choiceEnabled
+                  ? () => onChoiceSelected?.call(choice)
+                  : null,
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: TaSpacing.md,
@@ -1688,8 +1771,12 @@ class _WeatherCard extends StatelessWidget {
     final content = message.content;
     if (content.contains('雨')) return 'assets/images/weather_rain.png';
     if (content.contains('雪')) return 'assets/images/weather_snow.png';
-    if (content.contains('酷热') || content.contains('高温')) return 'assets/images/weather_heat.png';
-    if (content.contains('极寒') || content.contains('低温')) return 'assets/images/weather_cold.png';
+    if (content.contains('酷热') || content.contains('高温')) {
+      return 'assets/images/weather_heat.png';
+    }
+    if (content.contains('极寒') || content.contains('低温')) {
+      return 'assets/images/weather_cold.png';
+    }
     return null;
   }
 
@@ -1709,7 +1796,9 @@ class _WeatherCard extends StatelessWidget {
         children: [
           if (bannerAsset != null)
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(12),
+              ),
               child: Image.asset(
                 bannerAsset,
                 height: 60,
@@ -1725,14 +1814,19 @@ class _WeatherCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Image.asset('assets/images/chip_weather.png',
-                        width: 24, height: 24),
+                    Image.asset(
+                      'assets/images/chip_weather.png',
+                      width: 24,
+                      height: 24,
+                    ),
                     const SizedBox(width: TaSpacing.xs),
-                    Text('天气关注',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontWeight: FontWeight.w600,
-                        )),
+                    Text(
+                      '天气关注',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: TaSpacing.xs),
@@ -1748,7 +1842,9 @@ class _WeatherCard extends StatelessWidget {
                     alignment: Alignment.centerRight,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: TaSpacing.sm, vertical: 6),
+                        horizontal: TaSpacing.sm,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.3),
                         borderRadius: TaRadius.borderFull,
@@ -1796,14 +1892,19 @@ class _GreetingCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Image.asset('assets/images/ai_empty_chat.png',
-                  width: 20, height: 20),
+              Image.asset(
+                'assets/images/ai_empty_chat.png',
+                width: 20,
+                height: 20,
+              ),
               const SizedBox(width: TaSpacing.xs),
-              Text('小念',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  )),
+              Text(
+                '小念',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: TaSpacing.sm),
@@ -1836,9 +1937,7 @@ class _GuideCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
         borderRadius: TaRadius.borderMd,
-        border: Border.all(
-          color: theme.colorScheme.secondaryContainer,
-        ),
+        border: Border.all(color: theme.colorScheme.secondaryContainer),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

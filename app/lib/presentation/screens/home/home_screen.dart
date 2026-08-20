@@ -3,6 +3,8 @@
 /// 底部导航 3 Tab：AI 助手（主屏）、关心的人（管理）、我的（个人）
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
@@ -20,6 +22,27 @@ import '../../../data/models/user.dart';
 import '../../../data/models/partner.dart';
 import '../../../data/models/reminder_config.dart';
 
+class _PartnersLocalSnapshot {
+  const _PartnersLocalSnapshot({
+    required this.partners,
+    required this.configsByPartner,
+  });
+
+  final List<Partner> partners;
+  final Map<String, List<ReminderConfig>> configsByPartner;
+}
+
+Future<_PartnersLocalSnapshot> _loadPartnersLocalSnapshot() async {
+  final results = await Future.wait([
+    PartnerService.getAll(),
+    LocalReminderService.getAllConfigs(),
+  ]);
+  return _PartnersLocalSnapshot(
+    partners: results[0] as List<Partner>,
+    configsByPartner: results[1] as Map<String, List<ReminderConfig>>,
+  );
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -30,17 +53,19 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   late final PageController _pageController;
-
-  static const _tabs = [
-    AiHomeScreen(),
-    _PartnersTab(),
-    _ProfileTab(),
-  ];
+  late final Future<_PartnersLocalSnapshot> _partnersPreload;
+  late final List<Widget> _tabs;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: 0);
+    _partnersPreload = _loadPartnersLocalSnapshot();
+    _tabs = [
+      const AiHomeScreen(),
+      _PartnersTab(initialLoad: _partnersPreload),
+      const _ProfileTab(),
+    ];
   }
 
   @override
@@ -114,23 +139,31 @@ class _HomeScreenState extends State<HomeScreen> {
 // ============================================================
 
 class _PartnersTab extends StatefulWidget {
-  const _PartnersTab();
+  const _PartnersTab({required this.initialLoad});
+
+  final Future<_PartnersLocalSnapshot> initialLoad;
 
   @override
   State<_PartnersTab> createState() => _PartnersTabState();
 }
 
-class _PartnersTabState extends State<_PartnersTab> {
+class _PartnersTabState extends State<_PartnersTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   bool _loading = true;
   List<Partner> _partners = [];
   Map<String, List<ReminderConfig>> _configsByPartner = {};
-  Map<String, FullWeatherResult?> _weatherByPartner = {};
+  final Map<String, FullWeatherResult?> _weatherByPartner = {};
   final Set<String> _expandedIds = {};
+  final Set<String> _weatherLoadingIds = {};
+  int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadAll();
+    _loadAll(initialLoad: widget.initialLoad, showLoading: true);
     PartnerService.refreshCounter.addListener(_onPartnerRefresh);
   }
 
@@ -144,44 +177,89 @@ class _PartnersTabState extends State<_PartnersTab> {
     if (mounted) _loadAll();
   }
 
-  Future<void> _loadAll() async {
-    setState(() => _loading = true);
+  Future<void> _loadAll({
+    Future<_PartnersLocalSnapshot>? initialLoad,
+    bool showLoading = false,
+    bool refreshWeather = true,
+    bool forceWeatherRefresh = false,
+  }) async {
+    final generation = ++_loadGeneration;
+    if (showLoading && _partners.isEmpty && mounted) {
+      setState(() => _loading = true);
+    }
     try {
-      final partners = await PartnerService.getAll();
-
-      // 获取所有配置（包括未启用的），按 partnerId 分组
-      final allConfigs = <String, List<ReminderConfig>>{};
-      for (final p in partners) {
-        final pConfigs = await LocalReminderService.getConfigs(p.id);
-        allConfigs[p.id] = pConfigs;
-      }
-
-      // 获取天气（含预报）
-      final weatherMap = <String, FullWeatherResult?>{};
-      for (final p in partners) {
-        try {
-          FullWeatherResult? w;
-          if (p.latitude != null && p.longitude != null) {
-            w = await WeatherService.getFullWeather('${p.latitude},${p.longitude}');
-          } else if (p.city != null && p.city!.isNotEmpty) {
-            w = await WeatherService.getFullWeather(p.city!);
-          }
-          weatherMap[p.id] = w;
-        } catch (_) {
-          weatherMap[p.id] = null;
-        }
-      }
-
-      if (!mounted) return;
+      final snapshot = await (initialLoad ?? _loadPartnersLocalSnapshot());
+      if (!mounted || generation != _loadGeneration) return;
+      final partnerIds = snapshot.partners.map((partner) => partner.id).toSet();
       setState(() {
-        _partners = partners;
-        _configsByPartner = allConfigs;
-        _weatherByPartner = weatherMap;
+        _partners = snapshot.partners;
+        _configsByPartner = snapshot.configsByPartner;
+        _weatherByPartner.removeWhere((id, _) => !partnerIds.contains(id));
+        _weatherLoadingIds.clear();
         _loading = false;
       });
+      if (refreshWeather) {
+        unawaited(
+          _refreshWeather(
+            snapshot.partners,
+            generation,
+            forceRefresh: forceWeatherRefresh,
+          ),
+        );
+      }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _loadGeneration) {
+        setState(() => _loading = false);
+      }
     }
+  }
+
+  Future<void> _refreshWeather(
+    List<Partner> partners,
+    int generation, {
+    required bool forceRefresh,
+  }) async {
+    final candidates = partners
+        .where(
+          (partner) =>
+              (partner.latitude != null && partner.longitude != null) ||
+              (partner.city?.isNotEmpty ?? false),
+        )
+        .toList(growable: false);
+    if (candidates.isEmpty || !mounted || generation != _loadGeneration) {
+      return;
+    }
+
+    setState(() {
+      _weatherLoadingIds.addAll(candidates.map((partner) => partner.id));
+    });
+
+    await Future.wait(
+      candidates.map((partner) async {
+        FullWeatherResult? weather;
+        try {
+          if (partner.latitude != null && partner.longitude != null) {
+            weather = await WeatherService.getFullWeatherByCoords(
+              partner.latitude!,
+              partner.longitude!,
+              forceRefresh: forceRefresh,
+            );
+          } else {
+            weather = await WeatherService.getFullWeather(
+              partner.city!,
+              forceRefresh: forceRefresh,
+            );
+          }
+        } catch (_) {
+          weather = null;
+        }
+        if (!mounted || generation != _loadGeneration) return;
+        setState(() {
+          _weatherByPartner[partner.id] = weather;
+          _weatherLoadingIds.remove(partner.id);
+        });
+      }),
+    );
   }
 
   Future<void> _addPartner() async {
@@ -205,11 +283,12 @@ class _PartnersTabState extends State<_PartnersTab> {
       enabled: !config.enabled,
     );
     await ReminderScheduler.scheduleAll();
-    _loadAll();
+    _loadAll(refreshWeather: false);
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final theme = Theme.of(context);
 
     if (_loading) {
@@ -230,7 +309,8 @@ class _PartnersTabState extends State<_PartnersTab> {
 
     return SafeArea(
       child: RefreshIndicator(
-        onRefresh: _loadAll,
+        onRefresh: () =>
+            _loadAll(refreshWeather: true, forceWeatherRefresh: true),
         child: ListView.builder(
           padding: TaSpacing.page,
           itemCount: _partners.length + 1,
@@ -247,9 +327,7 @@ class _PartnersTabState extends State<_PartnersTab> {
                     label: const Text('添加关心的人'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: theme.colorScheme.onSurfaceVariant,
-                      side: BorderSide(
-                        color: theme.colorScheme.outlineVariant,
-                      ),
+                      side: BorderSide(color: theme.colorScheme.outlineVariant),
                       padding: const EdgeInsets.symmetric(
                         vertical: TaSpacing.sm,
                       ),
@@ -262,38 +340,45 @@ class _PartnersTabState extends State<_PartnersTab> {
             final partner = _partners[index];
             final isExpanded = _expandedIds.contains(partner.id);
             final configs = _configsByPartner[partner.id] ?? [];
-            final weather = _weatherByPartner[partner.id];            final days = PartnerService.daysSince(partner.createdAt);
+            final weather = _weatherByPartner[partner.id];
+            final weatherLoading = _weatherLoadingIds.contains(partner.id);
+            final days = PartnerService.daysSince(partner.createdAt);
 
             return Padding(
-              padding: const EdgeInsets.only(bottom: TaSpacing.sm),
-              child: _PartnerCard(
-                partner: partner,
-                days: days,
-                weather: weather,
-                configs: configs,
-                isExpanded: isExpanded,
-                onToggleExpand: () => _toggleExpand(partner.id),
-                onToggleConfig: _toggleConfig,
-                onPartnerTap: () async {
-                  final result = await context.push<bool>(
-                    Routes.partnerDetail.replaceAll(':id', partner.id),
-                  );
-                  if (result == true) _loadAll();
-                },
-                onConfigTap: (config) => context.push(
-                  Routes.reminderHistory.replaceAll(':id', config.id),
-                ),
-                onAddReminder: () => context.push(
-                  Routes.reminderConfig.replaceAll(':partnerId', partner.id),
-                ),
-                onEdit: () async {
-                  final result = await context.push<bool>(
-                    Routes.partnerDetail.replaceAll(':id', partner.id),
-                  );
-                  if (result == true) _loadAll();
-                },
-              ),
-            ).animate()
+                  padding: const EdgeInsets.only(bottom: TaSpacing.sm),
+                  child: _PartnerCard(
+                    partner: partner,
+                    days: days,
+                    weather: weather,
+                    weatherLoading: weatherLoading,
+                    configs: configs,
+                    isExpanded: isExpanded,
+                    onToggleExpand: () => _toggleExpand(partner.id),
+                    onToggleConfig: _toggleConfig,
+                    onPartnerTap: () async {
+                      final result = await context.push<bool>(
+                        Routes.partnerDetail.replaceAll(':id', partner.id),
+                      );
+                      if (result == true) _loadAll();
+                    },
+                    onConfigTap: (config) => context.push(
+                      Routes.reminderHistory.replaceAll(':id', config.id),
+                    ),
+                    onAddReminder: () => context.push(
+                      Routes.reminderConfig.replaceAll(
+                        ':partnerId',
+                        partner.id,
+                      ),
+                    ),
+                    onEdit: () async {
+                      final result = await context.push<bool>(
+                        Routes.partnerDetail.replaceAll(':id', partner.id),
+                      );
+                      if (result == true) _loadAll();
+                    },
+                  ),
+                )
+                .animate()
                 .fadeIn(
                   delay: Duration(milliseconds: 100 * index),
                   duration: TaAnimation.normal,
@@ -315,6 +400,7 @@ class _PartnerCard extends StatelessWidget {
     required this.partner,
     required this.days,
     required this.weather,
+    required this.weatherLoading,
     required this.configs,
     required this.isExpanded,
     required this.onToggleExpand,
@@ -328,6 +414,7 @@ class _PartnerCard extends StatelessWidget {
   final Partner partner;
   final int days;
   final FullWeatherResult? weather;
+  final bool weatherLoading;
   final List<ReminderConfig> configs;
   final bool isExpanded;
   final VoidCallback onToggleExpand;
@@ -376,7 +463,11 @@ class _PartnerCard extends StatelessWidget {
     final infoParts = <String>[];
     if (timeStr.isNotEmpty) infoParts.add(timeStr);
     if (weather != null) {
-      infoParts.add('${_weatherEmoji(weather!.current.text)} ${weather!.current.text} ${weather!.current.temp}\u00B0C');
+      infoParts.add(
+        '${_weatherEmoji(weather!.current.text)} ${weather!.current.text} ${weather!.current.temp}\u00B0C',
+      );
+    } else if (weatherLoading) {
+      infoParts.add('天气加载中...');
     }
 
     return TaCard(
@@ -416,7 +507,8 @@ class _PartnerCard extends StatelessWidget {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
-                        if (partner.note != null && partner.note!.isNotEmpty) ...[
+                        if (partner.note != null &&
+                            partner.note!.isNotEmpty) ...[
                           const SizedBox(height: 2),
                           Text(
                             partner.note!,
@@ -446,7 +538,9 @@ class _PartnerCard extends StatelessWidget {
                   if (configs.isNotEmpty)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.primaryContainer,
                         borderRadius: TaRadius.borderXs,
@@ -521,7 +615,10 @@ class _PartnerCard extends StatelessWidget {
           if (forecast.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                TaSpacing.md, TaSpacing.sm, TaSpacing.md, 0,
+                TaSpacing.md,
+                TaSpacing.sm,
+                TaSpacing.md,
+                0,
               ),
               child: Text(
                 '未来天气',
@@ -533,7 +630,8 @@ class _PartnerCard extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.symmetric(
-                horizontal: TaSpacing.md, vertical: TaSpacing.xs,
+                horizontal: TaSpacing.md,
+                vertical: TaSpacing.xs,
               ),
               child: Row(
                 children: forecast.take(3).map((day) {
@@ -588,7 +686,10 @@ class _PartnerCard extends StatelessWidget {
           if (activeConfigs.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                TaSpacing.md, TaSpacing.xs, TaSpacing.md, 0,
+                TaSpacing.md,
+                TaSpacing.xs,
+                TaSpacing.md,
+                0,
               ),
               child: Text(
                 '已开启的提醒',
@@ -605,19 +706,24 @@ class _PartnerCard extends StatelessWidget {
           if (configs.any((c) => !c.enabled)) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                TaSpacing.md, TaSpacing.xs, TaSpacing.md, 0,
+                TaSpacing.md,
+                TaSpacing.xs,
+                TaSpacing.md,
+                0,
               ),
               child: Text(
                 '其他提醒',
                 style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  color: theme.colorScheme.onSurfaceVariant.withValues(
+                    alpha: 0.6,
+                  ),
                   fontWeight: FontWeight.w500,
                 ),
               ),
             ),
-            ...configs.where((c) => !c.enabled).map(
-              (config) => _buildConfigRow(config, theme),
-            ),
+            ...configs
+                .where((c) => !c.enabled)
+                .map((config) => _buildConfigRow(config, theme)),
           ],
 
           // 无提醒时占位
@@ -635,7 +741,10 @@ class _PartnerCard extends StatelessWidget {
           // 添加提醒按钮
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              TaSpacing.md, TaSpacing.xs, TaSpacing.md, TaSpacing.md,
+              TaSpacing.md,
+              TaSpacing.xs,
+              TaSpacing.md,
+              TaSpacing.md,
             ),
             child: SizedBox(
               width: double.infinity,
@@ -652,7 +761,10 @@ class _PartnerCard extends StatelessWidget {
           // 查看详情
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              TaSpacing.md, 0, TaSpacing.md, TaSpacing.md,
+              TaSpacing.md,
+              0,
+              TaSpacing.md,
+              TaSpacing.md,
             ),
             child: SizedBox(
               width: double.infinity,
@@ -714,7 +826,11 @@ class _ProfileTab extends StatefulWidget {
   State<_ProfileTab> createState() => _ProfileTabState();
 }
 
-class _ProfileTabState extends State<_ProfileTab> {
+class _ProfileTabState extends State<_ProfileTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   bool _loading = true;
   String? _error;
   LocalUser? _user;
@@ -756,6 +872,7 @@ class _ProfileTabState extends State<_ProfileTab> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final theme = Theme.of(context);
 
     if (_loading) {
@@ -769,8 +886,7 @@ class _ProfileTabState extends State<_ProfileTab> {
 
     final totalReminders = _reminderStats['totalCount'] as int? ?? 0;
     final streakDays = _reminderStats['streakDays'] as int? ?? 0;
-    final byCategory =
-        _reminderStats['byCategory'] as Map<String, int>? ?? {};
+    final byCategory = _reminderStats['byCategory'] as Map<String, int>? ?? {};
     final partnerCount = _userStats['partnerCount'] as int? ?? 0;
 
     return SafeArea(
@@ -880,8 +996,10 @@ class _ProfileTabState extends State<_ProfileTab> {
                             Image.asset(iconAsset, width: 18, height: 18),
                             const SizedBox(width: TaSpacing.xs),
                             Expanded(
-                              child: Text(label,
-                                  style: theme.textTheme.bodyMedium),
+                              child: Text(
+                                label,
+                                style: theme.textTheme.bodyMedium,
+                              ),
                             ),
                             Text(
                               '${entry.value}次',
@@ -894,8 +1012,8 @@ class _ProfileTabState extends State<_ProfileTab> {
                               width: 40,
                               height: 4,
                               decoration: BoxDecoration(
-                                color: theme
-                                    .colorScheme.surfaceContainerHighest,
+                                color:
+                                    theme.colorScheme.surfaceContainerHighest,
                                 borderRadius: BorderRadius.circular(2),
                               ),
                               child: FractionallySizedBox(
@@ -914,8 +1032,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                               width: 36,
                               child: Text(
                                 '$pct%',
-                                style:
-                                    theme.textTheme.labelSmall?.copyWith(
+                                style: theme.textTheme.labelSmall?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
                                 textAlign: TextAlign.right,
