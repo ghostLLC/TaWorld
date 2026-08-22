@@ -128,8 +128,12 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .eyebrow::before{content:"";width:34px;height:1.5px;background:currentColor}
 .hero h1{font-family:var(--serif);font-size:clamp(42px,6.2vw,76px);font-weight:700;line-height:1.26;letter-spacing:.015em;margin-bottom:10px;color:var(--text)}
 .hero h1 .line2{display:block}
-.hero h1 .ch{display:inline-block;opacity:0;transform:translateY(.5em);animation:charIn .7s var(--ease) forwards}
-@keyframes charIn{to{opacity:1;transform:none}}
+/* 打字机标题：逐字异色出现 / 停顿 / 消失 / 循环 */
+.hero h1 .ch{display:inline-block;opacity:0;transform:translateY(.35em);transition:opacity .14s ease,transform .14s ease}
+.hero h1 .ch.on{opacity:1;transform:none}
+.tw-caret{display:inline-block;width:3px;height:.82em;background:var(--gold-lt);margin-left:7px;border-radius:2px;vertical-align:-.06em;opacity:0}
+.tw-caret.on{opacity:1;animation:caretBlink 1s steps(1) infinite}
+@keyframes caretBlink{0%,55%{opacity:1}56%,100%{opacity:.15}}
 .gld{font-style:normal;font-family:var(--serif);background:linear-gradient(115deg,#E8C489 10%,var(--gold-lt) 45%,#C89B55 90%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--gold-lt)}
 .hero-en{font-size:12.5px;letter-spacing:.42em;text-transform:uppercase;color:var(--faint);margin:18px 0 22px}
 .hero-desc{font-size:16.5px;color:var(--mut);max-width:33em;margin-bottom:38px}
@@ -596,7 +600,7 @@ footer a:hover{color:var(--gold-lt)}
   <div class="wrap hero-grid">
     <div>
       <span class="eyebrow">本地优先 · AI 关怀助手</span>
-      <h1 id="heroTitle">把牵挂，<span class="line2">变成<span class="gld">恰到好处</span>的行动</span></h1>
+      <h1 id="heroTitle">把牵挂，<span class="line2">变成恰到好处的行动</span></h1>
       <div class="hero-en">TaWorld · Ta's World</div>
       <p class="hero-desc">添加你在乎的人，让小念帮你记住关于 Ta 的点点滴滴——生日与喜好、天气与时差、你们聊过的每一件小事；然后在<em>对的时间</em>，轻轻提醒你，把关心送到。</p>
       <div class="hero-actions">
@@ -1171,11 +1175,13 @@ footer a:hover{color:var(--gold-lt)}
   }
   if(!reduced){seedStars($("#stars"),52);seedStars($("#graphStars"),26)}
 
-  /* ---- 首屏标题逐字浮现 ---- */
+  /* ---- 首屏标题：异色打字机循环 ---- */
   (function(){
     var h=$("#heroTitle");
-    if(!h||reduced)return;
-    var idx=0;
+    if(!h)return;
+    /* 异色取自应用五套主题色：暖珊瑚 / 薰衣草 / 海洋蓝 / 樱花粉 / 森林绿，点缀奶油 */
+    var palette=["#F5E6DF","#DCB26A","#E8998D","#9B8EC4","#E88DAA","#7EB8CC","#DCB26A","#E8998D","#F5E6DF","#7EAA88","#DCB26A","#E8998D","#F5E6DF"];
+    var chars=[];
     (function walk(node){
       Array.prototype.slice.call(node.childNodes).forEach(function(ch){
         if(ch.nodeType===3){
@@ -1183,16 +1189,34 @@ footer a:hover{color:var(--gold-lt)}
           ch.textContent.split("").forEach(function(c){
             var s=document.createElement("span");
             s.className="ch";
-            s.textContent=c;
-            s.style.animationDelay=(0.25+idx*0.045).toFixed(3)+"s";
-            if(c===" ")s.innerHTML="&nbsp;";
-            idx++;
-            frag.appendChild(s);
+            if(c===" ")s.innerHTML="&nbsp;";else s.textContent=c;
+            s.style.color=palette[chars.length%palette.length];
+            chars.push(s);frag.appendChild(s);
           });
           node.replaceChild(frag,ch);
         }else if(ch.nodeType===1){walk(ch)}
       });
     })(h);
+    if(reduced){chars.forEach(function(s){s.classList.add("on")});return}
+    var caret=document.createElement("span");caret.className="tw-caret";
+    function placeCaret(i){var c=chars[i];if(c&&c.parentNode)c.parentNode.insertBefore(caret,c.nextSibling)}
+    var D=90,HOLD=3200,DEL=45,PAUSE=800;
+    function typeLoop(i){
+      if(i>=chars.length){
+        caret.classList.add("on");placeCaret(chars.length-1);
+        setTimeout(function(){caret.classList.remove("on");setTimeout(function(){delLoop(chars.length-1)},380)},HOLD);
+        return;
+      }
+      chars[i].classList.add("on");placeCaret(i);
+      setTimeout(function(){typeLoop(i+1)},D);
+    }
+    function delLoop(i){
+      if(i<0){setTimeout(function(){typeLoop(0)},PAUSE);return}
+      chars[i].classList.remove("on");
+      if(i>0)placeCaret(i-1);
+      setTimeout(function(){delLoop(i-1)},DEL);
+    }
+    setTimeout(function(){typeLoop(0)},500);
   })();
 
   /* ---- 导航：阴影 + 进度条 + scrollspy ---- */
