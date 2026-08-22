@@ -12,6 +12,12 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
 </p>
 
+<p align="center">
+  <a href="https://taworld-cloud1-8grf0qgi8c6c0603.webapps.tcloudbase.com">🌐 产品官网</a> ·
+  <a href="https://ghostllc.github.io/TaWorld/">GitHub Pages 镜像</a> ·
+  <a href="https://github.com/ghostLLC/TaWorld/releases/download/v0.1.1/TaWorld-v0.1.1-arm64-v8a.apk">下载 v0.1.1 APK（arm64）</a>
+</p>
+
 TaWorld 不会替用户联系任何人，而是在合适的时间提醒用户主动关心 Ta。人物、提醒、对话与长期记忆保存在设备本地；应用不依赖自建业务服务器，AI 与天气请求由设备直接访问对应服务。
 
 ## v0.1.1 主要能力
