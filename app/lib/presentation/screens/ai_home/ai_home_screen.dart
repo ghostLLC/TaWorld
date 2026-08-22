@@ -4,14 +4,23 @@
 /// 包含：轻量状态条、AI 对话流（含主动消息）、快捷芯片、输入栏。
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:timezone/timezone.dart' as tz;
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../data/local/database_helper.dart';
+import '../../../data/models/reminder_occurrence_record.dart';
 import '../../../services/ai_service.dart';
+import '../../../services/chat_history_service.dart';
 import '../../../services/ai_proactive_service.dart';
 import '../../../services/ai_memory_extractor.dart';
 import '../../../services/ai_rag_service.dart';
@@ -20,13 +29,26 @@ import '../../../services/local/local_user_service.dart';
 import '../../../services/local/partner_service.dart';
 import '../../../services/local/local_reminder_service.dart';
 import '../../../services/local/local_achievement_service.dart';
+import '../../../services/notification_service.dart';
+import '../../../services/background_execution_service.dart';
 import '../../../services/reminder_scheduler.dart';
+import '../../../services/reminder_occurrence_service.dart';
+import '../../../services/reminder_tool_planner.dart';
+import '../../../services/image_understanding_service.dart';
+import '../../../services/timezone_service.dart';
 import '../../../services/weather_service.dart';
 import '../../../data/models/partner.dart';
-import '../../../data/models/reminder_config.dart';
 import '../../widgets/widgets.dart';
+import 'conversation_activity.dart';
 import 'conversation_presentation.dart';
-import 'onboarding_prompt_bubble.dart';
+import 'ai_quick_action_chip.dart';
+import 'milestone_message_card.dart';
+import 'retry_message_card.dart';
+import 'reminder_follow_up_card.dart';
+import 'tool_execution_result.dart';
+import 'ai_voice_input_button.dart';
+import 'ai_image_input_button.dart';
+import 'chat_image_bubble.dart';
 
 // ============================================================
 // 消息模型
@@ -34,23 +56,39 @@ import 'onboarding_prompt_bubble.dart';
 
 enum ProactiveType { none, greeting, weather, careSuggestion, alert, guide }
 
+class AiChatLaunchRequest {
+  const AiChatLaunchRequest({required this.partnerName});
+
+  final String partnerName;
+}
+
 class _ChatMessage {
   const _ChatMessage({
+    this.id,
     required this.role,
     required this.content,
     this.proactiveType = ProactiveType.none,
     this.weatherData,
     this.actionLabel,
     this.streaming = false,
-    this.onboardingPrompt = false,
+    this.milestone,
+    this.retryText,
+    this.requestId,
+    this.reminderOccurrence,
+    this.localImagePath,
   });
+  final String? id;
   final String role;
   final String content;
   final ProactiveType proactiveType;
   final Map<String, dynamic>? weatherData;
   final String? actionLabel;
   final bool streaming;
-  final bool onboardingPrompt;
+  final ToolMilestone? milestone;
+  final String? retryText;
+  final String? requestId;
+  final ReminderOccurrenceRecord? reminderOccurrence;
+  final String? localImagePath;
 }
 
 // ============================================================
@@ -58,7 +96,10 @@ class _ChatMessage {
 // ============================================================
 
 class AiHomeScreen extends StatefulWidget {
-  const AiHomeScreen({super.key});
+  const AiHomeScreen({super.key, this.draftNotifier});
+
+  /// 来自关心图谱等外部入口的待发送上下文。
+  final ValueNotifier<AiChatLaunchRequest?>? draftNotifier;
 
   @override
   State<AiHomeScreen> createState() => _AiHomeScreenState();
@@ -70,15 +111,21 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   bool get wantKeepAlive => true;
 
   final _controller = TextEditingController();
-  final _onboardingController = TextEditingController();
-  final _onboardingFocusNode = FocusNode();
+  final _inputFocusNode = FocusNode();
   final _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
+  final _speech = stt.SpeechToText();
+  final _imagePicker = ImagePicker();
 
   bool _sending = false;
+  bool _speechInitialized = false;
+  bool _isListening = false;
+  bool _processingImage = false;
+  String _voicePrefix = '';
   bool _hasApiKey = true;
   bool _loading = true;
   bool _greeted = false;
+  AiActivityPhase _activityPhase = AiActivityPhase.idle;
   String? _executingTool;
 
   Map<String, dynamic> _stats = {};
@@ -87,7 +134,78 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   @override
   void initState() {
     super.initState();
+    widget.draftNotifier?.addListener(_consumeExternalDraft);
     _init();
+  }
+
+  @override
+  void didUpdateWidget(covariant AiHomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.draftNotifier == widget.draftNotifier) return;
+    oldWidget.draftNotifier?.removeListener(_consumeExternalDraft);
+    widget.draftNotifier?.addListener(_consumeExternalDraft);
+  }
+
+  void _consumeExternalDraft() {
+    final launch = widget.draftNotifier?.value;
+    if (launch == null) return;
+    if (_sending) {
+      Future<void>.delayed(const Duration(milliseconds: 240), () {
+        if (mounted) _consumeExternalDraft();
+      });
+      return;
+    }
+    widget.draftNotifier?.value = null;
+    final requestId = 'graph-chat:${DatabaseHelper.newId()}';
+    final prompt =
+        '用户刚从关心图谱点开了${launch.partnerName}。请结合已有记忆，主动发起一个简短、自然、具体的问题，'
+        '带用户继续关心Ta的天气、近况或提醒。只发一句，不要让用户先复述，也不要解释页面入口。';
+    setState(() {
+      _sending = true;
+      _activityPhase = AiActivityPhase.waitingForReply;
+    });
+    _scrollToBottom();
+    final fallback = '我在。最近想先聊聊${launch.partnerName}的天气、近况，还是提醒？';
+    if (!_hasApiKey) {
+      _appendAssistantFallback(
+        requestId: requestId,
+        content: fallback,
+      ).whenComplete(() {
+        if (!mounted) return;
+        setState(() {
+          _sending = false;
+          _activityPhase = AiActivityPhase.idle;
+        });
+      });
+      return;
+    }
+    _processAiResponse(
+      prompt,
+      requestId: requestId,
+      hideUserMessage: true,
+      recordConversationMemory: false,
+      fallbackAssistantText: fallback,
+    );
+  }
+
+  Future<void> _appendAssistantFallback({
+    required String requestId,
+    required String content,
+  }) async {
+    final record = await ChatHistoryService.appendOnce(
+      requestId: '$requestId:fallback',
+      role: 'assistant',
+      content: content,
+      messageType: 'launch_question',
+      metadata: const {'source': 'care_graph_fallback'},
+    );
+    if (!mounted) return;
+    setState(() {
+      _messages.add(
+        _ChatMessage(id: record.id, role: 'assistant', content: content),
+      );
+    });
+    _scrollToBottom();
   }
 
   Future<void> _init() async {
@@ -102,30 +220,61 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         LocalAchievementService.getAllWithProgress(),
         AiService.getChatHistory(),
       ]);
+      final history = results[2] as List;
+      final attachmentRows =
+          await ChatHistoryService.getAttachmentsByMessageIds(
+            history
+                .where((row) => row['message_type'] == 'image')
+                .map((row) => row['id'] as String),
+          );
       if (!mounted) return;
 
       setState(() {
         _stats = results[0] as Map<String, dynamic>;
         _achievements = results[1] as List;
         // 加载历史消息（assistant 消息按 ||| 拆分为多条气泡）
-        for (final row in results[2] as List) {
+        for (final row in history) {
+          final id = row['id'] as String?;
           final role = row['role'] as String;
           final content = row['content'] as String;
+          final messageType = row['message_type'] as String? ?? 'message';
+          if (messageType == 'image') {
+            final attachment = attachmentRows[id];
+            _messages.add(
+              _ChatMessage(
+                id: id,
+                role: role,
+                content: content,
+                localImagePath: attachment?['local_path'] as String?,
+              ),
+            );
+            continue;
+          }
+          if (messageType == 'milestone') {
+            final milestone = _decodeMilestone(row['metadata_json'] as String?);
+            if (milestone != null) {
+              _messages.add(
+                _ChatMessage(
+                  id: id,
+                  role: role,
+                  content: content,
+                  milestone: milestone,
+                ),
+              );
+              continue;
+            }
+          }
           if (role == 'assistant' && content.contains('|||')) {
-            final parts = content
-                .split('|||')
-                .map((s) => s.trim())
-                .where((s) => s.isNotEmpty)
-                .toList();
+            final parts = splitAssistantPresentationSegments(content);
             if (parts.length > 1) {
               for (final part in parts) {
-                _messages.add(_ChatMessage(role: role, content: part));
+                _messages.add(_ChatMessage(id: id, role: role, content: part));
               }
             } else {
-              _messages.add(_ChatMessage(role: role, content: content));
+              _messages.add(_ChatMessage(id: id, role: role, content: content));
             }
           } else {
-            _messages.add(_ChatMessage(role: role, content: content));
+            _messages.add(_ChatMessage(id: id, role: role, content: content));
           }
         }
         _loading = false;
@@ -135,8 +284,51 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       _generateProactiveMessages();
       // 消费后台 AI 主动消息
       _consumePendingProactiveMessages();
+      _loadReminderFollowUps();
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadReminderFollowUps() async {
+    List<ReminderOccurrenceRecord> pending;
+    try {
+      pending = await ReminderOccurrenceService.pendingFollowUps();
+    } catch (_) {
+      // Import/restore and widget teardown may close the shared database while
+      // this optional background query is still queued. It must never surface
+      // as a page error or an uncaught lifecycle exception.
+      return;
+    }
+    if (!mounted || pending.isEmpty) return;
+    setState(() {
+      for (final occurrence in pending) {
+        final alreadyShown = _messages.any(
+          (message) => message.reminderOccurrence?.id == occurrence.id,
+        );
+        if (!alreadyShown) {
+          _messages.add(
+            _ChatMessage(
+              role: 'system',
+              content: occurrence.message ?? '',
+              reminderOccurrence: occurrence,
+            ),
+          );
+        }
+      }
+    });
+    _scrollToBottom();
+  }
+
+  ToolMilestone? _decodeMilestone(String? metadataJson) {
+    if (metadataJson == null || metadataJson.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(metadataJson) as Map<String, dynamic>;
+      final milestone = decoded['milestone'];
+      if (milestone is! Map) return null;
+      return ToolMilestone.fromMap(Map<String, dynamic>.from(milestone));
+    } catch (_) {
+      return null;
     }
   }
 
@@ -177,37 +369,41 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         introShown: introShown,
       );
 
+      if (plan != OnboardingEntryPlan.none) {
+        setState(() => _activityPhase = AiActivityPhase.onboarding);
+        _scrollToBottom();
+      }
+
       if (plan == OnboardingEntryPlan.introAndPrompt) {
         const welcomeMessages = ['你好呀，我是小念', '我可以帮你关注在乎的人的天气、写温暖的关怀语、设置贴心提醒'];
+        const requestIds = [
+          'onboarding:intro:hello',
+          'onboarding:intro:capability',
+        ];
         for (var index = 0; index < welcomeMessages.length; index++) {
-          if (index > 0) {
-            final charCount = welcomeMessages[index].length;
-            final delayMs = (charCount * 100).clamp(2000, 8000);
-            await Future.delayed(Duration(milliseconds: delayMs));
-          }
+          await Future.delayed(
+            Duration(milliseconds: index == 0 ? 1800 : 2100),
+          );
           if (!mounted) return;
-          setState(() {
-            _messages.add(
-              _ChatMessage(role: 'assistant', content: welcomeMessages[index]),
-            );
-          });
-          _scrollToBottom();
+          await _appendOnboardingMessage(
+            requestId: requestIds[index],
+            content: welcomeMessages[index],
+          );
         }
         await prefs.setBool('welcome_intro_shown', true);
       }
 
       if (!mounted || plan == OnboardingEntryPlan.none) return;
-      setState(() {
-        _messages.add(
-          const _ChatMessage(
-            role: 'assistant',
-            content: '先来告诉我一个你在意的人吧：',
-            onboardingPrompt: true,
-          ),
-        );
-      });
+      await Future.delayed(const Duration(milliseconds: 2100));
+      if (!mounted) return;
+      await _appendOnboardingMessage(
+        requestId: 'onboarding:prompt:person',
+        content: '先来告诉我一个你在意的人吧',
+      );
+      if (!mounted) return;
+      setState(() => _activityPhase = AiActivityPhase.idle);
       _scrollToBottom();
-      _focusOnboardingPrompt();
+      _focusComposer();
       return;
     }
 
@@ -238,6 +434,30 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       );
     });
     _scrollToBottom();
+  }
+
+  Future<void> _appendOnboardingMessage({
+    required String requestId,
+    required String content,
+  }) async {
+    final alreadyVisible = _messages.any(
+      (message) => message.role == 'assistant' && message.content == content,
+    );
+    if (!alreadyVisible && mounted) {
+      setState(() {
+        _messages.add(_ChatMessage(role: 'assistant', content: content));
+      });
+      _scrollToBottom();
+    }
+
+    final result = await ChatHistoryService.appendOnce(
+      requestId: requestId,
+      role: 'assistant',
+      content: content,
+      messageType: 'onboarding',
+      metadata: const {'source': 'local_onboarding'},
+    );
+    if (!mounted || !result.inserted || !alreadyVisible) return;
   }
 
   Future<void> _checkWeatherProactive(List<Partner> partners) async {
@@ -358,30 +578,255 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     await _sendText(text);
   }
 
-  Future<void> _submitOnboardingPrompt(String text) async {
-    if (text.trim().isEmpty || _sending) return;
-    _onboardingController.clear();
-    _onboardingFocusNode.unfocus();
-    await _sendText(text.trim());
-  }
-
   Future<void> _sendText(String text) async {
     if (text.trim().isEmpty || _sending) return;
 
+    final requestId = 'chat:${DatabaseHelper.newId()}';
+
     setState(() {
-      _messages.add(_ChatMessage(role: 'user', content: text));
       _messages.add(
-        const _ChatMessage(role: 'assistant', content: '', streaming: true),
+        _ChatMessage(role: 'user', content: text, requestId: requestId),
       );
       _sending = true;
       _executingTool = null;
+      _activityPhase = AiActivityPhase.waitingForReply;
     });
     _scrollToBottom();
-    await _processAiResponse(text);
+    await _processAiResponse(text, requestId: requestId);
+  }
+
+  Future<void> _toggleVoiceInput() async {
+    if (_isListening) {
+      await _speech.stop();
+      if (mounted) setState(() => _isListening = false);
+      return;
+    }
+    try {
+      if (!_speechInitialized) {
+        _speechInitialized = await _speech.initialize(
+          onStatus: (status) {
+            if (!mounted) return;
+            if (status == 'done' || status == 'notListening') {
+              setState(() => _isListening = false);
+            }
+          },
+          onError: (_) {
+            if (mounted) setState(() => _isListening = false);
+          },
+        );
+      }
+      if (!_speechInitialized) {
+        _showComposerMessage('当前设备暂不支持语音识别');
+        return;
+      }
+      final locales = await _speech.locales();
+      final zhLocale = locales
+          .where((locale) => locale.localeId.toLowerCase().startsWith('zh'))
+          .map((locale) => locale.localeId)
+          .firstOrNull;
+      _voicePrefix = _controller.text.trimRight();
+      await _speech.listen(
+        onResult: (result) {
+          if (!mounted) return;
+          final recognized = result.recognizedWords.trim();
+          final combined = [
+            if (_voicePrefix.isNotEmpty) _voicePrefix,
+            if (recognized.isNotEmpty) recognized,
+          ].join(' ');
+          _controller.value = TextEditingValue(
+            text: combined,
+            selection: TextSelection.collapsed(offset: combined.length),
+          );
+        },
+        listenOptions: stt.SpeechListenOptions(
+          localeId: zhLocale,
+          partialResults: true,
+          cancelOnError: true,
+          listenMode: stt.ListenMode.dictation,
+          pauseFor: const Duration(seconds: 3),
+        ),
+      );
+      if (mounted) setState(() => _isListening = true);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isListening = false);
+        _showComposerMessage('没有听清，请检查麦克风权限后再试');
+      }
+    }
+  }
+
+  void _showComposerMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  Future<void> _chooseImageSource() async {
+    if (_sending || _processingImage) return;
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            TaSpacing.pagePadding,
+            0,
+            TaSpacing.pagePadding,
+            TaSpacing.md,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('拍一张'),
+                subtitle: const Text('用相机记录此刻'),
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('从相册选择'),
+                subtitle: const Text('让小念帮你理解图片'),
+                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    await _pickAndUnderstandImage(source);
+  }
+
+  Future<void> _pickAndUnderstandImage(ImageSource source) async {
+    StoredImageAttachment? stored;
+    var persisted = false;
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 86,
+      );
+      if (picked == null || !mounted) return;
+      setState(() {
+        _processingImage = true;
+        _sending = true;
+        _executingTool = 'understand_image';
+        _activityPhase = AiActivityPhase.executingTool;
+      });
+      stored = await ImageUnderstandingService.storeLocalCopy(
+        File(picked.path),
+      );
+      if (!mounted) return;
+      setState(() {
+        _messages.add(
+          _ChatMessage(
+            role: 'user',
+            content: '正在理解这张图片…',
+            localImagePath: stored!.localPath,
+          ),
+        );
+      });
+      _scrollToBottom();
+
+      final understanding = await ImageUnderstandingService.analyze(
+        File(stored.localPath),
+      );
+      final messageId = await ImageUnderstandingService.persistUnderstanding(
+        attachment: stored,
+        understanding: understanding,
+      );
+      persisted = true;
+      final receipt = ImageUnderstandingService.memoryReceipt(understanding);
+      ToolMilestone? memoryMilestone;
+      ChatHistoryWriteResult? receiptRecord;
+      if (receipt != null) {
+        memoryMilestone = ToolMilestone(
+          status: ToolExecutionStatus.information,
+          title: receipt.title,
+          detail: receipt.detail,
+        );
+        receiptRecord = await ChatHistoryService.append(
+          role: 'system',
+          content: '${receipt.title}：${receipt.detail}',
+          messageType: 'milestone',
+          metadata: {
+            'source': 'image_memory',
+            'image_message_id': messageId,
+            'milestone': memoryMilestone.toMap(),
+          },
+        );
+      }
+      if (!mounted) return;
+      final index = _messages.lastIndexWhere(
+        (message) => message.localImagePath == stored!.localPath,
+      );
+      setState(() {
+        if (index >= 0) {
+          _messages[index] = _ChatMessage(
+            id: messageId,
+            role: 'user',
+            content: understanding.summary,
+            localImagePath: stored!.localPath,
+          );
+        }
+        if (memoryMilestone != null && receiptRecord != null) {
+          _messages.add(
+            _ChatMessage(
+              id: receiptRecord.id,
+              role: 'system',
+              content: '${memoryMilestone.title}：${memoryMilestone.detail}',
+              milestone: memoryMilestone,
+            ),
+          );
+        }
+        _processingImage = false;
+        _executingTool = null;
+        _activityPhase = AiActivityPhase.waitingForReply;
+      });
+
+      final facts = understanding.facts.isEmpty
+          ? '没有额外的长期事实'
+          : understanding.facts.map((fact) => '- $fact').join('\n');
+      final prompt =
+          '用户刚发送了一张图片。图片客观概述：${understanding.summary}\n'
+          '从图片中确认的事实：\n$facts\n'
+          '请结合已有上下文自然回应；如果适合继续关怀或设置提醒，只问一个简短的下一步问题。'
+          '不要复述分析规则，也不要声称看到了未确认的信息。';
+      await _processAiResponse(
+        prompt,
+        requestId: 'image-context:$messageId',
+        hideUserMessage: true,
+        hiddenMessageType: 'image_context',
+        recordConversationMemory: false,
+      );
+    } catch (error) {
+      if (stored != null && !persisted) {
+        final file = File(stored.localPath);
+        if (await file.exists()) await file.delete();
+      }
+      if (!mounted) return;
+      setState(() {
+        if (!persisted) {
+          _messages.removeWhere(
+            (message) => message.localImagePath == stored?.localPath,
+          );
+        }
+        _processingImage = false;
+        _sending = false;
+        _executingTool = null;
+        _activityPhase = AiActivityPhase.idle;
+      });
+      _showComposerMessage(error.toString());
+    }
   }
 
   // ---- 工具执行调度 ----
-  Future<String> _executeTool(String name, Map<String, dynamic> args) async {
+  Future<ToolExecutionResult> _executeTool(
+    String name,
+    Map<String, dynamic> args,
+  ) async {
     try {
       switch (name) {
         case 'create_reminder':
@@ -389,125 +834,423 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         case 'delete_reminder':
           return await _toolDeleteReminder(args);
         case 'get_partner_weather':
-          return await _toolGetWeather(args);
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: await _toolGetWeather(args),
+          );
         case 'get_all_partners':
-          return await _toolGetAllPartners();
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: await _toolGetAllPartners(),
+          );
         case 'get_reminder_stats':
-          return await _toolGetReminderStats();
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: await _toolGetReminderStats(),
+          );
         case 'create_partner':
           return await _toolCreatePartner(args);
         case 'update_partner':
           return await _toolUpdatePartner(args);
         case 'get_partner_detail':
-          return await _toolGetPartnerDetail(args);
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: await _toolGetPartnerDetail(args),
+          );
         default:
-          return '不支持的操作: $name';
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: '不支持的操作: $name',
+          );
       }
     } catch (e) {
-      return '执行失败: $e';
+      if (_isStateChangingTool(name)) {
+        return ToolExecutionResult.failure(
+          toolName: name,
+          modelMessage: '执行失败: $e',
+          title: '操作未完成',
+          detail: '没有保存更改，请稍后重试',
+        );
+      }
+      return ToolExecutionResult.information(
+        toolName: name,
+        modelMessage: '执行失败: $e',
+      );
     }
   }
 
+  bool _isStateChangingTool(String name) => const {
+    'create_reminder',
+    'delete_reminder',
+    'create_partner',
+    'update_partner',
+  }.contains(name);
+
   // ---- 工具: 创建提醒 ----
-  Future<String> _toolCreateReminder(Map<String, dynamic> args) async {
-    final partnerName = args['partner_name'] as String? ?? '';
-    final category = args['category'] as String? ?? 'custom';
-    var time = args['time'] as String? ?? '22:00';
-    final customMessage = args['message'] as String?;
-
-    // 时间格式校验和修正
-    final timeMatch = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(time);
-    if (timeMatch == null) {
-      return '时间格式错误：$time，应为 HH:mm 格式（如 22:00）';
-    }
-    final hour = int.tryParse(timeMatch.group(1)!) ?? 22;
-    final minute = int.tryParse(timeMatch.group(2)!) ?? 0;
-    if (hour > 23 || minute > 59) {
-      return '时间无效：$time，小时应在0-23之间，分钟应在0-59之间';
-    }
-    time =
-        '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
-
-    // 按名字查找 partner
-    final partners = await PartnerService.getAll();
-    final partner = partners.where((p) => p.nickname == partnerName).toList();
-    if (partner.isEmpty) {
-      return '未找到名为"$partnerName"的关心的人，请先添加';
+  Future<ToolExecutionResult> _toolCreateReminder(
+    Map<String, dynamic> args,
+  ) async {
+    final parseResult = ReminderToolPlanner.parse(args);
+    final plan = parseResult.plan;
+    if (plan == null) {
+      final message = parseResult.error ?? '提醒参数不完整';
+      return ToolExecutionResult.failure(
+        toolName: 'create_reminder',
+        modelMessage: message,
+        title: '提醒未创建',
+        detail: message,
+      );
     }
 
-    // 检查是否已有同类别提醒
-    final existingConfigs = await LocalReminderService.getConfigs(
-      partner.first.id,
+    Partner? partner;
+    if (!plan.isSelfReminder) {
+      final partners = await PartnerService.getAll();
+      final matchingPartners = partners
+          .where((partner) => partner.nickname == plan.partnerName)
+          .toList();
+      if (matchingPartners.isEmpty) {
+        final message = '未找到名为"${plan.partnerName}"的关心的人，请先添加';
+        return ToolExecutionResult.failure(
+          toolName: 'create_reminder',
+          modelMessage: message,
+          title: '提醒未创建',
+          detail: message,
+        );
+      }
+      partner = matchingPartners.first;
+    }
+
+    if (plan.isSelfReminder && plan.category == 'weather') {
+      return ToolExecutionResult.failure(
+        toolName: 'create_reminder',
+        modelMessage: '自己的天气提醒还需要先确认当前位置，请先创建睡觉或吃饭提醒',
+        title: '天气提醒未创建',
+        detail: '需要先补充用户所在地',
+        verified: true,
+      );
+    }
+
+    if (plan.monitorsWeatherChanges &&
+        partner?.city?.isNotEmpty != true &&
+        (partner?.latitude == null || partner?.longitude == null)) {
+      final message = '${plan.partnerName}还没有所在地，无法监测当地天气变化。请先确认城市';
+      return ToolExecutionResult.failure(
+        toolName: 'create_reminder',
+        modelMessage: message,
+        title: '天气监测未开启',
+        detail: '需要先补充${plan.partnerName}的所在地',
+        entityId: partner?.id,
+        verified: true,
+      );
+    }
+
+    String? timezoneId;
+    if (plan.timezoneMode == 'partner') {
+      timezoneId = ReminderToolPlanner.resolveTimezoneId(
+        plan: plan,
+        partner: partner!,
+      );
+      if (timezoneId == null) {
+        final explicit = plan.timezoneId?.trim();
+        final message = explicit?.isNotEmpty == true
+            ? '时区 $explicit 无效，请使用 IANA 时区（如 Asia/Singapore）'
+            : '还不能确定${plan.partnerName}的当地时区。请先确认所在地或 IANA 时区，再创建按Ta当地时间执行的提醒';
+        return ToolExecutionResult.failure(
+          toolName: 'create_reminder',
+          modelMessage: message,
+          title: '提醒未创建',
+          detail: '需要确认${plan.partnerName}的当地时区',
+          entityId: partner.id,
+          verified: true,
+        );
+      }
+    }
+
+    // 两种天气提醒可以并存；同一种天气模式或其他同类别提醒不重复创建。
+    final subjectKind = plan.isSelfReminder ? 'user' : 'partner';
+    final subjectId = plan.isSelfReminder ? 'self' : partner!.id;
+    final existingConfigs = await LocalReminderService.getConfigsForSubject(
+      subjectKind,
+      subjectId,
     );
-    final sameCategory = existingConfigs
-        .where((c) => c.category == category && c.enabled)
-        .toList();
+    final sameCategory = existingConfigs.where((config) {
+      if (!config.enabled || config.category != plan.category) return false;
+      if (plan.category != 'weather') return true;
+      final existingMode = config.config['mode'] ?? 'daily_digest';
+      return existingMode == plan.config['mode'];
+    }).toList();
     if (sameCategory.isNotEmpty) {
       final config = sameCategory.first.config;
       final existingTime =
           config['target_sleep_time'] ??
           config['meals']?[0]?['target_time'] ??
-          '';
-      return '$partnerName 已有${_categoryLabel(category)}提醒（$existingTime），如需修改请先删除旧的';
+          config['digest_time'] ??
+          '${config['monitor_start'] ?? '07:00'}–${config['monitor_end'] ?? '23:00'}';
+      final reminderLabel = _reminderPlanLabel(plan);
+      final message =
+          '${plan.partnerName}已有$reminderLabel（$existingTime），如需修改请到提醒管理中编辑';
+      return ToolExecutionResult.failure(
+        toolName: 'create_reminder',
+        modelMessage: message,
+        title: '提醒未创建',
+        detail: message,
+        entityId: sameCategory.first.id,
+        verified: true,
+      );
     }
 
-    // 根据类别创建配置
-    Map<String, dynamic> configData;
-    switch (category) {
-      case 'sleep':
-        configData = {'target_sleep_time': time, 'advance_minutes': 30};
-        break;
-      case 'meal':
-        configData = {
-          'meals': [
-            {
-              'name': customMessage ?? '吃饭',
-              'target_time': time,
-              'advance_minutes': 15,
-            },
-          ],
-        };
-        break;
-      case 'weather':
-        configData = ReminderConfig.defaultConfigFor('weather');
-        break;
-      default:
-        configData = {};
-    }
-
-    await LocalReminderService.createConfig(
-      partnerId: partner.first.id,
-      category: category,
-      config: configData,
+    final created = await LocalReminderService.createConfig(
+      partnerId: partner?.id ?? '',
+      category: plan.category,
+      config: plan.config,
+      timezoneMode: plan.timezoneMode,
+      timezoneId: timezoneId,
+      subjectKind: subjectKind,
+      subjectId: subjectId,
     );
-    await ReminderScheduler.scheduleAll();
+    final verifiedConfigs = await LocalReminderService.getConfigsForSubject(
+      subjectKind,
+      subjectId,
+    );
+    final verified = verifiedConfigs.any(
+      (config) =>
+          config.id == created.id &&
+          config.category == plan.category &&
+          config.timezoneMode == plan.timezoneMode &&
+          config.timezoneId == timezoneId &&
+          config.config['mode'] == plan.config['mode'],
+    );
+    if (!verified) {
+      var rolledBack = false;
+      try {
+        await LocalReminderService.deleteConfig(created.id);
+        rolledBack = true;
+      } catch (_) {}
+      return ToolExecutionResult.failure(
+        toolName: 'create_reminder',
+        modelMessage: rolledBack
+            ? '提醒写入后校验失败，已回滚本次创建，请重试'
+            : '提醒写入后校验失败且自动回滚未完成，请到提醒管理中检查',
+        title: '提醒未创建',
+        detail: rolledBack ? '数据库校验失败，本次更改已撤销' : '需要检查是否留下未完整配置',
+        entityId: created.id,
+      );
+    }
 
-    return '成功为$partnerName 创建了${_categoryLabel(category)}提醒，时间 $time';
+    final reminderLabel = _reminderPlanLabel(plan);
+    final timeDetail = plan.monitorsWeatherChanges
+        ? '${plan.config['monitor_start']}–${plan.config['monitor_end']}'
+        : '每天 ${plan.displayTime}';
+    final zoneDetail = plan.timezoneMode == 'partner'
+        ? '${plan.partnerName}当地时间 · $timezoneId'
+        : '你的当地时间';
+
+    if (plan.monitorsWeatherChanges) {
+      final readiness = await BackgroundExecutionService.getReadiness();
+      if (!readiness.notificationGranted ||
+          !readiness.batteryOptimizationIgnored) {
+        return ToolExecutionResult.partialSuccess(
+          toolName: 'create_reminder',
+          modelMessage:
+              '天气突变监测已保存并验证，但系统通知或后台运行条件尚未完全就绪。它是设备端尽力监测，可能受省电和网络限制而延迟',
+          title: '天气监测已保存',
+          detail: '${plan.partnerName} · $timeDetail · $zoneDetail；请完善后台权限',
+          entityId: created.id,
+          verified: true,
+        );
+      }
+      return ToolExecutionResult.success(
+        toolName: 'create_reminder',
+        modelMessage:
+            '已为${plan.partnerName}开启并验证天气突变尽力监测，监测时段 $timeDetail（$zoneDetail）。后台省电或网络限制仍可能造成延迟',
+        title: '$reminderLabel已开启',
+        detail: '${plan.partnerName} · $timeDetail · $zoneDetail',
+        entityId: created.id,
+        verified: true,
+      );
+    }
+
+    final schedulingReady =
+        TimezoneService.isInitialized && NotificationService.isInitialized;
+    final occurrences = schedulingReady
+        ? plan.isSelfReminder
+              ? ReminderScheduler.calculateSelfOccurrences(
+                  config: created,
+                  now: tz.TZDateTime.now(tz.local),
+                )
+              : ReminderScheduler.calculateOccurrences(
+                  config: created,
+                  partner: partner!,
+                  now: tz.TZDateTime.now(tz.local),
+                )
+        : const [];
+    try {
+      await ReminderScheduler.scheduleAll();
+    } catch (_) {
+      return ToolExecutionResult.partialSuccess(
+        toolName: 'create_reminder',
+        modelMessage: '提醒已保存并验证，但系统通知调度失败',
+        title: '提醒已保存',
+        detail: '${plan.partnerName} · $reminderLabel · $timeDetail；通知尚未调度',
+        entityId: created.id,
+        verified: true,
+      );
+    }
+
+    if (!schedulingReady || occurrences.isEmpty) {
+      return ToolExecutionResult.partialSuccess(
+        toolName: 'create_reminder',
+        modelMessage: '提醒已保存并验证，但通知服务或时区调度尚未就绪',
+        title: '提醒已保存',
+        detail: '${plan.partnerName} · $reminderLabel · $timeDetail；稍后将重试调度',
+        entityId: created.id,
+        verified: true,
+      );
+    }
+
+    final readiness = await BackgroundExecutionService.getReadiness();
+    if (!readiness.notificationGranted || !readiness.exactAlarmAllowed) {
+      return ToolExecutionResult.partialSuccess(
+        toolName: 'create_reminder',
+        modelMessage: '提醒已保存、验证并提交调度，但通知权限或精确定时权限尚未完全就绪，系统可能改用非精确定时',
+        title: '提醒已保存',
+        detail: '${plan.partnerName} · $timeDetail · $zoneDetail；请完善系统权限',
+        entityId: created.id,
+        verified: true,
+      );
+    }
+
+    return ToolExecutionResult.success(
+      toolName: 'create_reminder',
+      modelMessage:
+          '已为${plan.partnerName}创建、回读验证并调度$reminderLabel，$timeDetail（$zoneDetail）',
+      title: '$reminderLabel已设置',
+      detail: '${plan.partnerName} · $timeDetail · $zoneDetail',
+      entityId: created.id,
+      verified: true,
+    );
+  }
+
+  String _reminderPlanLabel(ReminderToolPlan plan) {
+    if (plan.monitorsWeatherChanges) return '天气突变监测';
+    if (plan.category == 'weather') return '每日天气简报';
+    return _categoryLabel(plan.category);
   }
 
   // ---- 工具: 删除提醒 ----
-  Future<String> _toolDeleteReminder(Map<String, dynamic> args) async {
+  Future<ToolExecutionResult> _toolDeleteReminder(
+    Map<String, dynamic> args,
+  ) async {
     final partnerName = args['partner_name'] as String? ?? '';
     final category = args['category'] as String? ?? '';
+    final weatherMode = args['weather_mode'] as String?;
+    final isSelf =
+        args['subject'] == 'self' ||
+        const {'我', '自己', '本人', '用户'}.contains(partnerName.trim());
 
-    final partners = await PartnerService.getAll();
-    final partner = partners.where((p) => p.nickname == partnerName).toList();
-    if (partner.isEmpty) {
-      return '未找到名为"$partnerName"的关心的人';
+    Partner? partner;
+    if (!isSelf) {
+      final partners = await PartnerService.getAll();
+      final matches = partners.where((p) => p.nickname == partnerName).toList();
+      if (matches.isEmpty) {
+        final message = '未找到名为"$partnerName"的关心的人';
+        return ToolExecutionResult.failure(
+          toolName: 'delete_reminder',
+          modelMessage: message,
+          title: '提醒未删除',
+          detail: message,
+        );
+      }
+      partner = matches.first;
     }
 
-    final configs = await LocalReminderService.getConfigs(partner.first.id);
-    final matching = configs.where((c) => c.category == category).toList();
+    final displayName = isSelf ? '你自己' : partnerName;
+    final configs = await LocalReminderService.getConfigsForSubject(
+      isSelf ? 'user' : 'partner',
+      isSelf ? 'self' : partner!.id,
+    );
+    final selection = ReminderToolPlanner.selectDeletionTargets(
+      configs,
+      category: category,
+      weatherMode: weatherMode,
+    );
+    if (selection.error != null) {
+      return ToolExecutionResult.failure(
+        toolName: 'delete_reminder',
+        modelMessage: selection.error!,
+        title: '提醒未删除',
+        detail: selection.error!,
+        verified: true,
+      );
+    }
+    final matching = selection.targets;
     if (matching.isEmpty) {
-      return '$partnerName 没有${_categoryLabel(category)}提醒';
+      final requestedLabel = category == 'weather'
+          ? weatherMode == 'weather_change'
+                ? '天气突变监测'
+                : weatherMode == 'daily_digest'
+                ? '每日天气简报'
+                : '天气提醒'
+          : '${_categoryLabel(category)}提醒';
+      final message = '$displayName没有$requestedLabel';
+      return ToolExecutionResult.failure(
+        toolName: 'delete_reminder',
+        modelMessage: message,
+        title: '提醒未删除',
+        detail: message,
+        verified: true,
+      );
     }
 
     for (final config in matching) {
       await LocalReminderService.deleteConfig(config.id);
     }
-    await ReminderScheduler.scheduleAll();
+    final remaining = await LocalReminderService.getConfigsForSubject(
+      isSelf ? 'user' : 'partner',
+      isSelf ? 'self' : partner!.id,
+    );
+    final verified = matching.every(
+      (deleted) => remaining.every((config) => config.id != deleted.id),
+    );
+    if (!verified) {
+      return ToolExecutionResult.failure(
+        toolName: 'delete_reminder',
+        modelMessage: '提醒删除后校验失败，请重试',
+        title: '提醒未删除',
+        detail: '数据库校验失败，请重试',
+      );
+    }
 
-    return '已删除$partnerName 的${_categoryLabel(category)}提醒';
+    final schedulingReady =
+        TimezoneService.isInitialized && NotificationService.isInitialized;
+    try {
+      await ReminderScheduler.scheduleAll();
+    } catch (_) {
+      return ToolExecutionResult.partialSuccess(
+        toolName: 'delete_reminder',
+        modelMessage: '提醒配置已删除，但系统通知同步失败',
+        title: '提醒已删除',
+        detail: '$displayName · ${_categoryLabel(category)}；通知将在下次启动时同步',
+        verified: true,
+      );
+    }
+    if (!schedulingReady) {
+      return ToolExecutionResult.partialSuccess(
+        toolName: 'delete_reminder',
+        modelMessage: '提醒配置已删除，但通知服务尚未就绪',
+        title: '提醒已删除',
+        detail: '$displayName · ${_categoryLabel(category)}；重启后将同步通知',
+        verified: true,
+      );
+    }
+
+    return ToolExecutionResult.success(
+      toolName: 'delete_reminder',
+      modelMessage: '已删除并验证$displayName的${_categoryLabel(category)}提醒',
+      title: '${_categoryLabel(category)}提醒已删除',
+      detail: displayName,
+      verified: true,
+    );
   }
 
   // ---- 工具: 查天气 ----
@@ -622,54 +1365,123 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   }
 
   // ---- 工具: 创建关心的人 ----
-  Future<String> _toolCreatePartner(Map<String, dynamic> args) async {
+  Future<ToolExecutionResult> _toolCreatePartner(
+    Map<String, dynamic> args,
+  ) async {
     final nickname = args['nickname'] as String? ?? '';
     final type = args['relationship'] as String? ?? 'other';
     final rawCity = args['city'] as String?;
     // 城市名清理：去空格、去掉"市"后缀
     final city = rawCity?.trim().replaceAll(RegExp(r'[市]$'), '');
+    final timezoneId = (args['timezone_id'] as String?)?.trim();
     final note = args['note'] as String?;
 
     if (nickname.isEmpty) {
-      return '创建失败：需要提供名字';
+      return ToolExecutionResult.failure(
+        toolName: 'create_partner',
+        modelMessage: '创建失败：需要提供名字',
+        title: '未添加关心的人',
+        detail: '需要先提供名字',
+      );
+    }
+    if (timezoneId != null &&
+        timezoneId.isNotEmpty &&
+        !_isValidTimezoneId(timezoneId)) {
+      return ToolExecutionResult.failure(
+        toolName: 'create_partner',
+        modelMessage: '时区 $timezoneId 无效，请先向用户确认正确的 IANA 时区',
+        title: '未添加关心的人',
+        detail: '时区格式无效，例如应为 Asia/Singapore',
+      );
     }
 
     // 检查是否已存在同名
     final existing = await PartnerService.getAll();
     if (existing.any((p) => p.nickname == nickname)) {
-      return '$nickname 已经在你的关心列表里了，不需要重复添加';
+      return ToolExecutionResult.failure(
+        toolName: 'create_partner',
+        modelMessage: '$nickname 已经在你的关心列表里了，不需要重复添加',
+        title: '没有重复添加',
+        detail: '$nickname 已经在关心列表中',
+        verified: true,
+      );
     }
 
-    await PartnerService.add(
+    final provisional = await PartnerService.add(
       nickname: nickname,
       type: type,
       city: city,
       note: note,
+      timezoneId: timezoneId?.isEmpty == true ? null : timezoneId,
+      timezoneSource: timezoneId?.isNotEmpty == true ? 'user_confirmed' : null,
+      timezoneConfirmed: timezoneId?.isNotEmpty == true,
     );
-    PartnerService.notifyRefresh();
-
     // 验证创建结果
     final verify = await PartnerService.getAll();
     final created = verify.where((p) => p.nickname == nickname).toList();
     if (created.isEmpty) {
-      return '创建失败：数据库写入异常，请重试';
+      final rolledBack = await _rollbackCreatedPartner(provisional.id);
+      return ToolExecutionResult.failure(
+        toolName: 'create_partner',
+        modelMessage: rolledBack
+            ? '人物写入后校验失败，已回滚本次创建，请重试'
+            : '人物写入后校验失败且自动回滚未完成，请检查关心列表',
+        title: '未添加关心的人',
+        detail: rolledBack ? '数据库校验失败，本次更改已撤销' : '需要检查是否留下未完整人物',
+        entityId: provisional.id,
+      );
     }
     final p = created.first;
+    final createVerified =
+        p.type == type &&
+        (city == null || p.city == city) &&
+        (timezoneId == null ||
+            timezoneId.isEmpty ||
+            (p.timezoneId == timezoneId && p.timezoneConfirmed)) &&
+        (note == null || p.note == note);
+    if (!createVerified) {
+      final rolledBack = await _rollbackCreatedPartner(p.id);
+      return ToolExecutionResult.failure(
+        toolName: 'create_partner',
+        modelMessage: rolledBack
+            ? '人物写入后数据校验不一致，已回滚本次创建，请重试'
+            : '人物写入后数据校验不一致且自动回滚未完成，请检查关心列表',
+        title: '未完整添加关心的人',
+        detail: rolledBack ? '数据库校验失败，本次更改已撤销' : '需要检查是否留下未完整人物',
+        entityId: p.id,
+      );
+    }
 
     final typeLabel = _relationshipLabel(type);
-    final cityInfo = p.city != null && p.city!.isNotEmpty
-        ? '，城市已设为${p.city}'
-        : '';
+    final locationInfo = <String>[
+      if (p.city?.isNotEmpty == true) '城市已设为${p.city}',
+      if (p.timezoneId?.isNotEmpty == true) '当地时区已确认 ${p.timezoneId}',
+    ];
 
-    if (city != null && city.isNotEmpty) {
-      return '已成功添加 $nickname（$typeLabel$cityInfo）。\n'
-          '请主动告诉用户已经添加成功（包含城市信息），然后问用户是否需要设置提醒。\n'
-          '用选择题格式让用户选择提醒类型：[选项:睡觉提醒|吃饭提醒|天气提醒|稍后再说]';
+    final modelMessage = city != null && city.isNotEmpty
+        ? '已成功添加 $nickname（$typeLabel${locationInfo.isEmpty ? '' : '，${locationInfo.join('，')}'}）。\n'
+              '接着问用户是否需要设置提醒。\n'
+              '用选择题格式：[选项:睡觉提醒|吃饭提醒|天气提醒|稍后再说]'
+        : '已成功添加 $nickname（$typeLabel）。\n'
+              '接着询问 $nickname 在哪个城市，再询问是否需要设置提醒。';
+    return ToolExecutionResult.success(
+      toolName: 'create_partner',
+      modelMessage: modelMessage,
+      title: '已添加关心的人',
+      detail:
+          '$nickname · $typeLabel${p.city == null ? '' : ' · ${p.city}'}${p.timezoneId == null ? '' : ' · ${p.timezoneId}'}',
+      entityId: p.id,
+      verified: true,
+    );
+  }
+
+  Future<bool> _rollbackCreatedPartner(String id) async {
+    try {
+      await PartnerService.deleteCreated(id);
+      return true;
+    } catch (_) {
+      return false;
     }
-    return '已成功添加 $nickname（$typeLabel）。\n'
-        '请主动告诉用户已经添加成功，建议用户设置城市和提醒。\n'
-        '先问用户 $nickname 在哪个城市，然后再问是否需要设置提醒。\n'
-        '提醒类型用选择题格式：[选项:睡觉提醒|吃饭提醒|天气提醒|稍后再说]';
   }
 
   // ---- 工具: 查看某人详情 ----
@@ -689,6 +1501,13 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       parts.add('城市: ${p.city}');
     } else {
       parts.add('城市: 未设置');
+    }
+    if (p.timezoneId?.isNotEmpty == true) {
+      parts.add(
+        '时区: ${p.timezoneId}${p.timezoneConfirmed ? '（已确认）' : '（待确认）'}',
+      );
+    } else {
+      parts.add('时区: 未确认');
     }
     if (p.note != null && p.note!.isNotEmpty) {
       parts.add('描述: ${p.note}');
@@ -711,7 +1530,9 @@ class _AiHomeScreenState extends State<AiHomeScreen>
                     : '';
                 return '吃饭提醒${time.isNotEmpty ? "($time)" : ""}';
               case 'weather':
-                return '天气提醒';
+                final mode = c.config['mode'] ?? 'daily_digest';
+                final label = mode == 'weather_change' ? '天气突变监测' : '每日天气简报';
+                return '$label（${c.timezoneMode == 'partner' ? 'Ta当地时间' : '你的当地时间'}）';
               default:
                 return c.category;
             }
@@ -726,21 +1547,44 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   }
 
   // ---- 工具: 更新关心的人 ----
-  Future<String> _toolUpdatePartner(Map<String, dynamic> args) async {
+  Future<ToolExecutionResult> _toolUpdatePartner(
+    Map<String, dynamic> args,
+  ) async {
     final partnerName = args['partner_name'] as String? ?? '';
     final newNickname = args['new_nickname'] as String?;
     final newType = args['relationship'] as String?;
     final rawCity = args['city'] as String?;
     final city = rawCity?.trim().replaceAll(RegExp(r'[市县区]$'), '');
+    final timezoneId = (args['timezone_id'] as String?)?.trim();
     final note = args['note'] as String?;
+
+    if (timezoneId != null &&
+        timezoneId.isNotEmpty &&
+        !_isValidTimezoneId(timezoneId)) {
+      return ToolExecutionResult.failure(
+        toolName: 'update_partner',
+        modelMessage: '时区 $timezoneId 无效，请先向用户确认正确的 IANA 时区',
+        title: '信息未更新',
+        detail: '时区格式无效，例如应为 Asia/Singapore',
+      );
+    }
 
     final partners = await PartnerService.getAll();
     final partner = partners.where((p) => p.nickname == partnerName).toList();
     if (partner.isEmpty) {
-      return '未找到名为"$partnerName"的关心的人';
+      final message = '未找到名为"$partnerName"的关心的人';
+      return ToolExecutionResult.failure(
+        toolName: 'update_partner',
+        modelMessage: message,
+        title: '信息未更新',
+        detail: message,
+      );
     }
 
     final p = partner.first;
+    final cityChanged =
+        city != null &&
+        city.trim().toLowerCase() != (p.city ?? '').trim().toLowerCase();
     final changes = <String>[];
 
     await PartnerService.update(
@@ -749,24 +1593,38 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       type: newType,
       city: city,
       note: note,
+      timezoneId: timezoneId?.isEmpty == true ? null : timezoneId,
+      timezoneSource: timezoneId?.isNotEmpty == true ? 'user_confirmed' : null,
+      timezoneConfirmed: timezoneId?.isNotEmpty == true ? true : null,
     );
-    PartnerService.notifyRefresh();
-
     if (newNickname != null && newNickname != partnerName) {
       changes.add('名字改为$newNickname');
     }
     if (newType != null) {
       changes.add('关系改为${_relationshipLabel(newType)}');
     }
-    if (city != null) {
+    if (cityChanged) {
       changes.add('城市改为$city');
+      if (timezoneId == null || timezoneId.isEmpty) {
+        changes.add('原时区已失效，需重新确认');
+      }
+    }
+    if (timezoneId?.isNotEmpty == true) {
+      changes.add('当地时区确认为$timezoneId');
     }
     if (note != null) {
       changes.add('描述改为$note');
     }
 
     if (changes.isEmpty) {
-      return '${p.nickname}的信息没有变化';
+      return ToolExecutionResult.failure(
+        toolName: 'update_partner',
+        modelMessage: '${p.nickname}的信息没有变化',
+        title: '信息没有变化',
+        detail: '没有收到需要修改的内容',
+        entityId: p.id,
+        verified: true,
+      );
     }
 
     // 验证更新结果
@@ -774,10 +1632,122 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     final verify = await PartnerService.getAll();
     final updated = verify.where((p) => p.nickname == verifyName).toList();
     if (updated.isEmpty) {
-      return '更新失败：数据库写入异常，请重试';
+      final rolledBack = await _rollbackUpdatedPartner(p);
+      return ToolExecutionResult.failure(
+        toolName: 'update_partner',
+        modelMessage: rolledBack
+            ? '更新后校验失败，已恢复修改前的信息，请重试'
+            : '更新后校验失败且自动恢复未完成，请检查人物信息',
+        title: '信息未更新',
+        detail: rolledBack ? '数据库校验失败，本次更改已撤销' : '需要检查人物信息是否完整',
+        entityId: p.id,
+      );
     }
 
-    return '已更新$verifyName：${changes.join('、')}';
+    final saved = updated.first;
+    final verified =
+        (newNickname == null || saved.nickname == newNickname) &&
+        (newType == null || saved.type == newType) &&
+        (city == null || saved.city == city) &&
+        (timezoneId == null ||
+            timezoneId.isEmpty ||
+            (saved.timezoneId == timezoneId && saved.timezoneConfirmed)) &&
+        (!cityChanged ||
+            timezoneId?.isNotEmpty == true ||
+            (saved.timezoneId == null && !saved.timezoneConfirmed)) &&
+        (note == null || saved.note == note);
+    if (!verified) {
+      final rolledBack = await _rollbackUpdatedPartner(p);
+      return ToolExecutionResult.failure(
+        toolName: 'update_partner',
+        modelMessage: rolledBack
+            ? '更新后数据校验不一致，已恢复修改前的信息，请重试'
+            : '更新后数据校验不一致且自动恢复未完成，请检查人物信息',
+        title: '信息未完全更新',
+        detail: rolledBack ? '数据库校验失败，本次更改已撤销' : '需要检查人物信息是否完整',
+        entityId: p.id,
+      );
+    }
+
+    var reminderSyncFailed = false;
+    var reminderSyncDeferred = false;
+    if (cityChanged || timezoneId?.isNotEmpty == true) {
+      if (!TimezoneService.isInitialized ||
+          !NotificationService.isInitialized) {
+        reminderSyncDeferred = true;
+      } else {
+        try {
+          // Rebuild the full schedule so a city change cannot leave stale
+          // notifications running in the previous timezone.
+          await ReminderScheduler.scheduleAll();
+        } catch (_) {
+          reminderSyncFailed = true;
+        }
+      }
+    }
+
+    if (cityChanged && timezoneId?.isNotEmpty != true) {
+      final configs = await LocalReminderService.getConfigs(p.id);
+      final affectedCount = configs
+          .where((config) => config.enabled && config.timezoneMode == 'partner')
+          .length;
+      if (affectedCount > 0) {
+        return ToolExecutionResult.partialSuccess(
+          toolName: 'update_partner',
+          modelMessage: reminderSyncFailed
+              ? '已更新并验证$verifyName：${changes.join('、')}。有 $affectedCount 个当地时间提醒待确认，且旧通知同步失败；请检查提醒管理并确认新时区'
+              : reminderSyncDeferred
+              ? '已更新并验证$verifyName：${changes.join('、')}。有 $affectedCount 个当地时间提醒待确认；通知服务就绪后会同步暂停旧时区调度'
+              : '已更新并验证$verifyName：${changes.join('、')}。有 $affectedCount 个按Ta当地时间执行的提醒会暂停调度，确认新时区后才能恢复',
+          title: '人物信息已更新',
+          detail: reminderSyncFailed || reminderSyncDeferred
+              ? '$verifyName · 新时区待确认 · 通知待同步'
+              : '$verifyName · 新时区待确认 · $affectedCount 个提醒待恢复',
+          entityId: p.id,
+          verified: true,
+        );
+      }
+    }
+
+    if (reminderSyncFailed || reminderSyncDeferred) {
+      return ToolExecutionResult.partialSuccess(
+        toolName: 'update_partner',
+        modelMessage: reminderSyncFailed
+            ? '已更新并验证$verifyName：${changes.join('、')}。提醒通知同步失败，将在下次启动时重试'
+            : '已更新并验证$verifyName：${changes.join('、')}。通知服务尚未就绪，提醒会在下次启动时同步',
+        title: '人物信息已更新',
+        detail: '$verifyName · 提醒通知待同步',
+        entityId: p.id,
+        verified: true,
+      );
+    }
+
+    return ToolExecutionResult.success(
+      toolName: 'update_partner',
+      modelMessage: '已更新并验证$verifyName：${changes.join('、')}',
+      title: '人物信息已更新',
+      detail: '$verifyName · ${changes.join(' · ')}',
+      entityId: p.id,
+      verified: true,
+    );
+  }
+
+  Future<bool> _rollbackUpdatedPartner(Partner snapshot) async {
+    try {
+      await PartnerService.restoreSnapshot(snapshot);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _isValidTimezoneId(String timezoneId) {
+    try {
+      tz.getLocation(timezoneId);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   String _relationshipLabel(String type) {
@@ -841,19 +1811,58 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   Future<void> _sendChoiceMessage(String choice) => _sendText(choice);
 
   /// 处理 AI 回复（从 _sendMessage 中提取的公共逻辑）
-  Future<void> _processAiResponse(String text) async {
+  Future<void> _processAiResponse(
+    String text, {
+    required String requestId,
+    bool isRetry = false,
+    bool hideUserMessage = false,
+    String hiddenMessageType = 'launch_prompt',
+    bool recordConversationMemory = true,
+    String? fallbackAssistantText,
+  }) async {
     try {
       await AiService.chatWithTools(
         text,
         onToolCall: (name, args) async {
           if (!mounted) return '操作已取消';
-          setState(() => _executingTool = name);
+          setState(() {
+            _executingTool = name;
+            _activityPhase = AiActivityPhase.executingTool;
+          });
           _scrollToBottom();
           final result = await _executeTool(name, args);
-          if (!mounted) return result;
-          setState(() => _executingTool = null);
+          if (!mounted) return result.toModelContent();
+          ChatHistoryWriteResult? milestoneRecord;
+          if (result.milestone != null) {
+            milestoneRecord = await ChatHistoryService.append(
+              role: 'system',
+              content: result.modelMessage,
+              messageType: 'milestone',
+              metadata: {
+                'tool': result.toolName,
+                'entity_id': result.entityId,
+                'verified': result.verified,
+                'milestone': result.milestone!.toMap(),
+              },
+            );
+          }
+          if (!mounted) return result.toModelContent();
+          setState(() {
+            if (result.milestone != null) {
+              _messages.add(
+                _ChatMessage(
+                  id: milestoneRecord?.id,
+                  role: 'system',
+                  content: result.modelMessage,
+                  milestone: result.milestone,
+                ),
+              );
+            }
+            _executingTool = null;
+            _activityPhase = AiActivityPhase.waitingForReply;
+          });
           _scrollToBottom();
-          return result;
+          return result.toModelContent();
         },
         onToken: (accumulated) {
           if (!mounted) return;
@@ -865,9 +1874,22 @@ class _AiHomeScreenState extends State<AiHomeScreen>
                 content: accumulated,
                 streaming: true,
               );
+            } else {
+              _messages.add(
+                _ChatMessage(
+                  role: 'assistant',
+                  content: accumulated,
+                  streaming: true,
+                ),
+              );
             }
+            _activityPhase = AiActivityPhase.receivingReply;
           });
+          _scrollToBottom();
         },
+        requestId: requestId,
+        hideUserMessage: hideUserMessage,
+        userMessageType: hideUserMessage ? hiddenMessageType : 'message',
       );
 
       if (!mounted) return;
@@ -875,26 +1897,29 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       final idx = _messages.lastIndexWhere((m) => m.streaming);
       if (idx >= 0) {
         final fullContent = _messages[idx].content;
-        _messages.removeAt(idx);
+        setState(() {
+          _messages.removeAt(idx);
+          _activityPhase = AiActivityPhase.revealingSegments;
+        });
 
-        _postConversationMemory(text, fullContent);
+        if (fullContent.trim().isNotEmpty && recordConversationMemory) {
+          _postConversationMemory(text, fullContent);
+        }
 
-        final parts = fullContent
-            .split('|||')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
+        final parts = splitAssistantPresentationSegments(fullContent);
 
         if (parts.isEmpty) {
-          _messages.add(
-            _ChatMessage(role: 'assistant', content: fullContent.trim()),
-          );
+          if (fullContent.trim().isNotEmpty) {
+            setState(() {
+              _messages.add(
+                _ChatMessage(role: 'assistant', content: fullContent.trim()),
+              );
+            });
+          }
         } else {
           for (int i = 0; i < parts.length; i++) {
             if (i > 0) {
-              final charCount = parts[i].length;
-              final delayMs = (charCount * 100).clamp(2000, 8000);
-              await Future.delayed(Duration(milliseconds: delayMs));
+              await Future.delayed(segmentRevealDelay(parts[i]));
             }
             if (!mounted) break;
             setState(() {
@@ -903,26 +1928,86 @@ class _AiHomeScreenState extends State<AiHomeScreen>
             _scrollToBottom();
           }
         }
+      } else {
+        setState(() => _activityPhase = AiActivityPhase.revealingSegments);
       }
-    } catch (e) {
+      if (isRetry) await _appendRetrySuccessMilestone();
+    } on AiChatException {
       if (!mounted) return;
       final idx = _messages.lastIndexWhere((m) => m.streaming);
       if (idx >= 0) _messages.removeAt(idx);
-
-      setState(() {
-        _messages.add(
-          _ChatMessage(role: 'assistant', content: '抱歉，网络好像出了点问题：$e'),
+      if (fallbackAssistantText != null) {
+        await _appendAssistantFallback(
+          requestId: requestId,
+          content: fallbackAssistantText,
         );
-      });
+      } else {
+        setState(() {
+          _messages.add(
+            _ChatMessage(
+              role: 'system',
+              content: '',
+              retryText: text,
+              requestId: requestId,
+            ),
+          );
+        });
+      }
     } finally {
       if (mounted) {
         setState(() {
           _sending = false;
           _executingTool = null;
+          _activityPhase = AiActivityPhase.idle;
         });
       }
       _scrollToBottom();
     }
+  }
+
+  Future<void> _retryFailedMessage(_ChatMessage message) async {
+    final text = message.retryText;
+    final requestId = message.requestId;
+    if (_sending || text == null || requestId == null) return;
+    setState(() {
+      _messages.remove(message);
+      _sending = true;
+      _activityPhase = AiActivityPhase.waitingForReply;
+    });
+    _scrollToBottom();
+    await _processAiResponse(text, requestId: requestId, isRetry: true);
+  }
+
+  Future<void> _appendRetrySuccessMilestone() async {
+    const milestone = ToolMilestone(
+      status: ToolExecutionStatus.success,
+      title: '已重新连接',
+      detail: '刚才的请求已经继续完成',
+    );
+    final record = await ChatHistoryService.append(
+      role: 'system',
+      content: '网络重试成功，刚才的请求已经继续完成',
+      messageType: 'milestone',
+      metadata: const {
+        'source': 'network_retry',
+        'milestone': {
+          'status': 'success',
+          'title': '已重新连接',
+          'detail': '刚才的请求已经继续完成',
+        },
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _messages.add(
+        _ChatMessage(
+          id: record.id,
+          role: 'system',
+          content: '网络重试成功，刚才的请求已经继续完成',
+          milestone: milestone,
+        ),
+      );
+    });
   }
 
   /// 将推荐提示词放入输入框，而非直接发送。
@@ -1129,12 +2214,12 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     });
   }
 
-  void _focusOnboardingPrompt() {
+  void _focusComposer() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Future<void>.delayed(TaAnimation.fast, () {
-        if (mounted && _onboardingFocusNode.canRequestFocus) {
-          _onboardingFocusNode.requestFocus();
+        if (mounted && _inputFocusNode.canRequestFocus) {
+          _inputFocusNode.requestFocus();
         }
       });
     });
@@ -1142,9 +2227,10 @@ class _AiHomeScreenState extends State<AiHomeScreen>
 
   @override
   void dispose() {
+    widget.draftNotifier?.removeListener(_consumeExternalDraft);
+    _speech.cancel();
     _controller.dispose();
-    _onboardingController.dispose();
-    _onboardingFocusNode.dispose();
+    _inputFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -1173,10 +2259,6 @@ class _AiHomeScreenState extends State<AiHomeScreen>
 
           // ---- 消息列表 ----
           Expanded(child: _buildMessageList(theme)),
-
-          // ---- 思考中 ----
-          if (_sending && !_messages.any((m) => m.streaming))
-            _buildThinking(theme),
 
           // ---- 快捷芯片 + 输入栏 ----
           _buildInputBar(theme),
@@ -1358,7 +2440,13 @@ class _AiHomeScreenState extends State<AiHomeScreen>
 
   // ---- 消息列表 ----
   Widget _buildMessageList(ThemeData theme) {
-    if (_messages.isEmpty) {
+    final activity = conversationActivityPresentation(
+      _activityPhase,
+      toolLabel: _executingTool == null
+          ? null
+          : _toolNameLabel(_executingTool!),
+    );
+    if (_messages.isEmpty && !activity.showLeftBubble) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1399,18 +2487,25 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         horizontal: TaSpacing.pagePadding,
         vertical: TaSpacing.xs,
       ),
-      itemCount: _messages.length,
+      itemCount: _messages.length + (activity.showLeftBubble ? 1 : 0),
       itemBuilder: (context, index) {
+        if (index == _messages.length) {
+          return _buildLeftActivityBubble(theme, label: activity.label);
+        }
         final msg = _messages[index];
-        if (msg.onboardingPrompt && !hasUserReplyAfter(snapshots, index)) {
-          return OnboardingPromptBubble(
-            controller: _onboardingController,
-            focusNode: _onboardingFocusNode,
-            enabled: !_sending,
-            onSubmitted: _submitOnboardingPrompt,
-          ).animate().fadeIn(
-            duration: TaAnimation.fast,
-            curve: TaAnimation.curve,
+        if (msg.reminderOccurrence != null) {
+          return ReminderFollowUpCard(
+            occurrence: msg.reminderOccurrence!,
+            onResponse: (response) => _respondToReminder(msg, response),
+          );
+        }
+        if (msg.retryText != null) {
+          return RetryMessageCard(onRetry: () => _retryFailedMessage(msg));
+        }
+        if (msg.milestone != null) {
+          return MilestoneMessageCard(
+            milestone: msg.milestone!,
+            onDismiss: () => _dismissMessage(msg),
           );
         }
         if (msg.proactiveType != ProactiveType.none) {
@@ -1427,6 +2522,103 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         );
       },
     );
+  }
+
+  Future<void> _respondToReminder(
+    _ChatMessage message,
+    ReminderUserResponse response,
+  ) async {
+    final occurrence = message.reminderOccurrence;
+    if (occurrence == null) return;
+    final action = switch (response) {
+      ReminderUserResponse.done => ReminderNotificationAction.done,
+      ReminderUserResponse.snooze => ReminderNotificationAction.snooze,
+      ReminderUserResponse.outdated => ReminderNotificationAction.outdated,
+    };
+    try {
+      await NotificationService.respondToOccurrence(occurrence.id, action);
+      final (title, detail) = switch (response) {
+        ReminderUserResponse.done => ('已经记下', '这条提醒已处理'),
+        ReminderUserResponse.snooze => ('稍后再提醒', '5 分钟后轻轻提醒你'),
+        ReminderUserResponse.outdated => ('已收起提醒', '这条内容已过时'),
+      };
+      final milestone = ToolMilestone(
+        status: ToolExecutionStatus.success,
+        title: title,
+        detail: detail,
+      );
+      final record = await ChatHistoryService.append(
+        role: 'system',
+        content: '$title：$detail',
+        messageType: 'milestone',
+        metadata: {
+          'source': 'reminder_response',
+          'occurrence_id': occurrence.id,
+          'milestone': milestone.toMap(),
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _messages.remove(message);
+        _messages.add(
+          _ChatMessage(
+            id: record.id,
+            role: 'system',
+            content: '$title：$detail',
+            milestone: milestone,
+          ),
+        );
+      });
+      _scrollToBottom();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂时没处理成功，请再试一次')));
+    }
+  }
+
+  Future<void> _dismissMessage(_ChatMessage message) async {
+    setState(() => _messages.remove(message));
+    final id = message.id;
+    if (id != null) await ChatHistoryService.hide(id);
+  }
+
+  Widget _buildLeftActivityBubble(ThemeData theme, {String? label}) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: TaSpacing.xxs),
+        padding: const EdgeInsets.symmetric(
+          horizontal: TaSpacing.md,
+          vertical: TaSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(TaRadius.md),
+            topRight: Radius.circular(TaRadius.md),
+            bottomLeft: Radius.circular(TaRadius.xs),
+            bottomRight: Radius.circular(TaRadius.md),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const TaThinkingDots(),
+            if (label != null) ...[
+              const SizedBox(width: TaSpacing.xs),
+              Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ).animate().fadeIn(duration: TaAnimation.fast, curve: TaAnimation.curve);
   }
 
   // ---- 主动消息卡片 ----
@@ -1467,37 +2659,9 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     }
   }
 
-  // ---- 思考中 / 执行工具中 ----
-  Widget _buildThinking(ThemeData theme) {
-    final label = _executingTool != null
-        ? '正在${_toolNameLabel(_executingTool!)}...'
-        : 'AI 正在思考...';
-    final icon = _executingTool != null ? Icons.build_rounded : null;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: TaSpacing.xs),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const TaThinkingDots(),
-          const SizedBox(width: TaSpacing.xs),
-          if (icon != null)
-            Icon(icon, size: 14, color: theme.colorScheme.primary),
-          if (icon != null) const SizedBox(width: 4),
-          Text(
-            label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ---- 输入栏 ----
   Widget _buildInputBar(ThemeData theme) {
-    final chips = _buildChips();
+    final chips = _buildChips(theme);
 
     return Container(
       decoration: BoxDecoration(
@@ -1512,33 +2676,32 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       ),
       padding: EdgeInsets.fromLTRB(
         TaSpacing.pagePadding,
-        TaSpacing.xs,
+        TaSpacing.xxs,
         TaSpacing.pagePadding,
-        TaSpacing.xs + MediaQuery.of(context).padding.bottom,
+        TaSpacing.xxs,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           // 快捷芯片
           SizedBox(
-            height: 36,
+            height: 40,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: chips.length,
               separatorBuilder: (_, _) => const SizedBox(width: TaSpacing.xs),
               itemBuilder: (_, i) {
                 final chip = chips[i];
-                return ActionChip(
-                  avatar: Image.asset(chip.$1, width: 18, height: 18),
-                  label: Text(chip.$2, style: const TextStyle(fontSize: 13)),
-                  onPressed: () => _handleChip(chip.$3),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
+                return AiQuickActionChip(
+                  label: chip.$3,
+                  icon: chip.$1,
+                  iconColor: chip.$2,
+                  onPressed: () => _handleChip(chip.$4),
                 );
               },
             ),
           ),
-          const SizedBox(height: TaSpacing.xs),
+          const SizedBox(height: TaSpacing.xxs),
           // 输入框 + 发送
           Row(
             children: [
@@ -1550,12 +2713,30 @@ class _AiHomeScreenState extends State<AiHomeScreen>
                   ),
                   child: TextField(
                     controller: _controller,
-                    decoration: const InputDecoration(
+                    focusNode: _inputFocusNode,
+                    decoration: InputDecoration(
                       hintText: '问我任何关于关怀的问题...',
                       border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(
+                      contentPadding: const EdgeInsets.symmetric(
                         horizontal: TaSpacing.md,
                         vertical: TaSpacing.sm,
+                      ),
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 84,
+                        maxWidth: 84,
+                        minHeight: 40,
+                      ),
+                      suffixIcon: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AiImageInputButton(
+                            onPressed: _sending ? null : _chooseImageSource,
+                          ),
+                          AiVoiceInputButton(
+                            isListening: _isListening,
+                            onPressed: _sending ? null : _toggleVoiceInput,
+                          ),
+                        ],
                       ),
                     ),
                     maxLines: null,
@@ -1582,18 +2763,29 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     );
   }
 
-  List<(String, String, String)> _buildChips() {
-    final chips = <(String, String, String)>[
-      ('assets/images/chip_weather.png', '今日天气', 'weather'),
+  List<(IconData, Color, String, String)> _buildChips(ThemeData theme) {
+    final colors = theme.colorScheme;
+    final chips = <(IconData, Color, String, String)>[
+      (Icons.wb_sunny_rounded, colors.secondary, '今日天气', 'weather'),
     ];
     if (_isEvening) {
-      chips.add(('assets/images/chip_goodnight.png', '写句晚安语', 'goodnight'));
+      chips.add((Icons.bedtime_rounded, colors.tertiary, '写句晚安语', 'goodnight'));
     } else {
-      chips.add(('assets/images/chip_goodmorning.png', '写句早安语', 'goodmorning'));
+      chips.add((
+        Icons.wb_twilight_rounded,
+        colors.secondary,
+        '写句早安语',
+        'goodmorning',
+      ));
     }
     chips
-      ..add(('assets/images/chip_care.png', '关心建议', 'care'))
-      ..add(('assets/images/chip_meal.png', '提醒吃饭', 'remind_meal'));
+      ..add((Icons.favorite_rounded, colors.primary, '关心建议', 'care'))
+      ..add((
+        Icons.restaurant_rounded,
+        colors.secondary,
+        '提醒吃饭',
+        'remind_meal',
+      ));
     return chips;
   }
 }
@@ -1631,6 +2823,19 @@ class _ChatBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final isUser = message.role == 'user';
 
+    if (message.localImagePath != null) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: TaSpacing.xxs),
+          child: ChatImageBubble(
+            localPath: message.localImagePath!,
+            summary: message.content,
+          ),
+        ),
+      ).animate().fadeIn(duration: TaAnimation.fast, curve: TaAnimation.curve);
+    }
+
     // 流式消息：隐藏 ||| 分隔符和选择题标记，空内容时显示输入光标
     String displayContent = message.content;
     if (message.streaming) {
@@ -1642,6 +2847,10 @@ class _ChatBubble extends StatelessWidget {
         .trim();
 
     final choices = showChoices ? _parseChoices(message.content) : <String>[];
+
+    if (displayContent.isEmpty && choices.isEmpty && !message.streaming) {
+      return const SizedBox.shrink();
+    }
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -1814,10 +3023,10 @@ class _WeatherCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Image.asset(
-                      'assets/images/chip_weather.png',
-                      width: 24,
-                      height: 24,
+                    Icon(
+                      Icons.wb_sunny_rounded,
+                      size: 24,
+                      color: theme.colorScheme.secondary,
                     ),
                     const SizedBox(width: TaSpacing.xs),
                     Text(
@@ -1945,7 +3154,11 @@ class _GuideCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Image.asset('assets/images/chip_care.png', width: 20, height: 20),
+              Icon(
+                Icons.favorite_rounded,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: TaSpacing.xs),
               Expanded(
                 child: Text(message.content, style: theme.textTheme.bodyMedium),

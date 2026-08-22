@@ -70,9 +70,15 @@ abstract final class CareSuggestionService {
   /// 根据当前时间和已配置类别选择最合适的类别
   static String _pickCategory(int hour, List<String> configCategories) {
     // 优先选择与当前时段匹配的、已配置的类别
-    if (hour >= 6 && hour < 10 && configCategories.contains('meal')) return 'meal';
-    if (hour >= 10 && hour < 14 && configCategories.contains('meal')) return 'meal';
-    if (hour >= 17 && hour < 20 && configCategories.contains('meal')) return 'meal';
+    if (hour >= 6 && hour < 10 && configCategories.contains('meal')) {
+      return 'meal';
+    }
+    if (hour >= 10 && hour < 14 && configCategories.contains('meal')) {
+      return 'meal';
+    }
+    if (hour >= 17 && hour < 20 && configCategories.contains('meal')) {
+      return 'meal';
+    }
     if (hour >= 21 && configCategories.contains('sleep')) return 'sleep';
     if (configCategories.contains('weather')) return 'weather';
 

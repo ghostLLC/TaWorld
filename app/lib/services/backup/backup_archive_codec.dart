@@ -37,12 +37,18 @@ class ValidatedBackupArchive {
   final BackupInfo info;
   final Uint8List databaseBytes;
   final Map<String, Object?> preferences;
+  final Map<String, Uint8List> attachments;
 
   ValidatedBackupArchive({
     required this.info,
     required this.databaseBytes,
     required Map<String, Object?> preferences,
-  }) : preferences = Map.unmodifiable(preferences);
+    Map<String, Uint8List> attachments = const {},
+  }) : preferences = Map.unmodifiable(preferences),
+       attachments = Map.unmodifiable({
+         for (final entry in attachments.entries)
+           entry.key: Uint8List.fromList(entry.value),
+       });
 }
 
 /// Thrown when a backup archive is malformed or violates the archive format.
@@ -192,11 +198,18 @@ abstract final class BackupArchiveCodec {
   static const int maxArchiveBytes = 128 * 1024 * 1024;
   static const int maxDatabaseBytes = 256 * 1024 * 1024;
   static const int maxMetadataBytes = 1024 * 1024;
+  static const int maxAttachmentBytes = 32 * 1024 * 1024;
+  static const int maxTotalUncompressedBytes = 192 * 1024 * 1024;
+  static const int maxAttachmentCount = 256;
 
   static const _manifestName = 'manifest.json';
   static const _databaseName = 'database.db';
   static const _preferencesName = 'preferences.json';
   static const _allowedNames = {_manifestName, _databaseName, _preferencesName};
+  static final _attachmentName = RegExp(
+    r'^attachments/([A-Za-z0-9_-]{1,120}\.(?:jpe?g|png|gif|webp))$',
+    caseSensitive: false,
+  );
 
   static const _eocdSignature = 0x06054b50;
   static const _centralSignature = 0x02014b50;
@@ -255,11 +268,18 @@ abstract final class BackupArchiveCodec {
     final preferences = preferencesEntry == null
         ? <String, Object?>{}
         : _parsePreferences(_readEntry(bytes, preferencesEntry));
+    final attachments = <String, Uint8List>{};
+    for (final entry in localEntries.entries) {
+      final match = _attachmentName.firstMatch(entry.key);
+      if (match == null) continue;
+      attachments[match.group(1)!] = _readEntry(bytes, entry.value);
+    }
 
     return ValidatedBackupArchive(
       info: info,
       databaseBytes: databaseBytes,
       preferences: preferences,
+      attachments: attachments,
     );
   }
 
@@ -283,7 +303,8 @@ abstract final class BackupArchiveCodec {
         centralOffset == _zip64Uint32) {
       throw const BackupFormatException('不支持 ZIP64 备份归档');
     }
-    if (entryCount < 1 || entryCount > _allowedNames.length) {
+    if (entryCount < 1 ||
+        entryCount > _allowedNames.length + maxAttachmentCount) {
       throw const BackupFormatException('ZIP 条目数量无效');
     }
     _requireRange(bytes, centralOffset, centralSize, 'ZIP 中央目录');
@@ -294,6 +315,7 @@ abstract final class BackupArchiveCodec {
 
     final entries = <String, _ZipEntry>{};
     final localOffsets = <int>{};
+    var totalUncompressedSize = 0;
     var offset = centralOffset;
     for (var index = 0; index < entryCount; index++) {
       _requireRange(bytes, offset, 46, 'ZIP 中央目录条目');
@@ -341,6 +363,10 @@ abstract final class BackupArchiveCodec {
       _validateFlagsAndMethod(name, flags, method);
       _validateAttributes(name, externalAttributes);
       _validateDeclaredSize(name, compressedSize, uncompressedSize);
+      totalUncompressedSize += uncompressedSize;
+      if (totalUncompressedSize > maxTotalUncompressedBytes) {
+        throw const BackupFormatException('备份解压后超过总大小限制');
+      }
 
       if (entries.containsKey(name)) {
         throw BackupFormatException('归档条目重复: $name');
@@ -431,18 +457,17 @@ abstract final class BackupArchiveCodec {
   }
 
   static void _validateEntryName(String name) {
+    if (_allowedNames.contains(name) || _attachmentName.hasMatch(name)) return;
     if (name.isEmpty ||
-        name.contains('/') ||
         name.contains('\\') ||
         name.contains('..') ||
         name.startsWith('/') ||
         name.startsWith('\\') ||
-        RegExp(r'^[A-Za-z]:').hasMatch(name)) {
+        RegExp(r'^[A-Za-z]:').hasMatch(name) ||
+        name.split('/').length > 2) {
       throw BackupFormatException('归档条目名称包含非法路径: $name');
     }
-    if (!_allowedNames.contains(name)) {
-      throw BackupFormatException('不允许的归档条目: $name');
-    }
+    throw BackupFormatException('不允许的归档条目: $name');
   }
 
   static void _validateFlagsAndMethod(String name, int flags, int method) {
@@ -485,12 +510,14 @@ abstract final class BackupArchiveCodec {
         uncompressedSize > maxMetadataBytes) {
       throw BackupFormatException('$name 超过大小限制');
     }
+    if (_attachmentName.hasMatch(name) &&
+        uncompressedSize > maxAttachmentBytes) {
+      throw BackupFormatException('$name 超过大小限制');
+    }
     if (compressedSize > maxArchiveBytes) {
       throw BackupFormatException('$name 压缩数据超过大小限制');
     }
-    if (name != _databaseName &&
-        name != _manifestName &&
-        name != _preferencesName) {
+    if (!_allowedNames.contains(name) && !_attachmentName.hasMatch(name)) {
       throw BackupFormatException('不允许的归档条目: $name');
     }
   }

@@ -4,9 +4,43 @@
 /// 支持即时通知和精确定时通知（zonedSchedule）。
 library;
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:go_router/go_router.dart';
 import 'package:timezone/timezone.dart' as tz;
+
+import 'reminder_occurrence_service.dart';
+
+enum ReminderNotificationAction {
+  done('reminder_done'),
+  snooze('reminder_snooze_5'),
+  outdated('reminder_outdated');
+
+  const ReminderNotificationAction(this.id);
+
+  final String id;
+
+  static ReminderNotificationAction? fromId(String? id) {
+    for (final action in values) {
+      if (action.id == id) return action;
+    }
+    return null;
+  }
+}
+
+@pragma('vm:entry-point')
+Future<void> notificationTapBackground(NotificationResponse response) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.handleResponse(response, allowNavigation: false);
+}
+
+abstract final class NotificationSchedulePolicy {
+  static AndroidScheduleMode modeFor({required bool? canScheduleExact}) {
+    return canScheduleExact == true
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+  }
+}
 
 abstract final class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
@@ -21,7 +55,9 @@ abstract final class NotificationService {
   static Future<void> init() async {
     if (_initialized) return;
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -29,11 +65,9 @@ abstract final class NotificationService {
     );
 
     await _plugin.initialize(
-      const InitializationSettings(
-        android: androidSettings,
-        iOS: iosSettings,
-      ),
+      const InitializationSettings(android: androidSettings, iOS: iosSettings),
       onDidReceiveNotificationResponse: _onNotificationTap,
+      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
     );
 
     _initialized = true;
@@ -41,8 +75,10 @@ abstract final class NotificationService {
 
   /// 请求通知权限（Android 13+）
   static Future<bool> requestPermission() async {
-    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin != null) {
       // 请求通知权限
       final granted = await androidPlugin.requestNotificationsPermission();
@@ -60,8 +96,10 @@ abstract final class NotificationService {
   ///
   /// 返回 (通知是否开启, 精确定时是否允许)
   static Future<(bool, bool)> checkPermission() async {
-    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin == null) return (true, true);
 
     final enabled = await androidPlugin.areNotificationsEnabled() ?? false;
@@ -83,6 +121,7 @@ abstract final class NotificationService {
       channelDescription: 'TaWorld 关怀提醒通知',
       importance: Importance.high,
       priority: Priority.high,
+      actions: _reminderActions,
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -93,10 +132,7 @@ abstract final class NotificationService {
       id,
       title,
       body,
-      const NotificationDetails(
-        android: androidDetails,
-        iOS: iosDetails,
-      ),
+      const NotificationDetails(android: androidDetails, iOS: iosDetails),
       payload: payload,
     );
   }
@@ -121,23 +157,29 @@ abstract final class NotificationService {
       channelDescription: 'TaWorld 关怀提醒通知',
       importance: Importance.high,
       priority: Priority.high,
+      actions: _reminderActions,
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
     );
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    final canScheduleExact = await androidPlugin
+        ?.canScheduleExactNotifications();
 
     await _plugin.zonedSchedule(
       id,
       title,
       body,
       scheduledTime,
-      const NotificationDetails(
-        android: androidDetails,
-        iOS: iosDetails,
+      const NotificationDetails(android: androidDetails, iOS: iosDetails),
+      androidScheduleMode: NotificationSchedulePolicy.modeFor(
+        canScheduleExact: canScheduleExact,
       ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       payload: payload,
@@ -160,9 +202,35 @@ abstract final class NotificationService {
   }
 
   /// 通知点击回调 — 跳转到对应页面
+  static const _reminderActions = <AndroidNotificationAction>[
+    AndroidNotificationAction('reminder_done', '我知道了'),
+    AndroidNotificationAction('reminder_snooze_5', '5分钟后'),
+    AndroidNotificationAction('reminder_outdated', '过时了'),
+  ];
+
   static void _onNotificationTap(NotificationResponse response) {
+    handleResponse(response);
+  }
+
+  static Future<void> handleResponse(
+    NotificationResponse response, {
+    bool allowNavigation = true,
+  }) async {
     final payload = response.payload;
-    if (payload == null || router == null) return;
+    if (payload == null) return;
+
+    if (payload.startsWith('occurrenceId:')) {
+      final occurrenceId = payload.substring('occurrenceId:'.length);
+      final action = ReminderNotificationAction.fromId(response.actionId);
+      if (action != null) {
+        await respondToOccurrence(occurrenceId, action);
+        return;
+      }
+      if (allowNavigation) router?.go('/');
+      return;
+    }
+
+    if (!allowNavigation || router == null) return;
 
     // payload 格式: "configId:xxx" 或 "logId:xxx" 或纯路由路径
     if (payload.startsWith('/')) {
@@ -177,5 +245,30 @@ abstract final class NotificationService {
       // 兜底：未知格式跳首页
       router!.go('/');
     }
+  }
+
+  static Future<void> respondToOccurrence(
+    String occurrenceId,
+    ReminderNotificationAction action,
+  ) async {
+    final userResponse = switch (action) {
+      ReminderNotificationAction.done => ReminderUserResponse.done,
+      ReminderNotificationAction.snooze => ReminderUserResponse.snooze,
+      ReminderNotificationAction.outdated => ReminderUserResponse.outdated,
+    };
+    final updated = await ReminderOccurrenceService.respond(
+      occurrenceId,
+      userResponse,
+    );
+    if (action != ReminderNotificationAction.snooze) return;
+
+    final time = tz.TZDateTime.now(tz.local).add(const Duration(minutes: 5));
+    await schedule(
+      id: occurrenceId.hashCode & 0x7fffffff,
+      title: '稍后再提醒你',
+      body: updated.message ?? '刚才的提醒可以继续处理了',
+      scheduledTime: time,
+      payload: 'occurrenceId:$occurrenceId',
+    );
   }
 }

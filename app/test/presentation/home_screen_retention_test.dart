@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:taworld/data/local/database_helper.dart';
+import 'package:taworld/presentation/screens/home/care_graph_view.dart';
 import 'package:taworld/presentation/screens/home/home_screen.dart';
 
 import '../helpers/test_database.dart';
@@ -31,17 +32,66 @@ void main() {
   ) async {
     await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
 
-    await tester.tap(find.text('关心的人'));
+    await tester.tap(find.text('关心的人').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     await _pumpUntilFound(tester, find.text('小乐'));
     expect(find.text('加载中...'), findsNothing);
 
     await tester.tap(find.text('我的'));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    await tester.tap(find.text('关心的人'));
+    await tester.tap(find.text('关心的人').last);
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('小乐'), findsOneWidget);
     expect(find.text('加载中...'), findsNothing);
+
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 200)),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+  });
+
+  testWidgets('care graph hands selected partner to XiaoNian composer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+
+    await tester.tap(find.text('关心的人').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await _pumpUntilFound(tester, find.text('小乐'));
+
+    await tester.tap(find.text('图谱'));
+    await tester.pump();
+    expect(find.byType(CareGraphView), findsOneWidget);
+
+    await tester.tap(find.text('小乐'));
+    await tester.pump();
+
+    await tester.tap(find.text('我的'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('关心的人').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final chatButton = find.widgetWithText(FilledButton, '聊聊 Ta');
+    await tester.ensureVisible(chatButton);
+    await tester.tap(chatButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await _pumpUntilFound(tester, find.textContaining('小乐的天气'));
+    final composer = tester.widget<TextField>(find.byType(TextField).last);
+    expect(composer.controller?.text, isEmpty);
+    await tester.pump(const Duration(seconds: 1));
 
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 200)),

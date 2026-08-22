@@ -11,6 +11,15 @@ class Partner {
   final double? longitude;
   final String? city;
   final String? district;
+
+  /// IANA timezone identifier such as `Asia/Singapore`.
+  final String? timezoneId;
+
+  /// How [timezoneId] was obtained: `city_lookup` or `user_confirmed`.
+  final String? timezoneSource;
+
+  /// Whether the user explicitly confirmed the inferred timezone.
+  final bool timezoneConfirmed;
   final String status; // active / dissolved
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -25,6 +34,9 @@ class Partner {
     this.longitude,
     this.city,
     this.district,
+    this.timezoneId,
+    this.timezoneSource,
+    this.timezoneConfirmed = false,
     required this.status,
     required this.createdAt,
     required this.updatedAt,
@@ -41,6 +53,9 @@ class Partner {
       longitude: (map['longitude'] as num?)?.toDouble(),
       city: map['city'] as String?,
       district: map['district'] as String?,
+      timezoneId: map['timezone_id'] as String?,
+      timezoneSource: map['timezone_source'] as String?,
+      timezoneConfirmed: (map['timezone_confirmed'] as int? ?? 0) == 1,
       status: map['status'] as String? ?? 'active',
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
@@ -58,6 +73,9 @@ class Partner {
       'longitude': longitude,
       'city': city,
       'district': district,
+      'timezone_id': timezoneId,
+      'timezone_source': timezoneSource,
+      'timezone_confirmed': timezoneConfirmed ? 1 : 0,
       'status': status,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
@@ -73,6 +91,9 @@ class Partner {
     double? longitude,
     String? city,
     String? district,
+    String? timezoneId,
+    String? timezoneSource,
+    bool? timezoneConfirmed,
     String? status,
     DateTime? updatedAt,
   }) {
@@ -86,6 +107,9 @@ class Partner {
       longitude: longitude ?? this.longitude,
       city: city ?? this.city,
       district: district ?? this.district,
+      timezoneId: timezoneId ?? this.timezoneId,
+      timezoneSource: timezoneSource ?? this.timezoneSource,
+      timezoneConfirmed: timezoneConfirmed ?? this.timezoneConfirmed,
       status: status ?? this.status,
       createdAt: createdAt,
       updatedAt: updatedAt ?? DateTime.now(),

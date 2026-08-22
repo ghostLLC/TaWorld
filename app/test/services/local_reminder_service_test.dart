@@ -58,4 +58,45 @@ void main() {
     expect(grouped['partner-1']!.last.enabled, isFalse);
     expect(grouped['partner-2']!.single.id, 'config-3');
   });
+
+  test('create and update persist reminder timezone semantics', () async {
+    final db = await DatabaseHelper.database;
+    const timestamp = '2026-08-20T00:00:00.000Z';
+    await db.insert('partners', {
+      'id': 'partner-1',
+      'nickname': 'Ta',
+      'created_at': timestamp,
+      'updated_at': timestamp,
+    });
+
+    final created = await LocalReminderService.createConfig(
+      partnerId: 'partner-1',
+      category: 'weather',
+      timezoneMode: 'partner',
+      timezoneId: 'Asia/Singapore',
+      config: const {'mode': 'daily_digest', 'digest_time': '08:00'},
+    );
+
+    expect(created.timezoneMode, 'partner');
+    expect(created.timezoneId, 'Asia/Singapore');
+
+    await LocalReminderService.updateConfig(
+      created.id,
+      timezoneMode: 'user',
+      timezoneId: 'Asia/Shanghai',
+    );
+    final updated = (await LocalReminderService.getConfigs('partner-1')).single;
+
+    expect(updated.timezoneMode, 'user');
+    expect(updated.timezoneId, 'Asia/Shanghai');
+
+    await LocalReminderService.updateConfig(
+      created.id,
+      timezoneMode: 'partner',
+      clearTimezoneId: true,
+    );
+    final cleared = (await LocalReminderService.getConfigs('partner-1')).single;
+    expect(cleared.timezoneMode, 'partner');
+    expect(cleared.timezoneId, isNull);
+  });
 }

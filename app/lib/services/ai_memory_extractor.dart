@@ -60,7 +60,8 @@ abstract final class AiMemoryExtractor {
 如果没有值得记住的新信息，返回：{"facts": []}''';
 
       // 可变数据作为 user message
-      final userPrompt = '''已有的记忆：
+      final userPrompt =
+          '''已有的记忆：
 $existingFacts
 
 --- 本轮对话 ---
@@ -81,8 +82,10 @@ AI: $assistantReply''';
 
       await _mergeFacts(facts);
 
-      dev.log('记忆提取完成: 提取 ${facts.length} 条, 写入 ${facts.where((f) => f.status != 'SAME').length} 条',
-          name: 'AiMemoryExtractor');
+      dev.log(
+        '记忆提取完成: 提取 ${facts.length} 条, 写入 ${facts.where((f) => f.status != 'SAME').length} 条',
+        name: 'AiMemoryExtractor',
+      );
     } catch (e) {
       dev.log('记忆提取失败: $e', name: 'AiMemoryExtractor');
     }
@@ -91,7 +94,10 @@ AI: $assistantReply''';
   /// 从一批历史消息中提取记忆（用于初始化或批量处理）
   static Future<void> extractFromHistory({int messageLimit = 50}) async {
     try {
-      final history = await AiService.getChatHistory(limit: messageLimit);
+      final history = await AiService.getChatHistory(
+        limit: messageLimit,
+        includeHidden: true,
+      );
       if (history.length < 2) return;
 
       // 将历史消息格式化为对话文本
@@ -123,7 +129,8 @@ AI: $assistantReply''';
 如果没有值得记住的信息，返回：{"facts": []}''';
 
       // 可变数据作为 user message
-      final userPrompt = '''已有的记忆：
+      final userPrompt =
+          '''已有的记忆：
 ${existingFacts.isEmpty ? '（暂无）' : existingFacts}
 
 --- 对话历史 ---
@@ -141,8 +148,10 @@ $conversationBuffer''';
       final facts = _parseFacts(response);
       await _mergeFacts(facts);
 
-      dev.log('历史记忆提取完成: 处理 ${history.length} 条消息, 提取 ${facts.length} 条事实',
-          name: 'AiMemoryExtractor');
+      dev.log(
+        '历史记忆提取完成: 处理 ${history.length} 条消息, 提取 ${facts.length} 条事实',
+        name: 'AiMemoryExtractor',
+      );
     } catch (e) {
       dev.log('历史记忆提取失败: $e', name: 'AiMemoryExtractor');
     }
@@ -184,16 +193,19 @@ $conversationBuffer''';
       final factsList = data['facts'] as List?;
       if (factsList == null) return [];
 
-      return factsList.map((f) {
-        final fact = f as Map<String, dynamic>;
-        return _ExtractedFact(
-          content: fact['content'] as String? ?? '',
-          category: fact['category'] as String? ?? 'user_pref',
-          entityName: fact['entity_name'] as String?,
-          status: (fact['status'] as String? ?? 'NEW').toUpperCase(),
-          importance: (fact['importance'] as num?)?.toDouble() ?? 0.5,
-        );
-      }).where((f) => f.content.isNotEmpty).toList();
+      return factsList
+          .map((f) {
+            final fact = f as Map<String, dynamic>;
+            return _ExtractedFact(
+              content: fact['content'] as String? ?? '',
+              category: fact['category'] as String? ?? 'user_pref',
+              entityName: fact['entity_name'] as String?,
+              status: (fact['status'] as String? ?? 'NEW').toUpperCase(),
+              importance: (fact['importance'] as num?)?.toDouble() ?? 0.5,
+            );
+          })
+          .where((f) => f.content.isNotEmpty)
+          .toList();
     } catch (e) {
       dev.log('解析事实失败: $e', name: 'AiMemoryExtractor');
       return [];

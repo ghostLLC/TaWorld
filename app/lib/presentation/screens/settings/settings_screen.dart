@@ -8,11 +8,11 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../widgets/widgets.dart';
+import '../../widgets/background_readiness_card.dart';
 import '../../../data/local/database_helper.dart';
 import '../../../data/models/user.dart';
 import '../../../services/theme_service.dart';
@@ -23,6 +23,7 @@ import '../../../services/ai_memory_dreamer.dart';
 import '../../../services/ai_service.dart';
 import '../../../services/data_backup_service.dart';
 import '../../../services/backup/backup_importer.dart';
+import '../../../services/background_execution_service.dart';
 import '../../../services/local/local_user_service.dart';
 
 // ============================================================
@@ -166,25 +167,37 @@ class _NotificationsSettings extends StatefulWidget {
   State<_NotificationsSettings> createState() => _NotificationsSettingsState();
 }
 
-class _NotificationsSettingsState extends State<_NotificationsSettings> {
+class _NotificationsSettingsState extends State<_NotificationsSettings>
+    with WidgetsBindingObserver {
   bool _pushEnabled = true;
   bool _notificationsEnabled = true;
   bool _exactAlarmsAllowed = true;
   bool _aiProactiveEnabled = true;
+  BackgroundExecutionReadiness? _backgroundReadiness;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pushEnabled = ThemeService.instance.pushEnabled;
     ThemeService.instance.addListener(_onThemeChanged);
     _checkPermissions();
     _loadAiProactiveSetting();
+    _loadBackgroundReadiness();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     ThemeService.instance.removeListener(_onThemeChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _checkPermissions();
+    _loadBackgroundReadiness();
   }
 
   void _onThemeChanged() {
@@ -206,6 +219,20 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
   Future<void> _loadAiProactiveSetting() async {
     final enabled = await AiProactiveService.isEnabled();
     if (mounted) setState(() => _aiProactiveEnabled = enabled);
+  }
+
+  Future<void> _loadBackgroundReadiness() async {
+    if (!Platform.isAndroid) return;
+    final readiness = await BackgroundExecutionService.getReadiness();
+    if (mounted) setState(() => _backgroundReadiness = readiness);
+  }
+
+  Future<void> _openBackgroundSetting(Future<bool> Function() open) async {
+    await open();
+    // Some OEM settings return without a lifecycle callback.
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) _loadBackgroundReadiness();
+    });
   }
 
   Future<void> _onPushChanged(bool v) async {
@@ -267,7 +294,11 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
                     ),
                     trailing: FilledButton.tonal(
                       onPressed: () async {
-                        await openAppSettings();
+                        if (!_notificationsEnabled) {
+                          await BackgroundExecutionService.openNotificationSettings();
+                        } else {
+                          await BackgroundExecutionService.openExactAlarmSettings();
+                        }
                         // 从系统设置返回后重新检查权限
                         Future.delayed(
                           const Duration(milliseconds: 500),
@@ -304,6 +335,24 @@ class _NotificationsSettingsState extends State<_NotificationsSettings> {
               ],
             ),
           ),
+          if (Platform.isAndroid && _backgroundReadiness != null) ...[
+            const SizedBox(height: TaSpacing.md),
+            BackgroundReadinessCard(
+              readiness: _backgroundReadiness!,
+              onOpenNotifications: () => _openBackgroundSetting(
+                BackgroundExecutionService.openNotificationSettings,
+              ),
+              onOpenExactAlarms: () => _openBackgroundSetting(
+                BackgroundExecutionService.openExactAlarmSettings,
+              ),
+              onOpenBattery: () => _openBackgroundSetting(
+                BackgroundExecutionService.openBatteryOptimizationSettings,
+              ),
+              onOpenAutoStart: () => _openBackgroundSetting(
+                BackgroundExecutionService.openAutoStartSettings,
+              ),
+            ),
+          ],
           const SizedBox(height: TaSpacing.xxl),
         ],
       ),
@@ -1151,7 +1200,7 @@ class _AccountSettingsState extends State<_AccountSettings> {
                   ),
                   title: const Text('版本'),
                   trailing: Text(
-                    'v0.1.0',
+                    'v0.1.1',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),

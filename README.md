@@ -1,335 +1,126 @@
 # TaWorld
 
 <p align="center">
-  <strong>A care-first emotional connection APP</strong>
+  <strong>把牵挂变成恰到好处的行动</strong><br>
+  一款以「关心身边的人」为核心的本地优先 AI 助手
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Flutter-3.41.9-02569B?logo=flutter&logoColor=white" alt="Flutter">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+  <img src="https://img.shields.io/badge/version-v0.1.1-E89186" alt="Version v0.1.1">
+  <img src="https://img.shields.io/badge/Flutter-3.41.9-02569B?logo=flutter&logoColor=white" alt="Flutter 3.41.9">
+  <img src="https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white" alt="Android">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
 </p>
 
----
+TaWorld 不会替用户联系任何人，而是在合适的时间提醒用户主动关心 Ta。人物、提醒、对话与长期记忆保存在设备本地；应用不依赖自建业务服务器，AI 与天气请求由设备直接访问对应服务。
 
-> A fully offline, standalone APP centered around caring for others. You add the people you care about, configure reminders, and the APP reminds you at the right moments to reach out and care for them — it never contacts them directly. All data stays on your phone. No server, no cloud.
->
-> The AI assistant (DeepSeek V4 Pro) proactively sends you weather alerts, greetings, and care suggestions. It features dynamic token-based context management (200K token budget, up to 2000 messages), automated conversation summaries, and a Wiki + RAG hybrid memory architecture for cross-session recall.
+## v0.1.1 主要能力
 
-## Core Features
+- **小念 AI 助手**：默认使用 `deepseek-v4-flash`，支持自然对话、主动提问、工具调用及 Wiki + RAG 长期记忆。
+- **人物与关心图谱**：以用户为中心展示人物、关系、地点、当地时间、天气与提醒；支持列表、图谱、全屏拖拽缩放、关系编辑和分享海报。
+- **多类型提醒**：支持睡觉、吃饭、每日天气、天气突变及自定义提醒，并正确处理人物所在地的 IANA 时区。
+- **提醒闭环**：通知可直接选择“知道了”“稍后提醒”或“忽略”；应用记录响应并提供后访，便于修改或清理过时提醒。
+- **天气关心**：后台每 30 分钟检查全部关心人物所在地天气，在符合规则时发出变化提醒。
+- **语音与图片输入**：支持语音转文字、相机和相册输入；图片由 `deepseek-v4-flash-vision-exp` 理解，提取出的事实可进入本地长期记忆。
+- **可靠备份恢复**：备份包含数据库与本地图片附件；导入前执行结构与路径校验，失败时自动回滚，避免覆盖现有数据。
+- **温暖而克制的界面**：紧凑导航、轻量动效、柔和层次与五套主题配色，兼顾浅色和深色模式。
 
-| Feature | Description | Status |
-|---------|-------------|--------|
-| **AI Care Assistant** | DeepSeek V4 Pro for all tasks. Dynamic system prompt, dynamic token-based context (200K tokens / 2000 messages), 8 function-calling tools | Done |
-| **AI Memory System** | Wiki (100 facts) + RAG (10 results, 90-day recall) hybrid architecture. Automated conversation summaries (80K token threshold), Ebbinghaus decay, Dreaming consolidation | Done |
-| **Proactive Messaging** | AI proactively sends weather alerts, reminders, and care suggestions via function calling | Done |
-| **Partner Management** | Add/edit/delete people you care about, GPS + city picker (24 countries, 300+ cities), AI-powered create/update/detail tools | Done |
-| **Smart Reminders** | Sleep/meal/weather/custom reminders, local precise scheduling via WorkManager | Done |
-| **Real-time Weather** | wttr.in free weather (no API key), partner city cards with local time and weather, city name normalization | Done |
-| **Achievement System** | 7 badges, 4 unlock logics (count/streak/mutual/relationship_days) | Done |
-| **Theme System** | 5 color palettes (warm coral, ocean blue, forest green, lavender, sunset orange), light/dark mode | Done |
-| **City Picker** | Bottom sheet with search + browse, 24 countries, 300+ cities | Done |
-| **GPS Location** | geolocator + permission_handler, 3-stage permission check | Done |
+> 当前版本暂不在关心图谱中展示用户上传的图片；图片仅用于对话理解和本地记忆，便于控制备份体积与升级风险。
 
-### Design Principles
+## 产品原则
 
-```
-People are the bridge    APP reminds A to care for B — never contacts B directly
-Privacy first            No exposed locations; position only used for weather queries
-Warm and simple          Material 3, rounded design, 8px baseline grid
-Standalone first         No server dependency; all data in local SQLite
-```
+| 原则 | 说明 |
+| --- | --- |
+| 人是连接的桥梁 | TaWorld 提醒 A 关心 B，不会直接联系 B |
+| 本地优先 | 核心业务数据保存在设备 SQLite 中，不依赖自建后端 |
+| 主动但不打扰 | 结合人物时区、天气变化和提醒状态，在合适时机提供帮助 |
+| 简洁可解释 | 关键操作给出明确反馈，提醒和 AI 工具执行结果可追踪 |
+| 升级可恢复 | 数据库迁移、备份校验与失败回滚共同保护用户数据 |
 
----
+## 技术架构
 
-## Technical Architecture
-
-Pure client-side standalone architecture. All data stored in local SQLite. AI and weather services connect directly from the device to external APIs.
-
-### Tech Stack
-
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| Framework | Flutter 3.41.9 + Dart | Cross-platform, Material 3 warm style |
-| Routing | GoRouter | Declarative routing + auth redirect |
-| Database | SQLite (sqflite) | All data local, DB version 4 |
-| AI (all tasks) | DeepSeek V4 Pro | Unified model for chat, memory extraction, Dreaming, summaries |
-| AI Context | Dynamic token management | 200K token budget, 2000 messages, CJK-aware estimation |
-| AI Memory | Wiki + RAG + Summaries | 100 facts, 10 RAG results, automated conversation summaries |
-| Prompt Cache | DeepSeek Context Caching | Automatic KV cache, 50-120x cost reduction on cache hits |
-| Weather | wttr.in | Free, no API key needed, city name normalization |
-| Notifications | flutter_local_notifications | zonedSchedule precise dispatch |
-| Background | WorkManager | Periodic task scheduling |
-| Location | geolocator + permission_handler | GPS + permission management |
-| Animation | flutter_animate | Fade-in, elastic effects |
-| HTTP | Dio | Network requests (weather/AI) |
-| UI | Material 3 + custom design system | 5 color palettes, 8px baseline grid |
-
-### AI Memory Architecture
-
-```
-                    Post-conversation (async, V4 Pro)
-                    ┌──────────────────────────────────┐
-                    │     AiMemoryExtractor            │
-                    │  Extract facts from conversation  │
-                    └──────────┬───────────────────────┘
-                               │ write
-                               ▼
-┌──────────────────────────────────────────────────────────────┐
-│                     Dynamic System Prompt                     │
-│                                                              │
-│  [Base Instructions] [User Identity] [Partners] [Reminders] │  ← Semi-static
-│  [Wiki Facts (top-100)] [Conversation Summaries]             │  ← Session-level
-│  [Current Time (coarsened)] [RAG Results (top-10)]           │  ← Per-message
-│                                                              │
-│  Optimized for DeepSeek Context Caching (prefix-friendly)    │
-└──────────────────────────────────────────────────────────────┘
-                               ▲
-                               │ read
-                    ┌──────────┴───────────────────────┐
-                    │     AiMemoryService               │
-                    │  buildSystemPrompt() per request   │
-                    │  checkAndSummarize() every 5 turns │
-                    └──────────────────────────────────┘
-
-Dynamic Context (per request, V4 Pro)
-┌──────────────────────────────────────────────────────────────┐
-│  _estimateTokens()   — CJK-aware token estimation            │
-│  _loadDynamicHistory — 200K token budget, 2000 messages max  │
-│  _buildMessages      — system prompt + history + user msg    │
-│  Skips already-summarized messages (summarized_up_to)        │
-└──────────────────────────────────────────────────────────────┘
-
-Automated Summarization (every 5 turns, V4 Pro)
-┌──────────────────────────────────────────────────────────────┐
-│  Trigger: history > 80K tokens                               │
-│  Keep: 150K token budget of recent messages                  │
-│  Summarize: older messages (capped at 300K input)            │
-│  Store: summary in ai_conversation_summaries                 │
-│  Track: summarized_up_to timestamp to avoid re-summarizing   │
-└──────────────────────────────────────────────────────────────┘
-
-Background (daily, V4 Pro)
-┌──────────────────────────────────────────────────────────────┐
-│                    AiMemoryDreamer                            │
-│  Ebbinghaus decay → Archive weak → LLM consolidation        │
-│  → Summarize old conversations → Clean old chunks            │
-└──────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────┐
-│                     AiRagService                              │
-│  Keyword-based search (bigram + stopwords + time decay)      │
-│  Top-10 results, 90-day recall, 500 chunk scan limit        │
-│  No external embedding model needed                          │
-└──────────────────────────────────────────────────────────────┘
+```text
+Flutter UI
+   │
+   ├── 对话 / 人物 / 图谱 / 提醒 / 设置
+   │
+Service Layer
+   ├── AI 对话、工具规划、记忆提取与 RAG
+   ├── 天气查询、变化监测与后台任务
+   ├── 本地通知、提醒调度与响应后访
+   └── 备份归档、导入校验与失败回滚
+   │
+Local Data
+   ├── SQLite（schema v6）
+   └── 本地图片与配置
+   │
+   ├── DeepSeek API（设备直连）
+   └── 天气服务（设备直连）
 ```
 
-### App Architecture
+### 核心技术
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                   Flutter APP (Android)                   │
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │  presentation│  │   services   │  │     data      │  │
-│  │   (UI)       │──│  (business)  │──│   (storage)   │  │
-│  │  screens/    │  │  ai_service  │  │  models/      │  │
-│  │  widgets/    │  │  ai_memory_* │  │  SQLite DB    │  │
-│  └──────────────┘  │  ai_rag_*    │  │  city_data    │  │
-│                     │  weather_svc │  └───────────────┘  │
-│                     │  notif_svc   │                     │
-│                     │  proactive   │                     │
-│                     └──────┬───────┘                     │
-└────────────────────────────┼─────────────────────────────┘
-                             │ HTTPS (direct)
-                    ┌────────┴────────┐
-                    ▼                 ▼
-              ┌──────────┐     ┌───────────┐
-              │ DeepSeek  │     │  wttr.in  │
-              │  V4 API   │     │  Weather  │
-              └──────────┘     └───────────┘
-```
+| 范围 | 技术与说明 |
+| --- | --- |
+| 客户端 | Flutter 3.41.9、Dart、Material 3 |
+| 数据 | sqflite，本地数据库 schema v6 |
+| AI | `deepseek-v4-flash`；图片理解使用 `deepseek-v4-flash-vision-exp` |
+| 记忆 | Wiki 事实、对话摘要、关键词 RAG 与后台整理 |
+| 通知 | flutter_local_notifications、时区化调度、通知操作按钮 |
+| 后台 | WorkManager，天气检查与维护任务 |
+| 输入 | speech_to_text、相机与相册 |
+| 网络 | Dio，AI 与天气服务由客户端直接请求 |
 
----
+## 本地开发
 
-## Project Structure
+### 环境要求
 
-```
-TaWorld/
-├── app/                               # Flutter mobile app
-│   ├── lib/
-│   │   ├── main.dart                  # Entry point
-│   │   ├── app/                       # App-level config
-│   │   │   ├── app.dart               # MaterialApp root
-│   │   │   ├── router.dart            # GoRouter routes
-│   │   │   ├── theme.dart             # 5 color palettes (light+dark)
-│   │   │   └── design_tokens.dart     # Design tokens
-│   │   ├── data/                      # Data layer
-│   │   │   ├── models/                # Data models
-│   │   │   │   ├── user.dart
-│   │   │   │   ├── partner.dart
-│   │   │   │   ├── reminder_config.dart
-│   │   │   │   ├── reminder_log.dart
-│   │   │   │   ├── achievement.dart
-│   │   │   │   └── ai_wiki_fact.dart  # Wiki memory fact model
-│   │   │   ├── city_data.dart         # World cities (24 countries, 300+ cities)
-│   │   │   └── local/database_helper.dart  # SQLite (DB v4, 8 tables)
-│   │   ├── services/                  # Business logic
-│   │   │   ├── ai_service.dart        # DeepSeek V4 Pro (all tasks), dynamic context, cache tracking
-│   │   │   ├── ai_memory_service.dart # Dynamic system prompt + Wiki CRUD + automated summaries
-│   │   │   ├── ai_memory_extractor.dart # Post-conversation fact extraction (V4 Pro)
-│   │   │   ├── ai_memory_dreamer.dart # Background memory consolidation (V4 Pro)
-│   │   │   ├── ai_rag_service.dart    # Keyword-based RAG search (top-10, 90-day)
-│   │   │   ├── ai_proactive_service.dart # Proactive messaging + function calling
-│   │   │   ├── data_backup_service.dart # Data backup/restore
-│   │   │   ├── weather_service.dart   # wttr.in weather + city name normalization
-│   │   │   ├── notification_service.dart # Local notifications
-│   │   │   ├── reminder_scheduler.dart # Reminder scheduling
-│   │   │   ├── background_tasks.dart  # WorkManager tasks (weather + dreaming)
-│   │   │   ├── care_suggestion_service.dart
-│   │   │   ├── theme_service.dart     # 5-palette theme switching
-│   │   │   └── local/                 # Local CRUD services
-│   │   │       ├── local_user_service.dart
-│   │   │       ├── partner_service.dart
-│   │   │       ├── local_reminder_service.dart
-│   │   │       └── local_achievement_service.dart
-│   │   └── presentation/              # UI layer
-│   │       ├── screens/
-│   │       │   ├── ai_home/           # AI chat (Tab 1)
-│   │       │   ├── home/              # Partners + Profile (Tab 2 & 3)
-│   │       │   ├── add_partner/
-│   │       │   ├── partner_detail/
-│   │       │   ├── reminder_config/
-│   │       │   ├── reminder_history/
-│   │       │   ├── achievements/
-│   │       │   ├── onboarding/
-│   │       │   └── settings/          # Settings + AI memory management
-│   │       └── widgets/               # Component library
-│   │           ├── widgets.dart       # Unified exports
-│   │           ├── city_picker_sheet.dart
-│   │           ├── ta_card.dart / ta_button.dart / ta_text_field.dart
-│   │           ├── ta_avatar.dart / ta_loading.dart
-│   │           ├── ta_achievement_badge.dart
-│   │           └── ta_streak_flame.dart
-│   └── pubspec.yaml
-│
-├── server/                            # [Deprecated] Python backend (historical only)
-│
-├── docs/                              # Project documentation
-│   ├── design_system.md               # Design system spec (current)
-│   ├── frontend_guide.md              # Frontend dev guide (current)
-│   ├── ai_memory_implementation_plan.md # AI memory architecture plan
-│   ├── prompt_caching_optimization_plan.md # DeepSeek cache optimization
-│   ├── ai_proactive_research.md       # Proactive messaging research
-│   ├── asset_upgrade_plan.md          # Asset upgrade plan
-│   ├── standalone_refactor_plan.md    # Standalone migration record
-│   ├── architecture.md                # Old architecture (historical)
-│   ├── developer_guide.md             # Old backend guide (historical)
-│   └── walkthrough.md                 # Old backend report (historical)
-│
-├── CLAUDE.md                          # AI assistant context
-├── README.md
-└── .gitignore
-```
+- Flutter 3.41.9 或兼容版本
+- Android Studio 自带 JDK 21
+- Android 真机或模拟器
 
-> The `server/` directory contains deprecated Python backend code, kept only for historical reference.
+Windows 上如果 Flutter、项目和 Gradle 缓存位于不同盘符，项目已在 `app/android/gradle.properties` 中关闭 Kotlin 增量编译及 classpath snapshot，以规避跨盘缓存路径错误。
 
----
-
-## Navigation
-
-3-tab bottom NavigationBar:
-
-| Tab | Page | Description |
-|-----|------|-------------|
-| 1 | AI Assistant (AiHomeScreen) | AI chat + proactive messages + quick chips |
-| 2 | Partners (_PartnersTab) | Expandable card list with city/time/weather |
-| 3 | Profile (_ProfileTab) | Avatar/stats/menu |
-
-### Routes
-
-| Path | Page |
-|------|------|
-| `/` | Home (3-tab bottom nav) |
-| `/onboarding` | Onboarding |
-| `/partners/add` | Add partner |
-| `/partners/:id` | Partner detail/edit |
-| `/reminders/config/:partnerId` | Reminder config |
-| `/reminders/:id/logs` | Reminder history |
-| `/achievements` | Achievements |
-| `/settings` | Settings |
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Flutter 3.41.9+
-- Android device or emulator
-
-### Run
+### 运行与检查
 
 ```bash
 cd app
 flutter pub get
+flutter analyze --no-pub
+flutter test
 flutter run
 ```
 
-### Build release APK
+### 构建 APK
 
 ```bash
-flutter build apk --release
+cd app
+flutter build apk --release --split-per-abi
 ```
 
-No server to start, no database to configure, no Docker to orchestrate.
+当前开发阶段的 release APK 仍使用调试签名；正式分发前应配置独立发布密钥、密钥保护和稳定升级签名流程。
+
+## 当前质量基线
+
+- `flutter analyze --no-pub`：0 个问题
+- `flutter test`：169 项测试全部通过
+- Android split release：`armeabi-v7a`、`arm64-v8a`、`x86_64` 构建通过
+- 数据库迁移：覆盖人物时区、提醒响应记录及 v6 schema
+- 备份导入：覆盖格式校验、附件恢复、路径重写和失败回滚
+
+## 隐私说明
+
+- 人物、提醒、消息、记忆和附件默认保存在设备本地。
+- 应用不提供云同步，也不通过自建服务器中转业务数据。
+- 用户发起 AI 对话或图片理解时，相关文本或图片会直接发送到其配置的 DeepSeek 服务。
+- 天气查询会把所需城市信息直接发送到天气服务。
+- 定位仅用于用户明确使用的地点或天气功能；应用不主动联系任何关心对象。
+- 用户应妥善保管 API Key 与本地备份文件。
+
+## 项目状态
+
+TaWorld 仍处于早期开发阶段。v0.1.1 完成了体验闭环、提醒时区、后台天气监测、语音/图片输入、关心图谱以及本地数据兼容性的第一轮落地，后续将继续优化视觉质感、交互细节和真实设备稳定性。
 
 ---
 
-## Privacy
-
-TaWorld is a fully offline APP:
-
-- All data stored in device-local SQLite — no server, no cloud sync
-- AI API Key (DeepSeek) configured by the user, direct connection from device
-- Weather queries go directly to wttr.in, no intermediary
-- No data collection, no telemetry
-- Location used only for weather display, never shared
-
----
-
-## Documentation Index
-
-### Current
-
-| Document | Description |
-|----------|-------------|
-| [Design System](docs/design_system.md) | Design tokens, colors, typography, component specs |
-| [Frontend Guide](docs/frontend_guide.md) | Flutter development conventions, component patterns |
-| [AI Memory Plan](docs/ai_memory_implementation_plan.md) | Wiki + RAG hybrid memory architecture |
-| [Prompt Caching Plan](docs/prompt_caching_optimization_plan.md) | DeepSeek context caching optimization |
-| [Proactive Messaging Research](docs/ai_proactive_research.md) | AI proactive messaging design research |
-| [Standalone Refactor](docs/standalone_refactor_plan.md) | Server-to-standalone migration record |
-
-### Historical (deprecated Python backend)
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | Old FastAPI + PostgreSQL + Redis design |
-| [Developer Guide](docs/developer_guide.md) | Old backend module conventions |
-| [Walkthrough](docs/walkthrough.md) | Old backend acceptance report |
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'feat: add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-<p align="center">
-  Made with care by TaWorld Team
-</p>
+<p align="center">Made with care by TaWorld Team</p>

@@ -9,7 +9,18 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/local/database_helper.dart';
+import 'ai_model_catalog.dart';
 import 'ai_memory_service.dart';
+import 'chat_history_service.dart';
+
+class AiChatException implements Exception {
+  const AiChatException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 /// AI 关怀建议结果
 class AiSuggestion {
@@ -27,8 +38,7 @@ class CacheStats {
 
   int get totalTokens => hitTokens + missTokens;
 
-  double get hitRate =>
-      totalTokens == 0 ? 0.0 : hitTokens / totalTokens;
+  double get hitRate => totalTokens == 0 ? 0.0 : hitTokens / totalTokens;
 
   String get hitRatePercent =>
       totalTokens == 0 ? '-' : '${(hitRate * 100).toStringAsFixed(1)}%';
@@ -36,8 +46,7 @@ class CacheStats {
 
 abstract final class AiService {
   static const _defaultBaseUrl = 'https://api.deepseek.com';
-  static const _defaultModel = 'deepseek-v4-pro';
-  static const _proModel = 'deepseek-v4-pro';
+  static const _defaultModel = AiModelCatalog.primary;
 
   // ==================== Prompt 模板 ====================
 
@@ -75,20 +84,80 @@ abstract final class AiService {
       'type': 'function',
       'function': {
         'name': 'create_reminder',
-        'description': '为关心的人创建定时提醒（如睡觉提醒、吃饭提醒、天气提醒）',
+        'description':
+            '为用户自己或关心的人创建睡觉、吃饭或天气提醒。天气提醒分为每日简报和天气突变监测；必须明确时间按用户还是对方的当地时间理解。',
         'parameters': {
           'type': 'object',
           'properties': {
+            'subject': {
+              'type': 'string',
+              'enum': ['partner', 'self'],
+              'description': '提醒对象：partner 为关心的人；self 为用户自己',
+            },
             'partner_name': {'type': 'string', 'description': '关心的人的名字'},
             'category': {
               'type': 'string',
               'enum': ['sleep', 'meal', 'weather'],
               'description': '提醒类别：sleep睡觉、meal吃饭、weather天气',
             },
-            'time': {'type': 'string', 'description': '提醒时间，格式HH:mm（如22:00）'},
+            'weather_mode': {
+              'type': 'string',
+              'enum': ['daily_digest', 'weather_change'],
+              'description':
+                  '仅天气提醒使用：daily_digest 为每天固定时间查看天气；weather_change 为在监测时段内发现未来天气突变时提醒',
+            },
+            'time': {
+              'type': 'string',
+              'description': 'HH:mm 当地钟表时间。睡觉、吃饭、每日天气简报必须提供；天气突变监测不需要',
+            },
             'message': {'type': 'string', 'description': '可选的自定义提醒消息'},
+            'time_basis': {
+              'type': 'string',
+              'enum': ['user', 'partner'],
+              'description': '时间按谁的当地钟表理解：user 是用户所在时区；partner 是关心的人所在时区',
+            },
+            'timezone_id': {
+              'type': 'string',
+              'description':
+                  '可选 IANA 时区，如 Asia/Singapore。选择 partner 且人物档案没有可靠时区时必须先向用户确认',
+            },
+            'advance_minutes': {
+              'type': 'integer',
+              'description': '睡觉或吃饭提醒可选提前分钟数',
+            },
+            'monitor_start': {
+              'type': 'string',
+              'description': '天气突变监测开始时间 HH:mm，默认 07:00',
+            },
+            'monitor_end': {
+              'type': 'string',
+              'description': '天气突变监测结束时间 HH:mm，默认 23:00',
+            },
+            'lead_minutes': {
+              'type': 'integer',
+              'description': '天气突变向前观察分钟数，默认 180',
+            },
+            'cooldown_minutes': {
+              'type': 'integer',
+              'description': '同类天气事件的通知冷却时间，默认 240 分钟',
+            },
+            'notify_conditions': {
+              'type': 'array',
+              'items': {
+                'type': 'string',
+                'enum': [
+                  'rain',
+                  'snow',
+                  'temperature_drop',
+                  'temperature_rise',
+                  'extreme_cold',
+                  'extreme_heat',
+                ],
+              },
+              'description': '天气突变监测条件',
+            },
           },
-          'required': ['partner_name', 'category', 'time'],
+          'required': ['category'],
         },
       },
     },
@@ -96,14 +165,27 @@ abstract final class AiService {
       'type': 'function',
       'function': {
         'name': 'delete_reminder',
-        'description': '删除某人的某个类别的提醒',
+        'description': '删除某人的某个类别的提醒。两种天气提醒并存时必须明确 weather_mode。',
         'parameters': {
           'type': 'object',
           'properties': {
+            'subject': {
+              'type': 'string',
+              'enum': ['partner', 'self'],
+              'description': '删除关心的人的提醒或用户自己的提醒',
+            },
             'partner_name': {'type': 'string', 'description': '关心的人的名字'},
-            'category': {'type': 'string', 'description': '提醒类别（sleep/meal/weather/custom）'},
+            'category': {
+              'type': 'string',
+              'description': '提醒类别（sleep/meal/weather/custom）',
+            },
+            'weather_mode': {
+              'type': 'string',
+              'enum': ['daily_digest', 'weather_change'],
+              'description': '删除天气提醒时指定：每日天气简报或天气突变监测',
+            },
           },
-          'required': ['partner_name', 'category'],
+          'required': ['category'],
         },
       },
     },
@@ -126,10 +208,7 @@ abstract final class AiService {
       'function': {
         'name': 'get_all_partners',
         'description': '获取用户关心的所有人的列表和基本',
-        'parameters': {
-          'type': 'object',
-          'properties': {},
-        },
+        'parameters': {'type': 'object', 'properties': {}},
       },
     },
     {
@@ -137,10 +216,7 @@ abstract final class AiService {
       'function': {
         'name': 'get_reminder_stats',
         'description': '获取提醒相关的统计数据（总次数、连续天数等）',
-        'parameters': {
-          'type': 'object',
-          'properties': {},
-        },
+        'parameters': {'type': 'object', 'properties': {}},
       },
     },
     {
@@ -157,7 +233,14 @@ abstract final class AiService {
               'enum': ['couple', 'partner', 'family', 'friend'],
               'description': '关系类型：couple情侣、partner伴侣、family家人、friend朋友',
             },
-            'city': {'type': 'string', 'description': '对方所在城市（如用户提到则填写，用简洁城市名如"上海"不要加"市"）'},
+            'city': {
+              'type': 'string',
+              'description': '对方所在城市（如用户提到则填写，用简洁城市名如"上海"不要加"市"）',
+            },
+            'timezone_id': {
+              'type': 'string',
+              'description': '用户明确确认的 IANA 时区（如 Asia/Singapore）。不能只凭不唯一的城市名猜测',
+            },
             'note': {'type': 'string', 'description': '一句话描述（可选）'},
           },
           'required': ['nickname', 'relationship'],
@@ -182,18 +265,29 @@ abstract final class AiService {
       'type': 'function',
       'function': {
         'name': 'update_partner',
-        'description': '修改某个关心的人的信息（城市、关系类型、备注等）。用户说"把XX的城市改成北京"或"XX不是朋友是家人"时使用。',
+        'description':
+            '修改某个关心的人的信息（城市、关系类型、备注等）。用户说"把XX的城市改成北京"或"XX不是朋友是家人"时使用。',
         'parameters': {
           'type': 'object',
           'properties': {
             'partner_name': {'type': 'string', 'description': '要修改的人的当前名字'},
-            'new_nickname': {'type': 'string', 'description': '新的名字/昵称（可选，不改则不传）'},
+            'new_nickname': {
+              'type': 'string',
+              'description': '新的名字/昵称（可选，不改则不传）',
+            },
             'relationship': {
               'type': 'string',
               'enum': ['couple', 'partner', 'family', 'friend'],
               'description': '新的关系类型（可选，不改则不传）',
             },
-            'city': {'type': 'string', 'description': '新的城市（可选，用简洁城市名如"上海"不要加"市"，不改则不传）'},
+            'city': {
+              'type': 'string',
+              'description': '新的城市（可选，用简洁城市名如"上海"不要加"市"，不改则不传）',
+            },
+            'timezone_id': {
+              'type': 'string',
+              'description': '用户确认后的新 IANA 时区（可选，如 Asia/Singapore）',
+            },
             'note': {'type': 'string', 'description': '新的一句话描述（可选，不改则不传）'},
           },
           'required': ['partner_name'],
@@ -228,6 +322,7 @@ abstract final class AiService {
   static Future<List<Map<String, String>>> _loadDynamicHistory({
     int tokenBudget = 200000,
     int maxMessages = 2000,
+    String? excludeRequestId,
   }) async {
     final db = await DatabaseHelper.database;
 
@@ -235,19 +330,25 @@ abstract final class AiService {
     final prefs = await SharedPreferences.getInstance();
     final cutoff = prefs.getString('summarized_up_to');
 
-    final historyRows = cutoff != null
-        ? await db.query(
-            'chat_history',
-            where: 'created_at > ?',
-            whereArgs: [cutoff],
-            orderBy: 'created_at DESC',
-            limit: maxMessages,
-          )
-        : await db.query(
-            'chat_history',
-            orderBy: 'created_at DESC',
-            limit: maxMessages,
-          );
+    final whereParts = <String>[];
+    final whereArgs = <Object?>[];
+    whereParts.add('message_type NOT IN (?, ?)');
+    whereArgs.addAll(['launch_prompt', 'image_context']);
+    if (cutoff != null) {
+      whereParts.add('created_at > ?');
+      whereArgs.add(cutoff);
+    }
+    if (excludeRequestId != null) {
+      whereParts.add('(request_id IS NULL OR request_id != ?)');
+      whereArgs.add(excludeRequestId);
+    }
+    final historyRows = await db.query(
+      'chat_history',
+      where: whereParts.isEmpty ? null : whereParts.join(' AND '),
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+      orderBy: 'created_at DESC',
+      limit: maxMessages,
+    );
 
     final messages = <Map<String, String>>[];
     int usedTokens = 0;
@@ -257,10 +358,7 @@ abstract final class AiService {
       final msgTokens = _estimateTokens(content);
       if (usedTokens + msgTokens > tokenBudget) break;
       usedTokens += msgTokens;
-      messages.add({
-        'role': row['role'] as String,
-        'content': content,
-      });
+      messages.add({'role': row['role'] as String, 'content': content});
     }
 
     return messages.reversed.toList(); // 恢复时间正序
@@ -270,9 +368,15 @@ abstract final class AiService {
   static Future<List<Map<String, String>>> _buildMessages(
     String userMessage, {
     int historyTokenBudget = 200000,
+    String? excludeRequestId,
   }) async {
-    final dynamicPrompt = await AiMemoryService.buildSystemPrompt(userMessage: userMessage);
-    final history = await _loadDynamicHistory(tokenBudget: historyTokenBudget);
+    final dynamicPrompt = await AiMemoryService.buildSystemPrompt(
+      userMessage: userMessage,
+    );
+    final history = await _loadDynamicHistory(
+      tokenBudget: historyTokenBudget,
+      excludeRequestId: excludeRequestId,
+    );
 
     final messages = <Map<String, String>>[
       {'role': 'system', 'content': dynamicPrompt},
@@ -353,16 +457,22 @@ abstract final class AiService {
     }
 
     try {
-      final promptTemplate = _suggestPrompts[category] ?? _suggestPrompts['custom']!;
-      final prompt = promptTemplate.replaceAll('{context}', context?.toString() ?? '');
+      final promptTemplate =
+          _suggestPrompts[category] ?? _suggestPrompts['custom']!;
+      final prompt = promptTemplate.replaceAll(
+        '{context}',
+        context?.toString() ?? '',
+      );
 
       final dio = Dio();
       final response = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
-        options: Options(headers: {
-          'Authorization': 'Bearer $key',
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $key',
+            'Content-Type': 'application/json',
+          },
+        ),
         data: {
           'model': _defaultModel,
           'temperature': 0.8,
@@ -373,7 +483,8 @@ abstract final class AiService {
         },
       );
 
-      final content = response.data['choices'][0]['message']['content'] as String;
+      final content =
+          response.data['choices'][0]['message']['content'] as String;
       try {
         final parsed = jsonDecode(content) as Map<String, dynamic>;
         return AiSuggestion(
@@ -412,10 +523,12 @@ abstract final class AiService {
       final dio = Dio();
       final response = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
-        options: Options(headers: {
-          'Authorization': 'Bearer $key',
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $key',
+            'Content-Type': 'application/json',
+          },
+        ),
         data: {
           'model': _defaultModel,
           'temperature': 0.7,
@@ -551,7 +664,10 @@ abstract final class AiService {
     String userMessage, {
     required void Function(String accumulated) onToken,
     required Future<String> Function(String name, Map<String, dynamic> args)
-        onToolCall,
+    onToolCall,
+    String? requestId,
+    bool hideUserMessage = false,
+    String userMessageType = 'message',
   }) async {
     final key = await getApiKey();
     if (key == null || key.isEmpty) {
@@ -561,16 +677,31 @@ abstract final class AiService {
 
     // 1. 保存用户消息
     final db = await DatabaseHelper.database;
-    await db.insert('chat_history', {
-      'id': DatabaseHelper.newId(),
-      'role': 'user',
-      'content': userMessage,
-      'created_at': DateTime.now().toIso8601String(),
-    });
+    if (requestId == null) {
+      await ChatHistoryService.append(
+        role: 'user',
+        content: userMessage,
+        messageType: userMessageType,
+        hidden: hideUserMessage,
+      );
+    } else {
+      await ChatHistoryService.appendOnce(
+        requestId: requestId,
+        role: 'user',
+        content: userMessage,
+        messageType: userMessageType,
+        hidden: hideUserMessage,
+      );
+    }
 
     // 2. 构建消息列表（动态 prompt + 动态历史）
-    final baseMessages = await _buildMessages(userMessage);
-    final messages = baseMessages.map((m) => Map<String, dynamic>.from(m)).toList();
+    final baseMessages = await _buildMessages(
+      userMessage,
+      excludeRequestId: requestId,
+    );
+    final messages = baseMessages
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList();
 
     final dio = Dio();
 
@@ -578,10 +709,12 @@ abstract final class AiService {
       // 3. 第一轮调用（非流式），检查工具调用
       final firstResponse = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
-        options: Options(headers: {
-          'Authorization': 'Bearer $key',
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $key',
+            'Content-Type': 'application/json',
+          },
+        ),
         data: {
           'model': _defaultModel,
           'temperature': 0.7,
@@ -612,8 +745,7 @@ abstract final class AiService {
             toolRounds < maxToolRounds) {
           // 执行所有工具调用
           for (final toolCall in currentToolCalls) {
-            final funcName =
-                toolCall['function']?['name'] as String? ?? '';
+            final funcName = toolCall['function']?['name'] as String? ?? '';
             final argsStr =
                 toolCall['function']?['arguments'] as String? ?? '{}';
             final callId = toolCall['id'] as String? ?? '';
@@ -637,10 +769,12 @@ abstract final class AiService {
           // 再次调用 API（非流式）检查是否有更多工具调用
           final nextResponse = await dio.post(
             '$_defaultBaseUrl/v1/chat/completions',
-            options: Options(headers: {
-              'Authorization': 'Bearer $key',
-              'Content-Type': 'application/json',
-            }),
+            options: Options(
+              headers: {
+                'Authorization': 'Bearer $key',
+                'Content-Type': 'application/json',
+              },
+            ),
             data: {
               'model': _defaultModel,
               'temperature': 0.7,
@@ -746,27 +880,34 @@ abstract final class AiService {
         });
       }
       AiMemoryService.checkAndSummarize();
+      if (reply.isEmpty) {
+        throw const AiChatException('AI 暂时没有返回内容');
+      }
       return reply;
+    } on AiChatException {
+      rethrow;
     } catch (_) {
-      onToken('抱歉，网络好像出了点问题，请检查网络连接');
-      return '';
+      throw const AiChatException('网络连接失败');
     }
   }
 
   /// 获取对话历史
-  static Future<List<Map<String, dynamic>>> getChatHistory({int limit = 50}) async {
+  static Future<List<Map<String, dynamic>>> getChatHistory({
+    int limit = 50,
+    bool includeHidden = false,
+  }) async {
     final db = await DatabaseHelper.database;
     return db.query(
       'chat_history',
+      where: includeHidden ? null : 'hidden_at IS NULL',
       orderBy: 'created_at ASC',
       limit: limit,
     );
   }
 
-  /// 调用 Pro 模型（用于异步任务：记忆提取、摘要、Dreaming 整合）
+  /// 调用后台文本模型（用于记忆提取、摘要、Dreaming 整合）。
   ///
-  /// 使用 deepseek-v4-pro 模型，逻辑能力更强，适合复杂推理任务。
-  /// 非流式调用，直接返回完整文本。
+  /// 当前统一路由到主 Flash 模型。保留旧方法名兼容现有调用方。
   ///
   /// [systemPrompt] 可选的 system message，用于缓存优化：
   /// 将不变指令放在 system 里，可变数据放在 [prompt] 里，
@@ -789,12 +930,14 @@ abstract final class AiService {
 
       final response = await dio.post(
         '$_defaultBaseUrl/v1/chat/completions',
-        options: Options(headers: {
-          'Authorization': 'Bearer $key',
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $key',
+            'Content-Type': 'application/json',
+          },
+        ),
         data: {
-          'model': _proModel,
+          'model': AiModelCatalog.primary,
           'temperature': temperature,
           'max_tokens': maxTokens,
           'messages': messages,

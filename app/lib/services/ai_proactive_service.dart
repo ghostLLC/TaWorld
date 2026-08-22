@@ -10,6 +10,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/local/database_helper.dart';
+import 'ai_model_catalog.dart';
 import 'ai_service.dart';
 import 'local/partner_service.dart';
 import 'local/local_reminder_service.dart';
@@ -148,7 +149,7 @@ ${contexts.join('\n')}
           'Content-Type': 'application/json',
         }),
         data: {
-          'model': 'deepseek-v4-flash',
+          'model': AiModelCatalog.primary,
           'messages': [
             {'role': 'user', 'content': prompt},
           ],

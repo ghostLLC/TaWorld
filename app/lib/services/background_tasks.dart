@@ -1,7 +1,7 @@
 /// TaWorld 后台任务服务
 ///
 /// 使用 WorkManager 实现后台周期性任务：
-/// - 天气轮询：每 2 小时检查所有关注人所在地天气，发现极端天气主动推送
+/// - 天气轮询：约每 30 分钟检查突变监测配置的逐时预报
 /// - 通知续期：每次后台执行时补充 zonedSchedule 通知（防止 7 天窗口过期）
 ///
 /// 注意：回调函数运行在独立 Isolate 中，不能使用任何 UI 相关代码。
@@ -11,6 +11,7 @@ import 'dart:developer' as dev;
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/timezone.dart' as tz;
 import 'package:workmanager/workmanager.dart';
 
 import '../services/local/local_reminder_service.dart';
@@ -18,6 +19,7 @@ import '../services/local/partner_service.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_scheduler.dart';
 import '../services/weather_service.dart';
+import '../services/weather_background_processor.dart';
 import '../services/ai_proactive_service.dart';
 import '../services/ai_memory_dreamer.dart';
 import '../services/timezone_service.dart';
@@ -34,14 +36,13 @@ abstract final class BackgroundTaskService {
   static Future<void> registerAll() async {
     await Workmanager().cancelAll();
 
-    // 天气轮询：每 2 小时执行一次（Android 最小 15 分钟）
+    // 天气突变轮询：WorkManager 只保证“尽力执行”，Doze / 厂商省电
+    // 可能延迟任务，30 分钟不是实时送达承诺。
     await Workmanager().registerPeriodicTask(
       _taskWeatherCheck,
       _taskWeatherCheck,
-      frequency: const Duration(hours: 2),
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
+      frequency: const Duration(minutes: 30),
+      constraints: Constraints(networkType: NetworkType.connected),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     );
 
@@ -58,9 +59,7 @@ abstract final class BackgroundTaskService {
       _taskAiProactiveCheck,
       _taskAiProactiveCheck,
       frequency: const Duration(hours: 2),
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
+      constraints: Constraints(networkType: NetworkType.connected),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     );
 
@@ -69,9 +68,7 @@ abstract final class BackgroundTaskService {
       _taskAiMemoryDream,
       _taskAiMemoryDream,
       frequency: const Duration(hours: 24),
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
+      constraints: Constraints(networkType: NetworkType.connected),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     );
   }
@@ -118,14 +115,16 @@ void callbackDispatcher() {
 
 // ==================== 天气轮询任务 ====================
 
-/// 检查所有关注人所在地的天气，发现极端天气主动推送通知
+/// 检查所有关注人所在地的逐时预报，发现配置的天气突变后推送。
+///
+/// 这是设备端 best-effort 监测：系统省电、网络和后台限制都可能造成延迟。
 Future<void> _runWeatherCheck() async {
   final partners = await PartnerService.getAll();
   if (partners.isEmpty) return;
 
   final configsByPartner = await LocalReminderService.getAllEnabledConfigs();
   final prefs = await SharedPreferences.getInstance();
-  final now = DateTime.now();
+  final nowUtc = DateTime.now().toUtc();
 
   // 初始化后台通知插件
   final bgPlugin = FlutterLocalNotificationsPlugin();
@@ -134,74 +133,101 @@ Future<void> _runWeatherCheck() async {
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     ),
   );
+  final stateStore = _PreferencesWeatherAlertStateStore(prefs);
+  final alertSink = _PluginWeatherAlertSink(bgPlugin);
 
   for (final partner in partners) {
-    // 获取天气
-    WeatherResult? weather;
+    final configs =
+        configsByPartner[partner.id]
+            ?.where(
+              (config) =>
+                  config.category == 'weather' &&
+                  config.config['mode'] == 'weather_change',
+            )
+            .toList() ??
+        const [];
+    FullWeatherResult? weather;
     if (partner.latitude != null && partner.longitude != null) {
-      weather = await WeatherService.getCurrentWeather(
-        partner.longitude!,
+      weather = await WeatherService.getFullWeatherByCoords(
         partner.latitude!,
+        partner.longitude!,
       );
     } else if (partner.city != null && partner.city!.isNotEmpty) {
-      weather = await WeatherService.getCurrentWeatherByCity(partner.city!);
+      weather = await WeatherService.getFullWeather(partner.city!);
     }
     if (weather == null) continue;
 
-    // 检查天气条件
-    final configs = configsByPartner[partner.id];
-    if (configs == null) continue;
-
-    for (final config in configs) {
-      if (config.category != 'weather') continue;
-
-      final conditions = (config.config['notify_conditions'] as List?)
-              ?.cast<String>() ??
-          ['rain', 'snow', 'extreme_cold', 'extreme_heat'];
-      final check = WeatherService.checkConditions(weather, conditions);
-
-      if (!check.shouldRemind || check.condition == null) continue;
-
-      // 防重复：同一 partner + 同一条件类型，4 小时内不重复推送
-      final dedupeKey =
-          'bg_alert_${partner.id}_${check.condition}_${now.year}${now.month}${now.day}';
-      final lastAlert = prefs.getInt('bg_alert_time_$dedupeKey');
-      if (lastAlert != null) {
-        final elapsed = now.difference(
-          DateTime.fromMillisecondsSinceEpoch(lastAlert),
-        );
-        if (elapsed.inHours < 4) continue;
-      }
-
-      // 发送通知
-      await bgPlugin.show(
-        _makeAlertId(partner.id, check.condition!),
-        '🚨 天气预警',
-        check.message!,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'taworld_weather_alert',
-            '天气预警',
-            channelDescription: 'TaWorld 极端天气主动预警',
-            importance: Importance.max,
-            priority: Priority.high,
-          ),
-        ),
-        payload: 'configId:${config.id}',
-      );
-
-      // 记录推送时间
-      await prefs.setInt(
-        'bg_alert_time_$dedupeKey',
-        now.millisecondsSinceEpoch,
-      );
-    }
+    // 每轮都刷新所有人物的天气缓存；只有显式开启突变监测的配置
+    // 才会继续产生通知，避免无授权的打扰。
+    await WeatherBackgroundProcessor.processPartner(
+      partner: partner,
+      configs: configs,
+      weather: weather,
+      nowUtc: nowUtc,
+      deviceTimeZoneId: tz.local.name,
+      stateStore: stateStore,
+      alertSink: alertSink,
+    );
   }
 }
 
-/// 生成唯一通知 ID
-int _makeAlertId(String partnerId, String condition) {
-  return '${partnerId}_$condition'.hashCode.abs() % 2147483647;
+class _PreferencesWeatherAlertStateStore implements WeatherAlertStateStore {
+  const _PreferencesWeatherAlertStateStore(this.preferences);
+
+  final SharedPreferences preferences;
+
+  @override
+  Future<WeatherAlertState?> read(String configId) async {
+    final eventKey = preferences.getString('weather_alert_event_$configId');
+    final timestamp = preferences.getInt('weather_alert_time_$configId');
+    if (eventKey == null || timestamp == null) return null;
+    return WeatherAlertState(
+      eventKey: eventKey,
+      notifiedAtUtc: DateTime.fromMillisecondsSinceEpoch(
+        timestamp,
+        isUtc: true,
+      ),
+    );
+  }
+
+  @override
+  Future<void> write(String configId, WeatherAlertState state) async {
+    await preferences.setString(
+      'weather_alert_event_$configId',
+      state.eventKey,
+    );
+    await preferences.setInt(
+      'weather_alert_time_$configId',
+      state.notifiedAtUtc.toUtc().millisecondsSinceEpoch,
+    );
+  }
+}
+
+class _PluginWeatherAlertSink implements WeatherAlertSink {
+  const _PluginWeatherAlertSink(this.plugin);
+
+  final FlutterLocalNotificationsPlugin plugin;
+
+  @override
+  Future<void> show(WeatherAlertDelivery delivery) async {
+    var notificationId = delivery.event.eventKey.hashCode & 0x7fffffff;
+    if (notificationId == 0) notificationId = 1;
+    await plugin.show(
+      notificationId,
+      '天气变化提醒',
+      delivery.event.message,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'taworld_weather_alert',
+          '天气变化提醒',
+          channelDescription: 'TaWorld 对未来天气变化的尽力监测提醒',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+      ),
+      payload: 'configId:${delivery.configId}',
+    );
+  }
 }
 
 // ==================== 通知续期任务 ====================

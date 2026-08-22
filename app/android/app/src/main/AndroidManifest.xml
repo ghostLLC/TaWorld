@@ -7,7 +7,6 @@
 
     <!-- 精确定时通知 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
 
     <!-- 重启后恢复通知调度 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -15,6 +14,9 @@
     <!-- 定位（天气查询、添加关心的人时获取位置） -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
+    <!-- 语音输入，仅在用户主动点击麦克风时启用 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
     <application
         android:label="TaWorld-想念"
@@ -78,6 +80,12 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- 厂商自启动设置仅用于引导，应用无法读取或强制授予状态。 -->
+        <package android:name="com.miui.securitycenter"/>
+        <package android:name="com.huawei.systemmanager"/>
+        <package android:name="com.coloros.safecenter"/>
+        <package android:name="com.iqoo.secure"/>
+        <package android:name="com.meizu.safe"/>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

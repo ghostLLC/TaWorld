@@ -32,6 +32,47 @@ void main() {
     expect(BackupArchiveCodec.decode(archiveBytes).preferences, isEmpty);
   });
 
+  test('decodes validated image attachments without flattening paths', () {
+    final archiveBytes = _encodeArchive(
+      extraEntries: {
+        'attachments/0d90d534-4524-4d88-b11b-fb25cb72cc4d.png': [
+          0x89,
+          0x50,
+          0x4e,
+          0x47,
+        ],
+      },
+    );
+
+    final decoded = BackupArchiveCodec.decode(archiveBytes);
+    expect(decoded.attachments['0d90d534-4524-4d88-b11b-fb25cb72cc4d.png'], [
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+    ]);
+  });
+
+  test('rejects unsafe or unsupported attachment names', () {
+    for (final name in [
+      'attachments/../evil.png',
+      'attachments/subdir/evil.png',
+      'attachments/evil.exe',
+      'attachments/.png',
+    ]) {
+      expect(
+        () => BackupArchiveCodec.decode(
+          _encodeArchive(
+            extraEntries: {
+              name: [1],
+            },
+          ),
+        ),
+        throwsA(isA<BackupFormatException>()),
+      );
+    }
+  });
+
   test('decodes both stored and deflated TaWorld entries', () {
     final deflated = BackupArchiveCodec.decode(_encodeArchive());
     final stored = BackupArchiveCodec.decode(_encodeArchive(useStored: true));
@@ -238,11 +279,16 @@ void main() {
       'preferences.json',
       BackupArchiveCodec.maxMetadataBytes + 1,
     );
+    final oversizedAttachment = _encodeArchiveWithDeclaredSize(
+      'attachments/0d90d534-4524-4d88-b11b-fb25cb72cc4d.png',
+      BackupArchiveCodec.maxAttachmentBytes + 1,
+    );
 
     for (final archiveBytes in [
       oversizedDatabase,
       oversizedManifest,
       oversizedPreferences,
+      oversizedAttachment,
     ]) {
       expect(
         () => BackupArchiveCodec.decode(archiveBytes),

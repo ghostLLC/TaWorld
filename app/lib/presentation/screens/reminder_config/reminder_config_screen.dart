@@ -12,7 +12,9 @@ import '../../../services/local/partner_service.dart';
 import '../../../services/reminder_scheduler.dart';
 import '../../../data/models/reminder_config.dart';
 import '../../../data/models/partner.dart';
+import '../../widgets/reminder_timezone_mode_selector.dart';
 import '../../widgets/widgets.dart';
+import 'weather_reminder_form_value.dart';
 
 /// 提醒配置页面 — 管理某段关系下的所有提醒配置
 class ReminderConfigScreen extends StatefulWidget {
@@ -76,9 +78,9 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
         setState(() {
           _configs[index] = config.copyWith(enabled: !newEnabled);
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('更新失败，请重试')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('更新失败，请重试')));
       }
     }
   }
@@ -115,15 +117,15 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
       await ReminderScheduler.rescheduleConfig(config.id);
       if (mounted) {
         setState(() => _configs.removeAt(index));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已删除')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已删除')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('删除失败，请重试')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
       }
     }
   }
@@ -133,14 +135,39 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
   Future<void> _editConfig(int index) async {
     final config = _configs[index];
     Map<String, dynamic>? newConfig;
+    String? timezoneMode;
+    var clearTimezoneId = false;
 
     switch (config.category) {
       case 'sleep':
-        newConfig = await _showSleepEditDialog(config.config);
+        final result = await _showSleepEditDialog(
+          config.config,
+          initialTimezoneMode: config.timezoneMode,
+        );
+        if (result == null) return;
+        newConfig = result.config;
+        timezoneMode = result.timezoneMode;
+        clearTimezoneId = true;
       case 'meal':
-        newConfig = await _showMealEditDialog(config.config);
+        final result = await _showMealEditDialog(
+          config.config,
+          initialTimezoneMode: config.timezoneMode,
+        );
+        if (result == null) return;
+        newConfig = result.config;
+        timezoneMode = result.timezoneMode;
+        clearTimezoneId = true;
       case 'weather':
-        newConfig = await _showWeatherEditDialog(config.config);
+        final result = await _showWeatherEditDialog(
+          WeatherReminderFormValue.fromConfig(
+            config.config,
+            timezoneMode: config.timezoneMode,
+          ),
+        );
+        if (result == null) return;
+        newConfig = result.toConfig();
+        timezoneMode = result.timezoneMode;
+        clearTimezoneId = true;
       case 'custom':
         newConfig = await _showCustomEditDialog(config.config);
     }
@@ -148,29 +175,39 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
     if (newConfig == null || !mounted) return;
 
     try {
-      await LocalReminderService.updateConfig(config.id, config: newConfig);
+      await LocalReminderService.updateConfig(
+        config.id,
+        config: newConfig,
+        timezoneMode: timezoneMode,
+        clearTimezoneId: clearTimezoneId,
+      );
       await ReminderScheduler.rescheduleConfig(config.id);
       setState(() {
-        _configs[index] = config.copyWith(config: newConfig);
+        _configs[index] = config.copyWith(
+          config: newConfig,
+          timezoneMode: timezoneMode,
+          clearTimezoneId: clearTimezoneId,
+        );
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('配置已更新')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('配置已更新')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('更新失败，请重试')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('更新失败，请重试')));
       }
     }
   }
 
   /// 睡觉提醒编辑
-  Future<Map<String, dynamic>?> _showSleepEditDialog(
-    Map<String, dynamic> current,
-  ) async {
+  Future<_TimedReminderEditResult?> _showSleepEditDialog(
+    Map<String, dynamic> current, {
+    required String initialTimezoneMode,
+  }) async {
     final targetTime = current['target_sleep_time'] as String? ?? '23:00';
     final advanceMinutes = current['advance_minutes'] as int? ?? 30;
 
@@ -178,8 +215,12 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
     var selectedHour = int.tryParse(parts[0]) ?? 23;
     var selectedMinute = int.tryParse(parts[1]) ?? 0;
     var selectedAdvance = advanceMinutes;
+    var selectedTimezoneMode = ReminderTimezoneModeSelector.normalize(
+      initialTimezoneMode,
+      _partner,
+    );
 
-    return showDialog<Map<String, dynamic>>(
+    return showDialog<_TimedReminderEditResult>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
@@ -197,7 +238,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                 onTap: () async {
                   final time = await showTimePicker(
                     context: ctx,
-                    initialTime: TimeOfDay(hour: selectedHour, minute: selectedMinute),
+                    initialTime: TimeOfDay(
+                      hour: selectedHour,
+                      minute: selectedMinute,
+                    ),
                   );
                   if (time != null) {
                     setDialogState(() {
@@ -222,6 +266,13 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                       setDialogState(() => selectedAdvance = v.first),
                 ),
               ),
+              const SizedBox(height: TaSpacing.sm),
+              ReminderTimezoneModeSelector(
+                value: selectedTimezoneMode,
+                partner: _partner,
+                onChanged: (mode) =>
+                    setDialogState(() => selectedTimezoneMode = mode),
+              ),
             ],
           ),
           actions: [
@@ -230,11 +281,16 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop({
-                'target_sleep_time':
-                    '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
-                'advance_minutes': selectedAdvance,
-              }),
+              onPressed: () => Navigator.of(ctx).pop(
+                _TimedReminderEditResult(
+                  config: {
+                    'target_sleep_time':
+                        '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
+                    'advance_minutes': selectedAdvance,
+                  },
+                  timezoneMode: selectedTimezoneMode,
+                ),
+              ),
               child: const Text('保存'),
             ),
           ],
@@ -244,10 +300,12 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
   }
 
   /// 吃饭提醒编辑
-  Future<Map<String, dynamic>?> _showMealEditDialog(
-    Map<String, dynamic> current,
-  ) async {
-    final meals = (current['meals'] as List?)
+  Future<_TimedReminderEditResult?> _showMealEditDialog(
+    Map<String, dynamic> current, {
+    required String initialTimezoneMode,
+  }) async {
+    final meals =
+        (current['meals'] as List?)
             ?.map((m) => Map<String, dynamic>.from(m as Map))
             .toList() ??
         [
@@ -255,8 +313,12 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
           {'name': '午餐', 'target_time': '12:00', 'advance_minutes': 15},
           {'name': '晚餐', 'target_time': '18:00', 'advance_minutes': 15},
         ];
+    var selectedTimezoneMode = ReminderTimezoneModeSelector.normalize(
+      initialTimezoneMode,
+      _partner,
+    );
 
-    return showDialog<Map<String, dynamic>>(
+    return showDialog<_TimedReminderEditResult>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
@@ -269,7 +331,8 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
               children: [
                 ...List.generate(meals.length, (i) {
                   final meal = meals[i];
-                  final timeParts = (meal['target_time'] as String? ?? '12:00').split(':');
+                  final timeParts = (meal['target_time'] as String? ?? '12:00')
+                      .split(':');
                   final hour = int.tryParse(timeParts[0]) ?? 12;
                   final minute = int.tryParse(timeParts[1]) ?? 0;
                   final advance = meal['advance_minutes'] as int? ?? 15;
@@ -280,15 +343,20 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                       padding: const EdgeInsets.all(12),
                       child: Row(
                         children: [
-                          Text(meal['name'] as String? ?? '',
-                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                          Text(
+                            meal['name'] as String? ?? '',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: InkWell(
                               onTap: () async {
                                 final time = await showTimePicker(
                                   context: ctx,
-                                  initialTime: TimeOfDay(hour: hour, minute: minute),
+                                  initialTime: TimeOfDay(
+                                    hour: hour,
+                                    minute: minute,
+                                  ),
                                 );
                                 if (time != null) {
                                   setDialogState(() {
@@ -312,7 +380,9 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                             ],
                             onChanged: (v) {
                               if (v != null) {
-                                setDialogState(() => meal['advance_minutes'] = v);
+                                setDialogState(
+                                  () => meal['advance_minutes'] = v,
+                                );
                               }
                             },
                             isDense: true,
@@ -320,7 +390,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                           ),
                           if (meals.length > 1)
                             IconButton(
-                              icon: const Icon(Icons.remove_circle_outline, size: 20),
+                              icon: const Icon(
+                                Icons.remove_circle_outline,
+                                size: 20,
+                              ),
                               onPressed: () =>
                                   setDialogState(() => meals.removeAt(i)),
                             ),
@@ -342,6 +415,13 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                   icon: const Icon(Icons.add_rounded, size: 20),
                   label: const Text('添加餐次'),
                 ),
+                const SizedBox(height: TaSpacing.sm),
+                ReminderTimezoneModeSelector(
+                  value: selectedTimezoneMode,
+                  partner: _partner,
+                  onChanged: (mode) =>
+                      setDialogState(() => selectedTimezoneMode = mode),
+                ),
               ],
             ),
           ),
@@ -351,7 +431,12 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop({'meals': meals}),
+              onPressed: () => Navigator.of(ctx).pop(
+                _TimedReminderEditResult(
+                  config: {'meals': meals},
+                  timezoneMode: selectedTimezoneMode,
+                ),
+              ),
               child: const Text('保存'),
             ),
           ],
@@ -361,50 +446,224 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
   }
 
   /// 天气提醒编辑
-  Future<Map<String, dynamic>?> _showWeatherEditDialog(
-    Map<String, dynamic> current,
+  Future<WeatherReminderFormValue?> _showWeatherEditDialog(
+    WeatherReminderFormValue initial,
   ) async {
-    final conditions = (current['notify_conditions'] as List?)
-            ?.cast<String>()
-            .toList() ??
-        ['rain', 'snow', 'extreme_cold', 'extreme_heat'];
-
-    final conditionOptions = {
-      'rain': ('🌧️', '下雨'),
-      'snow': ('❄️', '下雪'),
-      'extreme_cold': ('🥶', '极寒 (≤0°C)'),
-      'extreme_heat': ('🥵', '酷热 (≥35°C)'),
+    var value = initial.copyWith(
+      timezoneMode: ReminderTimezoneModeSelector.normalize(
+        initial.timezoneMode,
+        _partner,
+      ),
+    );
+    const conditionOptions = {
+      'rain': ('🌧️', '降雨'),
+      'snow': ('❄️', '降雪'),
+      'temperature_drop': ('📉', '明显降温'),
+      'temperature_rise': ('📈', '明显升温'),
+      'extreme_cold': ('🥶', '降到 0°C 以下'),
+      'extreme_heat': ('🥵', '升到 35°C 以上'),
     };
 
-    return showDialog<Map<String, dynamic>>(
+    Future<String?> pickClock(BuildContext context, String clock) async {
+      final parts = clock.split(':');
+      final time = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay(
+          hour: int.tryParse(parts.first) ?? 8,
+          minute: parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
+        ),
+      );
+      if (time == null) return null;
+      return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    }
+
+    return showDialog<WeatherReminderFormValue>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
           title: const Text('编辑天气提醒'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: conditionOptions.entries.map((entry) {
-              final isSelected = conditions.contains(entry.key);
-              final emoji = entry.value.$1;
-              final label = entry.value.$2;
-              return CheckboxListTile(
-                value: isSelected,
-                onChanged: (v) {
-                  setDialogState(() {
-                    if (v == true) {
-                      conditions.add(entry.key);
-                    } else {
-                      conditions.remove(entry.key);
-                    }
-                  });
-                },
-                title: Text('$emoji $label'),
-                controlAffinity: ListTileControlAffinity.leading,
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-              );
-            }).toList(),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SegmentedButton<WeatherReminderMode>(
+                    segments: const [
+                      ButtonSegment(
+                        value: WeatherReminderMode.dailyDigest,
+                        label: Text('定时简报'),
+                        icon: Icon(Icons.schedule_rounded),
+                      ),
+                      ButtonSegment(
+                        value: WeatherReminderMode.weatherChange,
+                        label: Text('天气突变'),
+                        icon: Icon(Icons.thunderstorm_outlined),
+                      ),
+                    ],
+                    selected: {value.mode},
+                    onSelectionChanged: (selection) => setDialogState(
+                      () => value = value.copyWith(mode: selection.first),
+                    ),
+                  ),
+                  const SizedBox(height: TaSpacing.md),
+                  ReminderTimezoneModeSelector(
+                    value: value.timezoneMode,
+                    partner: _partner,
+                    onChanged: (mode) => setDialogState(
+                      () => value = value.copyWith(timezoneMode: mode),
+                    ),
+                  ),
+                  const SizedBox(height: TaSpacing.sm),
+                  if (value.mode == WeatherReminderMode.dailyDigest)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.wb_sunny_outlined),
+                      title: const Text('每天查看天气'),
+                      subtitle: Text(value.digestTime),
+                      onTap: () async {
+                        final clock = await pickClock(ctx, value.digestTime);
+                        if (clock != null) {
+                          setDialogState(
+                            () => value = value.copyWith(digestTime: clock),
+                          );
+                        }
+                      },
+                    )
+                  else ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('开始监测'),
+                            subtitle: Text(value.monitorStart),
+                            onTap: () async {
+                              final clock = await pickClock(
+                                ctx,
+                                value.monitorStart,
+                              );
+                              if (clock != null) {
+                                setDialogState(
+                                  () => value = value.copyWith(
+                                    monitorStart: clock,
+                                  ),
+                                );
+                              }
+                            },
+                          ),
+                        ),
+                        Expanded(
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('结束监测'),
+                            subtitle: Text(value.monitorEnd),
+                            onTap: () async {
+                              final clock = await pickClock(
+                                ctx,
+                                value.monitorEnd,
+                              );
+                              if (clock != null) {
+                                setDialogState(
+                                  () =>
+                                      value = value.copyWith(monitorEnd: clock),
+                                );
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('提前观察'),
+                      trailing: DropdownButton<int>(
+                        value: value.leadMinutes,
+                        underline: const SizedBox(),
+                        items: const [
+                          DropdownMenuItem(value: 60, child: Text('未来 1 小时')),
+                          DropdownMenuItem(value: 120, child: Text('未来 2 小时')),
+                          DropdownMenuItem(value: 180, child: Text('未来 3 小时')),
+                        ],
+                        onChanged: (minutes) {
+                          if (minutes != null) {
+                            setDialogState(
+                              () =>
+                                  value = value.copyWith(leadMinutes: minutes),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                    Text('关注变化', style: Theme.of(ctx).textTheme.titleSmall),
+                    ...conditionOptions.entries.map((entry) {
+                      final isSelected = value.conditions.contains(entry.key);
+                      return CheckboxListTile(
+                        value: isSelected,
+                        onChanged: (selected) {
+                          final conditions = [...value.conditions];
+                          if (selected == true) {
+                            if (!conditions.contains(entry.key)) {
+                              conditions.add(entry.key);
+                            }
+                          } else {
+                            conditions.remove(entry.key);
+                          }
+                          setDialogState(
+                            () =>
+                                value = value.copyWith(conditions: conditions),
+                          );
+                        },
+                        title: Text('${entry.value.$1} ${entry.value.$2}'),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                      );
+                    }),
+                    Text(
+                      '降雨概率阈值 ${value.rainProbabilityThreshold}%',
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
+                    Slider(
+                      value: value.rainProbabilityThreshold.toDouble(),
+                      min: 40,
+                      max: 90,
+                      divisions: 5,
+                      label: '${value.rainProbabilityThreshold}%',
+                      onChanged: (threshold) => setDialogState(
+                        () => value = value.copyWith(
+                          rainProbabilityThreshold: threshold.round(),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '明显温差阈值 ${value.temperatureChangeThreshold}°C',
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
+                    Slider(
+                      value: value.temperatureChangeThreshold.toDouble(),
+                      min: 3,
+                      max: 12,
+                      divisions: 9,
+                      label: '${value.temperatureChangeThreshold}°C',
+                      onChanged: (threshold) => setDialogState(
+                        () => value = value.copyWith(
+                          temperatureChangeThreshold: threshold.round(),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '系统会约每 30 分钟尽力检查一次；省电模式可能导致延迟。',
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
           actions: [
             TextButton(
@@ -412,10 +671,11 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop({
-                'notify_conditions': conditions,
-                'custom_messages': current['custom_messages'] ?? {},
-              }),
+              onPressed:
+                  value.mode == WeatherReminderMode.weatherChange &&
+                      value.conditions.isEmpty
+                  ? null
+                  : () => Navigator.of(ctx).pop(value),
               child: const Text('保存'),
             ),
           ],
@@ -465,7 +725,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                 onTap: () async {
                   final time = await showTimePicker(
                     context: ctx,
-                    initialTime: TimeOfDay(hour: selectedHour, minute: selectedMinute),
+                    initialTime: TimeOfDay(
+                      hour: selectedHour,
+                      minute: selectedMinute,
+                    ),
                   );
                   if (time != null) {
                     setDialogState(() {
@@ -492,9 +755,9 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
             FilledButton(
               onPressed: () {
                 if (messageCtrl.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('请填写提醒消息')),
-                  );
+                  ScaffoldMessenger.of(
+                    ctx,
+                  ).showSnackBar(const SnackBar(content: Text('请填写提醒消息')));
                   return;
                 }
                 Navigator.of(ctx).pop({
@@ -524,7 +787,7 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
           _CategoryOption(
             icon: '🌦️',
             label: '天气提醒',
-            subtitle: '天气变化时提醒关心Ta',
+            subtitle: '定时简报或天气突变监测',
             value: 'weather',
             iconAsset: 'assets/images/icon_weather_category.png',
           ),
@@ -556,6 +819,16 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
     if (category == null) return;
 
     Map<String, dynamic> config = ReminderConfig.defaultConfigFor(category);
+    var timezoneMode = 'user';
+
+    if (category == 'weather') {
+      final weatherValue = await _showWeatherEditDialog(
+        WeatherReminderFormValue.fromConfig(config, timezoneMode: timezoneMode),
+      );
+      if (weatherValue == null) return;
+      config = weatherValue.toConfig();
+      timezoneMode = weatherValue.timezoneMode;
+    }
 
     // 自定义提醒需要用户配置具体内容
     if (category == 'custom') {
@@ -570,19 +843,20 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
         category: category,
         config: config,
         enabled: true,
+        timezoneMode: timezoneMode,
       );
       await ReminderScheduler.scheduleAll();
       await _loadData();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('提醒创建成功')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('提醒创建成功')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('创建失败，请重试')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('创建失败，请重试')));
       }
     }
   }
@@ -650,8 +924,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                   color: theme.colorScheme.error.withValues(alpha: 0.15),
                   borderRadius: TaRadius.borderMd,
                 ),
-                child: Icon(Icons.delete_rounded,
-                    color: theme.colorScheme.error),
+                child: Icon(
+                  Icons.delete_rounded,
+                  color: theme.colorScheme.error,
+                ),
               ),
               confirmDismiss: (_) async {
                 _deleteConfig(index);
@@ -670,8 +946,11 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                         borderRadius: TaRadius.borderSm,
                       ),
                       child: Center(
-                        child: Image.asset(info.iconAsset,
-                            width: 24, height: 24),
+                        child: Image.asset(
+                          info.iconAsset,
+                          width: 24,
+                          height: 24,
+                        ),
                       ),
                     ),
                     const SizedBox(width: TaSpacing.sm),
@@ -698,8 +977,11 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                     ),
                     // 编辑按钮
                     IconButton(
-                      icon: Icon(Icons.edit_rounded,
-                          color: theme.colorScheme.onSurfaceVariant, size: 20),
+                      icon: Icon(
+                        Icons.edit_rounded,
+                        color: theme.colorScheme.onSurfaceVariant,
+                        size: 20,
+                      ),
                       tooltip: '编辑',
                       onPressed: () => _editConfig(index),
                     ),
@@ -711,12 +993,13 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
                     ),
                     // 历史按钮
                     IconButton(
-                      icon: Icon(Icons.history_rounded,
-                          color: theme.colorScheme.onSurfaceVariant),
+                      icon: Icon(
+                        Icons.history_rounded,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                       tooltip: '提醒历史',
                       onPressed: () => context.push(
-                        Routes.reminderHistory
-                            .replaceAll(':id', config.id),
+                        Routes.reminderHistory.replaceAll(':id', config.id),
                       ),
                     ),
                   ],
@@ -731,10 +1014,30 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 
   _CategoryInfo _categoryInfo(String category) {
     return switch (category) {
-      'weather' => _CategoryInfo('🌦️', '天气提醒', TaLightColors.tertiary, 'assets/images/icon_weather_category.png'),
-      'sleep' => const _CategoryInfo('🌙', '睡觉提醒', Color(0xFF7E57C2), 'assets/images/icon_sleep_category.png'),
-      'meal' => _CategoryInfo('🍚', '吃饭提醒', TaLightColors.secondary, 'assets/images/icon_meal_category.png'),
-      _ => _CategoryInfo('💝', '自定义提醒', TaLightColors.primary, 'assets/images/icon_custom_category.png'),
+      'weather' => _CategoryInfo(
+        '🌦️',
+        '天气提醒',
+        TaLightColors.tertiary,
+        'assets/images/icon_weather_category.png',
+      ),
+      'sleep' => const _CategoryInfo(
+        '🌙',
+        '睡觉提醒',
+        Color(0xFF7E57C2),
+        'assets/images/icon_sleep_category.png',
+      ),
+      'meal' => _CategoryInfo(
+        '🍚',
+        '吃饭提醒',
+        TaLightColors.secondary,
+        'assets/images/icon_meal_category.png',
+      ),
+      _ => _CategoryInfo(
+        '💝',
+        '自定义提醒',
+        TaLightColors.primary,
+        'assets/images/icon_custom_category.png',
+      ),
     };
   }
 
@@ -742,12 +1045,31 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
     final c = config.config;
     if (c.isEmpty) return '已配置';
     return switch (config.category) {
-      'weather' => '触发条件: ${(c['notify_conditions'] as List?)?.length ?? 0} 种天气',
-      'sleep' => '睡觉时间 ${c['target_sleep_time'] ?? c['sleep_time'] ?? '23:00'}',
-      'meal' => '${(c['meals'] as List?)?.length ?? 0} 个餐次提醒',
+      'weather' when c['mode'] == 'weather_change' =>
+        '突变监测 ${c['monitor_start'] ?? '07:00'}–${c['monitor_end'] ?? '23:00'} · ${(c['notify_conditions'] as List?)?.length ?? 0} 类变化',
+      'weather' =>
+        '每天 ${c['digest_time'] ?? '08:00'} · ${config.timezoneMode == 'partner' ? 'Ta当地时间' : '我的时间'}',
+      'sleep' =>
+        '睡觉时间 ${c['target_sleep_time'] ?? c['sleep_time'] ?? '23:00'} · ${_timezoneModeLabel(config)}',
+      'meal' =>
+        '${(c['meals'] as List?)?.length ?? 0} 个餐次提醒 · ${_timezoneModeLabel(config)}',
       _ => c['message']?.toString() ?? '自定义提醒',
     };
   }
+
+  String _timezoneModeLabel(ReminderConfig config) {
+    return config.timezoneMode == 'partner' ? 'Ta当地时间' : '我的时间';
+  }
+}
+
+class _TimedReminderEditResult {
+  const _TimedReminderEditResult({
+    required this.config,
+    required this.timezoneMode,
+  });
+
+  final Map<String, dynamic> config;
+  final String timezoneMode;
 }
 
 class _CategoryInfo {
@@ -791,8 +1113,8 @@ class _CategoryOption extends StatelessWidget {
                   Text(
                     subtitle,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),

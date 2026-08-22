@@ -12,6 +12,8 @@ void main() {
     String id = 'config-1',
     String category = 'sleep',
     Map<String, dynamic>? values,
+    String timezoneMode = 'user',
+    String? timezoneId,
   }) {
     final createdAt = DateTime.utc(2026, 1, 1);
     return ReminderConfig(
@@ -20,6 +22,8 @@ void main() {
       category: category,
       enabled: true,
       config: values ?? const <String, dynamic>{},
+      timezoneMode: timezoneMode,
+      timezoneId: timezoneId,
       createdAt: createdAt,
       updatedAt: createdAt,
     );
@@ -216,6 +220,40 @@ void main() {
     expect(occurrences.first.payload, 'configId:weather');
   });
 
+  test('daily weather digest uses its configured wall-clock time', () {
+    final occurrences = ReminderScheduleCalculator.build(
+      config: config(
+        id: 'weather-digest',
+        category: 'weather',
+        values: const {'mode': 'daily_digest', 'digest_time': '12:30'},
+      ),
+      partnerName: '小Ta',
+      now: now('Asia/Shanghai', 2026, 8, 18, 9),
+    );
+
+    expect(occurrences, hasLength(7));
+    expect(
+      occurrences.every(
+        (item) =>
+            item.scheduledTime.hour == 12 && item.scheduledTime.minute == 30,
+      ),
+      isTrue,
+    );
+  });
+
+  test('weather change monitoring does not create daily notifications', () {
+    final occurrences = ReminderScheduleCalculator.build(
+      config: config(
+        category: 'weather',
+        values: const {'mode': 'weather_change'},
+      ),
+      partnerName: '小Ta',
+      now: now('Asia/Shanghai', 2026, 8, 18, 9),
+    );
+
+    expect(occurrences, isEmpty);
+  });
+
   test('custom config returns no occurrences', () {
     final occurrences = ReminderScheduleCalculator.build(
       config: config(category: 'custom', values: const {'anything': true}),
@@ -295,5 +333,63 @@ void main() {
     );
     expect(occurrences[0].scheduledTime.day, 7);
     expect(occurrences[1].scheduledTime.day, 8);
+  });
+
+  test(
+    'partner-local reminders convert to the device zone across partner DST',
+    () {
+      final occurrences = ReminderScheduleCalculator.build(
+        config: config(
+          id: 'partner-dst',
+          timezoneMode: 'partner',
+          values: const {'target_sleep_time': '08:00', 'advance_minutes': 0},
+        ),
+        partnerName: '小Ta',
+        partnerTimeZoneId: 'America/New_York',
+        now: now('Asia/Shanghai', 2026, 3, 7, 19),
+        occurrenceCount: 3,
+      );
+
+      expect(occurrences, hasLength(3));
+      expect(occurrences.map((item) => item.scheduledTime).toList(), [
+        now('Asia/Shanghai', 2026, 3, 7, 21),
+        now('Asia/Shanghai', 2026, 3, 8, 20),
+        now('Asia/Shanghai', 2026, 3, 9, 20),
+      ]);
+    },
+  );
+
+  test('explicit reminder timezone overrides the partner profile timezone', () {
+    final occurrences = ReminderScheduleCalculator.build(
+      config: config(
+        timezoneMode: 'partner',
+        timezoneId: 'Asia/Tokyo',
+        values: const {'target_sleep_time': '08:00', 'advance_minutes': 0},
+      ),
+      partnerName: '小Ta',
+      partnerTimeZoneId: 'America/New_York',
+      now: now('Asia/Shanghai', 2026, 8, 18, 6),
+      occurrenceCount: 1,
+    );
+
+    expect(
+      occurrences.single.scheduledTime,
+      now('Asia/Shanghai', 2026, 8, 18, 7),
+    );
+  });
+
+  test('invalid target timezone produces no misleading schedule', () {
+    final occurrences = ReminderScheduleCalculator.build(
+      config: config(
+        timezoneMode: 'partner',
+        timezoneId: 'Mars/Olympus_Mons',
+        values: const {'target_sleep_time': '08:00', 'advance_minutes': 0},
+      ),
+      partnerName: '小Ta',
+      partnerTimeZoneId: 'America/New_York',
+      now: now('Asia/Shanghai', 2026, 8, 18, 6),
+    );
+
+    expect(occurrences, isEmpty);
   });
 }

@@ -25,6 +25,20 @@ abstract final class LocalReminderService {
     return rows.map(ReminderConfig.fromMap).toList();
   }
 
+  static Future<List<ReminderConfig>> getConfigsForSubject(
+    String subjectKind,
+    String subjectId,
+  ) async {
+    final db = await DatabaseHelper.database;
+    final rows = await db.query(
+      'reminder_configs',
+      where: 'subject_kind = ? AND subject_id = ?',
+      whereArgs: [subjectKind, subjectId],
+      orderBy: 'created_at ASC',
+    );
+    return rows.map(ReminderConfig.fromMap).toList();
+  }
+
   /// 获取所有提醒配置（包括未启用的），按 partnerId 分组。
   ///
   /// 列表页使用一次查询完成加载，避免按关心的人逐个访问数据库。
@@ -56,12 +70,26 @@ abstract final class LocalReminderService {
     return grouped;
   }
 
+  static Future<List<ReminderConfig>> getAllEnabledConfigList() async {
+    final db = await DatabaseHelper.database;
+    final rows = await db.query(
+      'reminder_configs',
+      where: 'enabled = 1',
+      orderBy: 'created_at ASC',
+    );
+    return rows.map(ReminderConfig.fromMap).toList();
+  }
+
   /// 创建提醒配置
   static Future<ReminderConfig> createConfig({
-    required String partnerId,
+    String partnerId = '',
     required String category,
     Map<String, dynamic>? config,
     bool enabled = true,
+    String timezoneMode = 'user',
+    String? timezoneId,
+    String subjectKind = 'partner',
+    String? subjectId,
   }) async {
     final db = await DatabaseHelper.database;
     final now = DateTime.now();
@@ -71,6 +99,10 @@ abstract final class LocalReminderService {
       category: category,
       enabled: enabled,
       config: config ?? ReminderConfig.defaultConfigFor(category),
+      timezoneMode: timezoneMode,
+      timezoneId: timezoneId,
+      subjectKind: subjectKind,
+      subjectId: subjectId ?? partnerId,
       createdAt: now,
       updatedAt: now,
     );
@@ -83,6 +115,9 @@ abstract final class LocalReminderService {
     String id, {
     bool? enabled,
     Map<String, dynamic>? config,
+    String? timezoneMode,
+    String? timezoneId,
+    bool clearTimezoneId = false,
   }) async {
     final db = await DatabaseHelper.database;
     final data = <String, dynamic>{
@@ -90,6 +125,12 @@ abstract final class LocalReminderService {
     };
     if (enabled != null) data['enabled'] = enabled ? 1 : 0;
     if (config != null) data['config'] = jsonEncode(config);
+    if (timezoneMode != null) data['timezone_mode'] = timezoneMode;
+    if (clearTimezoneId) {
+      data['timezone_id'] = null;
+    } else if (timezoneId != null) {
+      data['timezone_id'] = timezoneId;
+    }
     await db.update('reminder_configs', data, where: 'id = ?', whereArgs: [id]);
   }
 
@@ -107,7 +148,7 @@ abstract final class LocalReminderService {
   /// 如果该 configId 在目标日期已有 scheduled/sent 日志则跳过，避免重复。
   static Future<void> createScheduledLog({
     required String configId,
-    required String partnerId,
+    String? partnerId,
     required String message,
     required DateTime scheduledTime,
   }) async {
@@ -130,7 +171,7 @@ abstract final class LocalReminderService {
     await db.insert('reminder_logs', {
       'id': DatabaseHelper.newId(),
       'config_id': configId,
-      'partner_id': partnerId,
+      'partner_id': partnerId?.isEmpty == true ? null : partnerId,
       'message': message,
       'status': 'scheduled',
       'triggered_at': scheduledTime.toIso8601String(),

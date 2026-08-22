@@ -12,7 +12,7 @@ import '../models/achievement.dart';
 class DatabaseHelper {
   static Database? _database;
   static const _dbName = 'taworld.db';
-  static const _dbVersion = 4;
+  static const _dbVersion = 6;
   static const _uuid = Uuid();
   static DatabaseFactory? _databaseFactoryOverride;
   static String? _databasePathOverride;
@@ -110,6 +110,9 @@ class DatabaseHelper {
         longitude REAL,
         city TEXT,
         district TEXT,
+        timezone_id TEXT,
+        timezone_source TEXT,
+        timezone_confirmed INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -120,10 +123,14 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE reminder_configs (
         id TEXT PRIMARY KEY,
-        partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+        partner_id TEXT REFERENCES partners(id) ON DELETE CASCADE,
+        subject_kind TEXT NOT NULL DEFAULT 'partner',
+        subject_id TEXT NOT NULL DEFAULT '',
         category TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         config TEXT NOT NULL DEFAULT '{}',
+        timezone_mode TEXT NOT NULL DEFAULT 'user',
+        timezone_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -134,7 +141,9 @@ class DatabaseHelper {
       CREATE TABLE reminder_logs (
         id TEXT PRIMARY KEY,
         config_id TEXT NOT NULL REFERENCES reminder_configs(id) ON DELETE CASCADE,
-        partner_id TEXT NOT NULL REFERENCES partners(id),
+        partner_id TEXT REFERENCES partners(id),
+        subject_kind TEXT NOT NULL DEFAULT 'partner',
+        subject_id TEXT NOT NULL DEFAULT '',
         message TEXT,
         status TEXT NOT NULL DEFAULT 'triggered',
         triggered_at TEXT NOT NULL,
@@ -173,9 +182,15 @@ class DatabaseHelper {
         id TEXT PRIMARY KEY,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
+        message_type TEXT NOT NULL DEFAULT 'message',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        hidden_at TEXT,
+        request_id TEXT,
         created_at TEXT NOT NULL
       )
     ''');
+
+    await _createVersionSixTables(db);
 
     // AI 主动消息队列（后台评估后写入，前台打开时消费）
     await db.execute('''
@@ -238,6 +253,10 @@ class DatabaseHelper {
       'CREATE INDEX idx_reminder_configs_partner ON reminder_configs(partner_id)',
     );
     await db.execute(
+      'CREATE INDEX idx_reminder_configs_subject '
+      'ON reminder_configs(subject_kind, subject_id)',
+    );
+    await db.execute(
       'CREATE INDEX idx_reminder_logs_config ON reminder_logs(config_id)',
     );
     await db.execute(
@@ -255,6 +274,15 @@ class DatabaseHelper {
     await db.execute(
       'CREATE INDEX idx_conversation_chunks_date ON conversation_chunks(conversation_date)',
     );
+    await db.execute(
+      'CREATE INDEX idx_chat_history_request ON chat_history(request_id)',
+    );
+
+    await db.insert('schema_migrations', {
+      'version': 6,
+      'name': 'typed_chat_subjects_occurrences_attachments',
+      'applied_at': DateTime.now().toUtc().toIso8601String(),
+    });
 
     // 插入成就种子数据
     await _seedAchievements(db);
@@ -328,6 +356,245 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_conversation_chunks_date ON conversation_chunks(conversation_date)',
       );
     }
+    if (oldVersion < 5) {
+      await _addColumnIfMissing(
+        db,
+        table: 'partners',
+        column: 'timezone_id',
+        definition: 'timezone_id TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'partners',
+        column: 'timezone_source',
+        definition: 'timezone_source TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'partners',
+        column: 'timezone_confirmed',
+        definition: 'timezone_confirmed INTEGER NOT NULL DEFAULT 0',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'reminder_configs',
+        column: 'timezone_mode',
+        definition: "timezone_mode TEXT NOT NULL DEFAULT 'user'",
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'reminder_configs',
+        column: 'timezone_id',
+        definition: 'timezone_id TEXT',
+      );
+    }
+    if (oldVersion < 6) {
+      await _upgradeToVersionSix(db);
+    }
+  }
+
+  static Future<void> _upgradeToVersionSix(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      table: 'chat_history',
+      column: 'message_type',
+      definition: "message_type TEXT NOT NULL DEFAULT 'message'",
+    );
+    await _addColumnIfMissing(
+      db,
+      table: 'chat_history',
+      column: 'metadata_json',
+      definition: "metadata_json TEXT NOT NULL DEFAULT '{}'",
+    );
+    await _addColumnIfMissing(
+      db,
+      table: 'chat_history',
+      column: 'hidden_at',
+      definition: 'hidden_at TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      table: 'chat_history',
+      column: 'request_id',
+      definition: 'request_id TEXT',
+    );
+
+    final oldConfigs = await _readTableIfPresent(db, 'reminder_configs');
+    final oldLogs = await _readTableIfPresent(db, 'reminder_logs');
+    if (await _tableExists(db, 'reminder_logs')) {
+      await db.execute('DROP TABLE reminder_logs');
+    }
+    if (await _tableExists(db, 'reminder_configs')) {
+      await db.execute('DROP TABLE reminder_configs');
+    }
+    await _createReminderTablesV6(db);
+
+    for (final row in oldConfigs) {
+      final partnerId = row['partner_id'] as String?;
+      await db.insert('reminder_configs', {
+        ...row,
+        'partner_id': partnerId,
+        'subject_kind': row['subject_kind'] ?? 'partner',
+        'subject_id': row['subject_id'] ?? partnerId ?? '',
+      });
+    }
+    for (final row in oldLogs) {
+      final partnerId = row['partner_id'] as String?;
+      await db.insert('reminder_logs', {
+        ...row,
+        'partner_id': partnerId,
+        'subject_kind': row['subject_kind'] ?? 'partner',
+        'subject_id': row['subject_id'] ?? partnerId ?? '',
+      });
+    }
+
+    await _createVersionSixTables(db);
+    if (await _tableExists(db, 'chat_history')) {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_chat_history_request '
+        'ON chat_history(request_id)',
+      );
+    }
+    await db.insert('schema_migrations', {
+      'version': 6,
+      'name': 'typed_chat_subjects_occurrences_attachments',
+      'applied_at': DateTime.now().toUtc().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  static Future<void> _createReminderTablesV6(Database db) async {
+    await db.execute('''
+      CREATE TABLE reminder_configs (
+        id TEXT PRIMARY KEY,
+        partner_id TEXT REFERENCES partners(id) ON DELETE CASCADE,
+        subject_kind TEXT NOT NULL DEFAULT 'partner',
+        subject_id TEXT NOT NULL DEFAULT '',
+        category TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        config TEXT NOT NULL DEFAULT '{}',
+        timezone_mode TEXT NOT NULL DEFAULT 'user',
+        timezone_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE reminder_logs (
+        id TEXT PRIMARY KEY,
+        config_id TEXT NOT NULL REFERENCES reminder_configs(id) ON DELETE CASCADE,
+        partner_id TEXT REFERENCES partners(id),
+        subject_kind TEXT NOT NULL DEFAULT 'partner',
+        subject_id TEXT NOT NULL DEFAULT '',
+        message TEXT,
+        status TEXT NOT NULL DEFAULT 'triggered',
+        triggered_at TEXT NOT NULL,
+        sent_at TEXT,
+        confirmed_at TEXT
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX idx_reminder_configs_partner ON reminder_configs(partner_id)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_reminder_configs_subject '
+      'ON reminder_configs(subject_kind, subject_id)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_reminder_logs_config ON reminder_logs(config_id)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_reminder_logs_partner ON reminder_logs(partner_id)',
+    );
+  }
+
+  static Future<void> _createVersionSixTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS reminder_occurrences (
+        id TEXT PRIMARY KEY,
+        config_id TEXT NOT NULL REFERENCES reminder_configs(id) ON DELETE CASCADE,
+        subject_kind TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'scheduled',
+        scheduled_for TEXT NOT NULL,
+        message TEXT,
+        delivered_at TEXT,
+        responded_at TEXT,
+        snoozed_until TEXT,
+        response TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS chat_attachments (
+        id TEXT PRIMARY KEY,
+        chat_message_id TEXT REFERENCES chat_history(id) ON DELETE CASCADE,
+        local_path TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        width INTEGER,
+        height INTEGER,
+        model_summary TEXT,
+        extracted_facts_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'local',
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_reminder_occurrences_config '
+      'ON reminder_occurrences(config_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_reminder_occurrences_status '
+      'ON reminder_occurrences(status, scheduled_for)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_chat_attachments_message '
+      'ON chat_attachments(chat_message_id)',
+    );
+  }
+
+  static Future<List<Map<String, Object?>>> _readTableIfPresent(
+    Database db,
+    String table,
+  ) async {
+    if (!await _tableExists(db, table)) return const [];
+    return db.query(table);
+  }
+
+  static Future<bool> _tableExists(Database db, String table) async {
+    final rows = await db.rawQuery(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+      [table],
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// Historical and imported backups may omit optional tables. Migrations must
+  /// never make a recoverable backup impossible to reopen merely because an
+  /// `ALTER TABLE` target is absent, and repeated migrations must be idempotent.
+  static Future<void> _addColumnIfMissing(
+    Database db, {
+    required String table,
+    required String column,
+    required String definition,
+  }) async {
+    final tables = await db.rawQuery(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+      [table],
+    );
+    if (tables.isEmpty) return;
+
+    final columns = await db.rawQuery('PRAGMA table_info($table)');
+    if (columns.any((row) => row['name'] == column)) return;
+    await db.execute('ALTER TABLE $table ADD COLUMN $definition');
   }
 
   static Future<void> _seedAchievements(Database db) async {

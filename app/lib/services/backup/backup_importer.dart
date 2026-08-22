@@ -14,6 +14,7 @@ abstract final class BackupImportStages {
   static const validated = 'validated';
   static const databaseReplaced = 'databaseReplaced';
   static const databaseReopened = 'databaseReopened';
+  static const attachmentsRestored = 'attachmentsRestored';
   static const preferenceApplied = 'preferenceApplied';
   static const preferencesApplied = 'preferencesApplied';
 }
@@ -25,6 +26,7 @@ class BackupImportDependencies {
   final DatabaseFactory databaseFactory;
   final Future<void> Function() closeDatabase;
   final Future<Database> Function() reopenDatabase;
+  final Directory? attachmentsDirectory;
   final Future<void> Function(String stage)? afterStage;
 
   const BackupImportDependencies({
@@ -34,6 +36,7 @@ class BackupImportDependencies {
     required this.databaseFactory,
     required this.closeDatabase,
     required this.reopenDatabase,
+    this.attachmentsDirectory,
     this.afterStage,
   });
 }
@@ -95,6 +98,8 @@ class BackupImporter {
     var originalDatabaseExisted = false;
     Map<String, _PreferenceSnapshot>? preferenceSnapshot;
     Object? apiKeyBefore;
+    final createdAttachmentFiles = <File>[];
+    var importSucceeded = false;
 
     try {
       await dependencies.temporaryRoot.create(recursive: true);
@@ -140,6 +145,16 @@ class BackupImporter {
       await _validateReopenedDatabase(reopened);
       await dependencies.afterStage?.call(BackupImportStages.databaseReopened);
 
+      await _restoreAttachments(
+        validated.attachments,
+        reopened,
+        dependencies.attachmentsDirectory,
+        createdAttachmentFiles,
+      );
+      await dependencies.afterStage?.call(
+        BackupImportStages.attachmentsRestored,
+      );
+
       await _applyPreferences(
         validated.preferences,
         dependencies.preferences,
@@ -152,6 +167,7 @@ class BackupImporter {
       await dependencies.afterStage?.call(
         BackupImportStages.preferencesApplied,
       );
+      importSucceeded = true;
     } catch (error, stackTrace) {
       if (!databaseClosed) rethrow;
       final rollback = mutationStarted
@@ -170,9 +186,80 @@ class BackupImporter {
         rollbackStackTrace: rollback.stackTrace,
       );
     } finally {
+      if (!importSucceeded) {
+        await _bestEffortDeleteFiles(createdAttachmentFiles);
+      }
       await _bestEffortDeleteFile(incomingFile);
       await _bestEffortDeleteDirectory(stagingDirectory);
     }
+  }
+
+  static Future<void> _restoreAttachments(
+    Map<String, Uint8List> attachments,
+    Database database,
+    Directory? targetDirectory,
+    List<File> createdFiles,
+  ) async {
+    if (attachments.isEmpty) return;
+    if (targetDirectory == null) {
+      throw StateError('Attachment restore directory is unavailable');
+    }
+    await targetDirectory.create(recursive: true);
+    final restoredPaths = <String, String>{};
+    var collisionSequence = 0;
+
+    for (final entry in attachments.entries) {
+      var target = File(
+        '${targetDirectory.path}${Platform.pathSeparator}${entry.key}',
+      );
+      if (await target.exists()) {
+        final existing = await target.readAsBytes();
+        if (_bytesEqual(existing, entry.value)) {
+          restoredPaths[entry.key] = target.path;
+          continue;
+        }
+        collisionSequence++;
+        target = File(
+          '${targetDirectory.path}${Platform.pathSeparator}'
+          'import_${DateTime.now().microsecondsSinceEpoch}_$collisionSequence'
+          '_${entry.key}',
+        );
+      }
+
+      final incoming = File('${target.path}.incoming');
+      await incoming.writeAsBytes(entry.value, flush: true);
+      await incoming.rename(target.path);
+      createdFiles.add(target);
+      restoredPaths[entry.key] = target.path;
+    }
+
+    final rows = await database.query(
+      'chat_attachments',
+      columns: const ['id', 'local_path'],
+    );
+    await database.transaction((txn) async {
+      for (final row in rows) {
+        final path = row['local_path'] as String?;
+        if (path == null || path.isEmpty) continue;
+        final fileName = path.split(RegExp(r'[\\/]')).last;
+        final restored = restoredPaths[fileName];
+        if (restored == null) continue;
+        await txn.update(
+          'chat_attachments',
+          {'local_path': restored, 'status': 'local'},
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+      }
+    });
+  }
+
+  static bool _bytesEqual(List<int> first, List<int> second) {
+    if (first.length != second.length) return false;
+    for (var index = 0; index < first.length; index++) {
+      if (first[index] != second[index]) return false;
+    }
+    return true;
   }
 
   static Future<void> _validateStagedDatabase(
@@ -379,5 +466,11 @@ class BackupImporter {
     try {
       if (await directory.exists()) await directory.delete(recursive: true);
     } catch (_) {}
+  }
+
+  static Future<void> _bestEffortDeleteFiles(Iterable<File> files) async {
+    for (final file in files) {
+      await _bestEffortDeleteFile(file);
+    }
   }
 }

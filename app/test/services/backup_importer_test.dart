@@ -16,6 +16,7 @@ void main() {
   late Directory root;
   late Directory temporaryRoot;
   late String livePath;
+  late Directory attachmentsDirectory;
   late SharedPreferences preferences;
   late int closeCalls;
   late int reopenCalls;
@@ -24,6 +25,7 @@ void main() {
     root = await Directory.systemTemp.createTemp('taworld_importer_test_');
     temporaryRoot = await Directory(p.join(root.path, 'temporary')).create();
     livePath = p.join(root.path, 'live.db');
+    attachmentsDirectory = Directory(p.join(root.path, 'chat_images'));
     SharedPreferences.setMockInitialValues({
       'theme_mode': 'dark',
       'palette_id': 'old',
@@ -76,6 +78,7 @@ void main() {
         await DatabaseHelper.forceReopen();
         return DatabaseHelper.database;
       },
+      attachmentsDirectory: attachmentsDirectory,
       afterStage: afterStage,
     );
   }
@@ -109,7 +112,7 @@ void main() {
       expect(await _userIds(db), ['new-user']);
       expect(
         (await db.rawQuery('PRAGMA user_version')).single.values.single,
-        4,
+        DatabaseHelper.schemaVersion,
       );
       expect(preferences.getString('theme_mode'), 'light');
       expect(preferences.getString('palette_id'), 'new');
@@ -122,6 +125,69 @@ void main() {
       expect(preferences.getInt('cache_miss_tokens'), 0);
       expect(await File('$livePath.pre_import_backup').exists(), isTrue);
       await expectNoTransientArtifacts();
+    },
+  );
+
+  test(
+    'valid import restores image bytes and rewrites portable paths',
+    () async {
+      const attachmentName = '0d90d534-4524-4d88-b11b-fb25cb72cc4d.png';
+      final archive = await _backupBytes(
+        root,
+        userId: 'new-user',
+        attachmentName: attachmentName,
+        attachmentBytes: const [0x89, 0x50, 0x4e, 0x47, 1, 2, 3],
+      );
+
+      await const BackupImporter().importBytes(archive, dependencies());
+
+      final db = await DatabaseHelper.database;
+      final row = (await db.query('chat_attachments')).single;
+      final restoredPath = row['local_path']! as String;
+      expect(p.dirname(restoredPath), attachmentsDirectory.path);
+      expect(await File(restoredPath).readAsBytes(), [
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        1,
+        2,
+        3,
+      ]);
+      expect(row['status'], 'local');
+    },
+  );
+
+  test(
+    'attachment restore failure removes new files and restores database',
+    () async {
+      const attachmentName = '0d90d534-4524-4d88-b11b-fb25cb72cc4d.png';
+      final archive = await _backupBytes(
+        root,
+        userId: 'new-user',
+        attachmentName: attachmentName,
+        attachmentBytes: const [0x89, 0x50, 0x4e, 0x47],
+      );
+
+      await expectLater(
+        const BackupImporter().importBytes(
+          archive,
+          dependencies(
+            afterStage: (stage) async {
+              if (stage == BackupImportStages.attachmentsRestored) {
+                throw StateError('injected attachment failure');
+              }
+            },
+          ),
+        ),
+        throwsA(isA<BackupImportException>()),
+      );
+
+      expect(await _userIds(await DatabaseHelper.database), ['old-user']);
+      expect(
+        await File(p.join(attachmentsDirectory.path, attachmentName)).exists(),
+        isFalse,
+      );
     },
   );
 
@@ -277,6 +343,8 @@ Future<Uint8List> _backupBytes(
   Directory root, {
   required String userId,
   Map<String, Object?> preferences = const {},
+  String? attachmentName,
+  List<int> attachmentBytes = const [],
 }) async {
   final path = p.join(
     root.path,
@@ -289,19 +357,55 @@ Future<Uint8List> _backupBytes(
       singleInstance: false,
       onCreate: (db, _) async {
         await db.execute('CREATE TABLE users (id TEXT PRIMARY KEY)');
+        if (attachmentName != null) {
+          await db.execute('''
+            CREATE TABLE chat_attachments (
+              id TEXT PRIMARY KEY,
+              chat_message_id TEXT,
+              local_path TEXT NOT NULL,
+              mime_type TEXT NOT NULL,
+              sha256 TEXT NOT NULL,
+              width INTEGER,
+              height INTEGER,
+              model_summary TEXT,
+              extracted_facts_json TEXT NOT NULL DEFAULT '[]',
+              status TEXT NOT NULL DEFAULT 'local',
+              created_at TEXT NOT NULL
+            )
+          ''');
+        }
       },
     ),
   );
   await db.insert('users', {'id': userId});
+  if (attachmentName != null) {
+    await db.insert('chat_attachments', {
+      'id': 'attachment-1',
+      'chat_message_id': null,
+      'local_path': 'C:/old-device/chat_images/$attachmentName',
+      'mime_type': 'image/png',
+      'sha256': 'fixture',
+      'extracted_facts_json': '[]',
+      'status': 'local',
+      'created_at': '2026-08-22T12:00:00.000',
+    });
+  }
   await db.close();
   final bytes = await File(path).readAsBytes();
   await File(path).delete();
-  return _encodeBackup(bytes, preferences: preferences);
+  return _encodeBackup(
+    bytes,
+    preferences: preferences,
+    attachments: attachmentName == null
+        ? const {}
+        : {'attachments/$attachmentName': attachmentBytes},
+  );
 }
 
 Uint8List _encodeBackup(
   Uint8List databaseBytes, {
   Map<String, Object?> preferences = const {},
+  Map<String, List<int>> attachments = const {},
 }) {
   final manifest = utf8.encode(
     jsonEncode({
@@ -317,6 +421,11 @@ Uint8List _encodeBackup(
     ..addFile(ArchiveFile('manifest.json', manifest.length, manifest))
     ..addFile(ArchiveFile('database.db', databaseBytes.length, databaseBytes))
     ..addFile(ArchiveFile('preferences.json', prefs.length, prefs));
+  for (final attachment in attachments.entries) {
+    archive.addFile(
+      ArchiveFile(attachment.key, attachment.value.length, attachment.value),
+    );
+  }
   return Uint8List.fromList(ZipEncoder().encode(archive));
 }
 

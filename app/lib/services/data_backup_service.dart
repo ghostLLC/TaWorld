@@ -14,6 +14,7 @@ import 'package:file_saver/file_saver.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
@@ -25,7 +26,7 @@ import 'backup/backup_importer.dart';
 /// 数据备份与恢复
 abstract final class DataBackupService {
   /// 当前 APP 版本（与 pubspec.yaml 一致）
-  static const _appVersion = '0.1.0';
+  static const _appVersion = '0.1.1';
 
   /// 需要导出的 SharedPreferences key 列表
   static const _exportPrefKeys = BackupImporter.restorePreferenceKeys;
@@ -42,6 +43,11 @@ abstract final class DataBackupService {
 
     // 2. 在数据库打开状态下构建 manifest（需要查询表行数）
     final manifest = await _buildManifest();
+    final db = await DatabaseHelper.database;
+    final attachmentRows = await db.query(
+      'chat_attachments',
+      columns: const ['local_path'],
+    );
 
     // 3. 收集 SharedPreferences 配置
     final prefs = await SharedPreferences.getInstance();
@@ -77,7 +83,49 @@ abstract final class DataBackupService {
         ArchiveFile('preferences.json', prefBytes.length, prefBytes),
       );
 
+      final archivedAttachmentNames = <String>{};
+      var attachmentCount = 0;
+      var attachmentBytes = 0;
+      final safeAttachmentName = RegExp(
+        r'^[A-Za-z0-9_-]{1,120}\.(?:jpe?g|png|gif|webp)$',
+        caseSensitive: false,
+      );
+      for (final row in attachmentRows) {
+        final path = row['local_path'] as String?;
+        if (path == null || path.isEmpty) continue;
+        final file = File(path);
+        if (!await file.exists()) continue;
+        final fileName = p.basename(path);
+        if (!safeAttachmentName.hasMatch(fileName) ||
+            !archivedAttachmentNames.add(fileName)) {
+          continue;
+        }
+        final bytes = await file.readAsBytes();
+        if (bytes.isEmpty ||
+            bytes.length > BackupArchiveCodec.maxAttachmentBytes) {
+          continue;
+        }
+        archive.addFile(
+          ArchiveFile('attachments/$fileName', bytes.length, bytes),
+        );
+        attachmentCount++;
+        attachmentBytes += bytes.length;
+      }
+      manifest['attachment_count'] = attachmentCount;
+      manifest['attachment_bytes'] = attachmentBytes;
+
+      // Rebuild the manifest after the validated attachment set is known.
+      final finalManifestBytes = utf8.encode(jsonEncode(manifest));
+      archive[0] = ArchiveFile(
+        'manifest.json',
+        finalManifestBytes.length,
+        finalManifestBytes,
+      );
+
       final zipBytes = ZipEncoder().encode(archive);
+      if (zipBytes.length > BackupArchiveCodec.maxArchiveBytes) {
+        throw Exception('备份内容超过 128 MiB，请先清理不再需要的图片');
+      }
       final timestamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final fileName = 'taworld_backup_$timestamp';
       final savedPath = await FileSaver.instance.saveFile(
@@ -136,6 +184,7 @@ abstract final class DataBackupService {
     final databasePath = await DatabaseHelper.getDatabasePath();
     final temporaryRoot = await getTemporaryDirectory();
     final preferences = await SharedPreferences.getInstance();
+    final documents = await getApplicationDocumentsDirectory();
     await const BackupImporter().importBytes(
       await file.readAsBytes(),
       BackupImportDependencies(
@@ -148,6 +197,7 @@ abstract final class DataBackupService {
           await DatabaseHelper.forceReopen();
           return DatabaseHelper.database;
         },
+        attachmentsDirectory: Directory(p.join(documents.path, 'chat_images')),
       ),
     );
   }
@@ -177,6 +227,9 @@ abstract final class DataBackupService {
       'ai_wiki_facts',
       'ai_conversation_summaries',
       'conversation_chunks',
+      'reminder_occurrences',
+      'chat_attachments',
+      'schema_migrations',
     ];
 
     final rowCounts = <String, int>{};

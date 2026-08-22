@@ -66,4 +66,23 @@ void main() {
       );
     },
   );
+
+  test('choice marker segment stays inside the preceding question bubble', () {
+    expect(
+      splitAssistantPresentationSegments(
+        '好嘞|||Ta和你的关系是？|||[选项:家人|朋友|伴侣|同事]',
+      ),
+      <String>[
+        '好嘞',
+        'Ta和你的关系是？\n[选项:家人|朋友|伴侣|同事]',
+      ],
+    );
+  });
+
+  test('a marker without a question never creates a blank bubble', () {
+    expect(
+      splitAssistantPresentationSegments('[选项:每天固定时间|天气突变|都要]'),
+      <String>['[选项:每天固定时间|天气突变|都要]'],
+    );
+  });
 }

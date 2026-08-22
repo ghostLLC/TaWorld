@@ -13,6 +13,7 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../widgets/widgets.dart';
 import '../ai_home/ai_home_screen.dart';
+import 'care_graph_view.dart';
 import '../../../services/local/local_user_service.dart';
 import '../../../services/local/partner_service.dart';
 import '../../../services/local/local_reminder_service.dart';
@@ -53,6 +54,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   late final PageController _pageController;
+  late final ValueNotifier<AiChatLaunchRequest?> _aiDraftNotifier;
   late final Future<_PartnersLocalSnapshot> _partnersPreload;
   late final List<Widget> _tabs;
 
@@ -60,17 +62,32 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: 0);
+    _aiDraftNotifier = ValueNotifier<AiChatLaunchRequest?>(null);
     _partnersPreload = _loadPartnersLocalSnapshot();
     _tabs = [
-      const AiHomeScreen(),
-      _PartnersTab(initialLoad: _partnersPreload),
+      AiHomeScreen(draftNotifier: _aiDraftNotifier),
+      _PartnersTab(
+        initialLoad: _partnersPreload,
+        onChatPartner: _openPartnerChat,
+      ),
       const _ProfileTab(),
     ];
+  }
+
+  void _openPartnerChat(Partner partner) {
+    _aiDraftNotifier.value = AiChatLaunchRequest(partnerName: partner.nickname);
+    setState(() => _currentIndex = 0);
+    _pageController.animateToPage(
+      0,
+      duration: TaAnimation.normal,
+      curve: TaAnimation.curve,
+    );
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    _aiDraftNotifier.dispose();
     super.dispose();
   }
 
@@ -83,6 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: _tabs,
       ),
       bottomNavigationBar: NavigationBar(
+        height: 68,
         selectedIndex: _currentIndex,
         onDestinationSelected: (i) {
           setState(() => _currentIndex = i);
@@ -138,10 +156,13 @@ class _HomeScreenState extends State<HomeScreen> {
 // Tab 2: 关心的人（合并原"关心的人" + "提醒"）
 // ============================================================
 
+enum _PartnersViewMode { list, graph }
+
 class _PartnersTab extends StatefulWidget {
-  const _PartnersTab({required this.initialLoad});
+  const _PartnersTab({required this.initialLoad, required this.onChatPartner});
 
   final Future<_PartnersLocalSnapshot> initialLoad;
+  final ValueChanged<Partner> onChatPartner;
 
   @override
   State<_PartnersTab> createState() => _PartnersTabState();
@@ -158,6 +179,7 @@ class _PartnersTabState extends State<_PartnersTab>
   final Map<String, FullWeatherResult?> _weatherByPartner = {};
   final Set<String> _expandedIds = {};
   final Set<String> _weatherLoadingIds = {};
+  _PartnersViewMode _viewMode = _PartnersViewMode.list;
   int _loadGeneration = 0;
 
   @override
@@ -308,86 +330,143 @@ class _PartnersTabState extends State<_PartnersTab>
     }
 
     return SafeArea(
-      child: RefreshIndicator(
-        onRefresh: () =>
-            _loadAll(refreshWeather: true, forceWeatherRefresh: true),
-        child: ListView.builder(
-          padding: TaSpacing.page,
-          itemCount: _partners.length + 1,
-          itemBuilder: (context, index) {
-            // 添加按钮放在列表底部，不抢注意力
-            if (index == _partners.length) {
-              return Padding(
-                padding: const EdgeInsets.only(top: TaSpacing.sm),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _addPartner,
-                    icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('添加关心的人'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: theme.colorScheme.onSurfaceVariant,
-                      side: BorderSide(color: theme.colorScheme.outlineVariant),
-                      padding: const EdgeInsets.symmetric(
-                        vertical: TaSpacing.sm,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              TaSpacing.pagePadding,
+              TaSpacing.sm,
+              TaSpacing.pagePadding,
+              TaSpacing.xs,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('关心的人', style: theme.textTheme.headlineSmall),
+                      const SizedBox(height: TaSpacing.xxs),
+                      Text(
+                        '看见彼此，也记得每一份牵挂',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
-              );
-            }
-
-            final partner = _partners[index];
-            final isExpanded = _expandedIds.contains(partner.id);
-            final configs = _configsByPartner[partner.id] ?? [];
-            final weather = _weatherByPartner[partner.id];
-            final weatherLoading = _weatherLoadingIds.contains(partner.id);
-            final days = PartnerService.daysSince(partner.createdAt);
-
-            return Padding(
-                  padding: const EdgeInsets.only(bottom: TaSpacing.sm),
-                  child: _PartnerCard(
-                    partner: partner,
-                    days: days,
-                    weather: weather,
-                    weatherLoading: weatherLoading,
-                    configs: configs,
-                    isExpanded: isExpanded,
-                    onToggleExpand: () => _toggleExpand(partner.id),
-                    onToggleConfig: _toggleConfig,
-                    onPartnerTap: () async {
-                      final result = await context.push<bool>(
-                        Routes.partnerDetail.replaceAll(':id', partner.id),
-                      );
-                      if (result == true) _loadAll();
-                    },
-                    onConfigTap: (config) => context.push(
-                      Routes.reminderHistory.replaceAll(':id', config.id),
-                    ),
-                    onAddReminder: () => context.push(
+                IconButton.filledTonal(
+                  tooltip: '添加关心的人',
+                  onPressed: _addPartner,
+                  icon: const Icon(Icons.person_add_alt_1_rounded),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: TaSpacing.pagePadding,
+              vertical: TaSpacing.xs,
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<_PartnersViewMode>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(
+                    value: _PartnersViewMode.list,
+                    icon: Icon(Icons.view_agenda_outlined),
+                    label: Text('列表'),
+                  ),
+                  ButtonSegment(
+                    value: _PartnersViewMode.graph,
+                    icon: Icon(Icons.hub_outlined),
+                    label: Text('图谱'),
+                  ),
+                ],
+                selected: {_viewMode},
+                onSelectionChanged: (selection) {
+                  setState(() => _viewMode = selection.first);
+                },
+              ),
+            ),
+          ),
+          Expanded(
+            child: _viewMode == _PartnersViewMode.graph
+                ? CareGraphView(
+                    partners: _partners,
+                    weatherByPartner: _weatherByPartner,
+                    weatherLoadingIds: _weatherLoadingIds,
+                    configsByPartner: _configsByPartner,
+                    onChatPartner: widget.onChatPartner,
+                    onAddReminder: (partner) => context.push(
                       Routes.reminderConfig.replaceAll(
                         ':partnerId',
                         partner.id,
                       ),
                     ),
-                    onEdit: () async {
-                      final result = await context.push<bool>(
-                        Routes.partnerDetail.replaceAll(':id', partner.id),
-                      );
-                      if (result == true) _loadAll();
-                    },
-                  ),
-                )
-                .animate()
-                .fadeIn(
-                  delay: Duration(milliseconds: 100 * index),
-                  duration: TaAnimation.normal,
-                )
-                .slideX(begin: 0.05, end: 0);
-          },
-        ),
+                    onOpenProfile: _openPartnerProfile,
+                  )
+                : _buildPartnerList(theme),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildPartnerList(ThemeData theme) {
+    return RefreshIndicator(
+      onRefresh: () =>
+          _loadAll(refreshWeather: true, forceWeatherRefresh: true),
+      child: ListView.builder(
+        padding: TaSpacing.page,
+        itemCount: _partners.length,
+        itemBuilder: (context, index) {
+          final partner = _partners[index];
+          final isExpanded = _expandedIds.contains(partner.id);
+          final configs = _configsByPartner[partner.id] ?? [];
+          final weather = _weatherByPartner[partner.id];
+          final weatherLoading = _weatherLoadingIds.contains(partner.id);
+          final days = PartnerService.daysSince(partner.createdAt);
+
+          return Padding(
+                padding: const EdgeInsets.only(bottom: TaSpacing.sm),
+                child: _PartnerCard(
+                  partner: partner,
+                  days: days,
+                  weather: weather,
+                  weatherLoading: weatherLoading,
+                  configs: configs,
+                  isExpanded: isExpanded,
+                  onToggleExpand: () => _toggleExpand(partner.id),
+                  onToggleConfig: _toggleConfig,
+                  onPartnerTap: () => _openPartnerProfile(partner),
+                  onConfigTap: (config) => context.push(
+                    Routes.reminderHistory.replaceAll(':id', config.id),
+                  ),
+                  onAddReminder: () => context.push(
+                    Routes.reminderConfig.replaceAll(':partnerId', partner.id),
+                  ),
+                  onEdit: () => _openPartnerProfile(partner),
+                ),
+              )
+              .animate()
+              .fadeIn(
+                delay: Duration(milliseconds: 100 * index),
+                duration: TaAnimation.normal,
+              )
+              .slideX(begin: 0.05, end: 0);
+        },
+      ),
+    );
+  }
+
+  Future<void> _openPartnerProfile(Partner partner) async {
+    final result = await context.push<bool>(
+      Routes.partnerDetail.replaceAll(':id', partner.id),
+    );
+    if (result == true) _loadAll();
   }
 }
 

@@ -215,12 +215,14 @@ class WeatherCheckResult {
 
 /// 逐时预报项
 class HourlyForecast {
+  final String date; // yyyy-MM-dd in the forecast location
   final int hour; // 0-23
   final String text; // 天气描述（中文）
   final int temp; // 温度（°C）
   final int chanceOfRain; // 降水概率（%）
   final double precipMM; // 降水量（mm）
   const HourlyForecast({
+    required this.date,
     required this.hour,
     required this.text,
     required this.temp,
@@ -246,8 +248,15 @@ class DailyForecast {
 /// 完整天气查询结果（当前 + 预报）
 class FullWeatherResult {
   final WeatherResult current;
+
+  /// IANA timezone used by the provider for local forecast wall-clock values.
+  final String sourceTimezoneId;
   final List<DailyForecast> forecast; // 最多 3 天
-  const FullWeatherResult({required this.current, required this.forecast});
+  const FullWeatherResult({
+    required this.current,
+    required this.sourceTimezoneId,
+    required this.forecast,
+  });
 }
 
 // ==================== 天气服务 ====================
@@ -260,6 +269,101 @@ abstract final class WeatherService {
 
   /// 最后一次查询失败的原因（中文，可直接展示给用户）
   static String? lastError;
+
+  /// Parses Open-Meteo data while preserving the timezone in which its
+  /// timezone-less hourly strings must be interpreted.
+  static FullWeatherResult parseOpenMeteoResponse(Map<String, dynamic> data) {
+    final sourceTimezoneId = data['timezone'];
+    if (sourceTimezoneId is! String || sourceTimezoneId.trim().isEmpty) {
+      throw const FormatException('天气数据缺少来源时区');
+    }
+
+    final current = data['current'] as Map<String, dynamic>?;
+    if (current == null) throw const FormatException('天气数据格式异常');
+
+    final weatherCode = current['weather_code'] as int? ?? 0;
+    final currentWeather = WeatherResult(
+      text: _wmoToChinese(weatherCode),
+      temp: (current['temperature_2m'] as num?)?.round() ?? 0,
+      humidity: (current['relative_humidity_2m'] as num?)?.round(),
+      windDir: _windDegToChinese(
+        (current['wind_direction_10m'] as num?)?.toDouble() ?? 0,
+      ),
+    );
+
+    final daily = data['daily'] as Map<String, dynamic>?;
+    final hourly = data['hourly'] as Map<String, dynamic>?;
+    final forecast = <DailyForecast>[];
+
+    if (daily != null) {
+      final dates = (daily['time'] as List?)?.cast<String>() ?? [];
+      final maxTemps =
+          (daily['temperature_2m_max'] as List?)?.cast<num>() ?? [];
+      final minTemps =
+          (daily['temperature_2m_min'] as List?)?.cast<num>() ?? [];
+      final hourlyTimes = (hourly?['time'] as List?)?.cast<String>() ?? [];
+      final hourlyTemps =
+          (hourly?['temperature_2m'] as List?)?.cast<num>() ?? [];
+      final hourlyCodes = (hourly?['weather_code'] as List?)?.cast<int>() ?? [];
+      final hourlyPrecipProb =
+          (hourly?['precipitation_probability'] as List?)?.cast<num>() ?? [];
+      final hourlyPrecip =
+          (hourly?['precipitation'] as List?)?.cast<num>() ?? [];
+
+      for (var dayIndex = 0; dayIndex < dates.length; dayIndex++) {
+        final datePrefix = dates[dayIndex];
+        final hourlyForecasts = <HourlyForecast>[];
+
+        for (var hourIndex = 0; hourIndex < hourlyTimes.length; hourIndex++) {
+          final timestamp = hourlyTimes[hourIndex];
+          if (!timestamp.startsWith(datePrefix) || timestamp.length < 13) {
+            continue;
+          }
+          final hour = int.tryParse(timestamp.substring(11, 13));
+          if (hour == null || hour < 0 || hour > 23) continue;
+          hourlyForecasts.add(
+            HourlyForecast(
+              date: datePrefix,
+              hour: hour,
+              text: _wmoToChinese(
+                hourIndex < hourlyCodes.length ? hourlyCodes[hourIndex] : 0,
+              ),
+              temp:
+                  (hourIndex < hourlyTemps.length ? hourlyTemps[hourIndex] : 0)
+                      .round(),
+              chanceOfRain:
+                  (hourIndex < hourlyPrecipProb.length
+                          ? hourlyPrecipProb[hourIndex]
+                          : 0)
+                      .round(),
+              precipMM:
+                  (hourIndex < hourlyPrecip.length
+                          ? hourlyPrecip[hourIndex]
+                          : 0)
+                      .toDouble(),
+            ),
+          );
+        }
+
+        forecast.add(
+          DailyForecast(
+            date: datePrefix,
+            maxTemp: (dayIndex < maxTemps.length ? maxTemps[dayIndex] : 0)
+                .round(),
+            minTemp: (dayIndex < minTemps.length ? minTemps[dayIndex] : 0)
+                .round(),
+            hourly: hourlyForecasts,
+          ),
+        );
+      }
+    }
+
+    return FullWeatherResult(
+      current: currentWeather,
+      sourceTimezoneId: sourceTimezoneId.trim(),
+      forecast: forecast,
+    );
+  }
 
   // ==================== 天气查询 ====================
 
@@ -391,80 +495,11 @@ abstract final class WeatherService {
         return null;
       }
 
-      // ---------- 当前天气 ----------
-      final current = data['current'] as Map<String, dynamic>?;
-      if (current == null) {
+      if (data is! Map) {
         lastError = '天气数据格式异常';
         return null;
       }
-
-      final weatherCode = current['weather_code'] as int? ?? 0;
-      final currentWeather = WeatherResult(
-        text: _wmoToChinese(weatherCode),
-        temp: (current['temperature_2m'] as num?)?.round() ?? 0,
-        humidity: (current['relative_humidity_2m'] as num?)?.round(),
-        windDir: _windDegToChinese(
-          (current['wind_direction_10m'] as num?)?.toDouble() ?? 0,
-        ),
-      );
-
-      // ---------- 逐日预报 ----------
-      final daily = data['daily'] as Map<String, dynamic>?;
-      final hourly = data['hourly'] as Map<String, dynamic>?;
-      final forecast = <DailyForecast>[];
-
-      if (daily != null) {
-        final dates = (daily['time'] as List?)?.cast<String>() ?? [];
-        final maxTemps =
-            (daily['temperature_2m_max'] as List?)?.cast<num>() ?? [];
-        final minTemps =
-            (daily['temperature_2m_min'] as List?)?.cast<num>() ?? [];
-        // 预读逐时数据，按日分组
-        final hourlyTimes = (hourly?['time'] as List?)?.cast<String>() ?? [];
-        final hourlyTemps =
-            (hourly?['temperature_2m'] as List?)?.cast<num>() ?? [];
-        final hourlyCodes =
-            (hourly?['weather_code'] as List?)?.cast<int>() ?? [];
-        final hourlyPrecipProb =
-            (hourly?['precipitation_probability'] as List?)?.cast<num>() ?? [];
-        final hourlyPrecip =
-            (hourly?['precipitation'] as List?)?.cast<num>() ?? [];
-
-        for (int d = 0; d < dates.length; d++) {
-          final datePrefix = dates[d]; // yyyy-MM-dd
-          final hourlyForecasts = <HourlyForecast>[];
-
-          for (int h = 0; h < hourlyTimes.length; h++) {
-            if (!hourlyTimes[h].startsWith(datePrefix)) continue;
-            final hour = int.tryParse(hourlyTimes[h].substring(11, 13)) ?? 0;
-            hourlyForecasts.add(
-              HourlyForecast(
-                hour: hour,
-                text: _wmoToChinese(
-                  h < hourlyCodes.length ? hourlyCodes[h] : 0,
-                ),
-                temp: (h < hourlyTemps.length ? hourlyTemps[h] : 0).round(),
-                chanceOfRain:
-                    (h < hourlyPrecipProb.length ? hourlyPrecipProb[h] : 0)
-                        .round(),
-                precipMM: (h < hourlyPrecip.length ? hourlyPrecip[h] : 0)
-                    .toDouble(),
-              ),
-            );
-          }
-
-          forecast.add(
-            DailyForecast(
-              date: datePrefix,
-              maxTemp: (d < maxTemps.length ? maxTemps[d] : 0).round(),
-              minTemp: (d < minTemps.length ? minTemps[d] : 0).round(),
-              hourly: hourlyForecasts,
-            ),
-          );
-        }
-      }
-
-      return FullWeatherResult(current: currentWeather, forecast: forecast);
+      return parseOpenMeteoResponse(Map<String, dynamic>.from(data));
     } on DioException catch (e) {
       switch (e.type) {
         case DioExceptionType.connectionTimeout:

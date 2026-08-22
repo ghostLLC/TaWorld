@@ -35,27 +35,38 @@ abstract final class ReminderScheduleCalculator {
     required ReminderConfig config,
     required String partnerName,
     required tz.TZDateTime now,
+    String? partnerTimeZoneId,
     int occurrenceCount = 7,
   }) {
     if (occurrenceCount <= 0) return const [];
+
+    final targetLocation = _targetLocation(
+      config: config,
+      deviceLocation: now.location,
+      partnerTimeZoneId: partnerTimeZoneId,
+    );
+    if (targetLocation == null) return const [];
 
     return switch (config.category) {
       'sleep' => _buildSleep(
         config: config,
         partnerName: partnerName,
         now: now,
+        targetLocation: targetLocation,
         occurrenceCount: occurrenceCount,
       ),
       'meal' => _buildMeals(
         config: config,
         partnerName: partnerName,
         now: now,
+        targetLocation: targetLocation,
         occurrenceCount: occurrenceCount,
       ),
       'weather' => _buildWeather(
         config: config,
         partnerName: partnerName,
         now: now,
+        targetLocation: targetLocation,
         occurrenceCount: occurrenceCount,
       ),
       'custom' => const [],
@@ -67,6 +78,7 @@ abstract final class ReminderScheduleCalculator {
     required ReminderConfig config,
     required String partnerName,
     required tz.TZDateTime now,
+    required tz.Location targetLocation,
     required int occurrenceCount,
   }) {
     final targetTime = _parseTime(config.config['target_sleep_time']);
@@ -79,6 +91,7 @@ abstract final class ReminderScheduleCalculator {
       body: '快到$partnerName的睡觉时间了，提醒Ta早点休息吧',
       config: config,
       now: now,
+      targetLocation: targetLocation,
       targetTime: targetTime,
       advanceMinutes: advanceMinutes,
       occurrenceCount: occurrenceCount,
@@ -89,6 +102,7 @@ abstract final class ReminderScheduleCalculator {
     required ReminderConfig config,
     required String partnerName,
     required tz.TZDateTime now,
+    required tz.Location targetLocation,
     required int occurrenceCount,
   }) {
     final meals = config.config['meals'];
@@ -116,6 +130,7 @@ abstract final class ReminderScheduleCalculator {
           body: '到$name时间了，提醒$partnerName按时吃饭吧',
           config: config,
           now: now,
+          targetLocation: targetLocation,
           targetTime: targetTime,
           advanceMinutes: advanceMinutes,
           occurrenceCount: occurrenceCount,
@@ -130,15 +145,27 @@ abstract final class ReminderScheduleCalculator {
     required ReminderConfig config,
     required String partnerName,
     required tz.TZDateTime now,
+    required tz.Location targetLocation,
     required int occurrenceCount,
   }) {
+    final mode = config.config['mode'] as String? ?? 'daily_digest';
+    if (mode == 'weather_change') return const [];
+    if (mode != 'daily_digest') return const [];
+
+    final configuredTime = config.config['digest_time'];
+    final targetTime = configuredTime == null
+        ? const _ParsedTime(8, 0)
+        : _parseTime(configuredTime);
+    if (targetTime == null) return const [];
+
     return _buildDaily(
       configKey: '${config.id}_weather',
       title: '🌦️ 天气关注',
       body: '新的一天开始了，看看$partnerName那边的天气吧',
       config: config,
       now: now,
-      targetTime: const _ParsedTime(8, 0),
+      targetLocation: targetLocation,
+      targetTime: targetTime,
       advanceMinutes: 0,
       occurrenceCount: occurrenceCount,
     );
@@ -150,20 +177,23 @@ abstract final class ReminderScheduleCalculator {
     required String body,
     required ReminderConfig config,
     required tz.TZDateTime now,
+    required tz.Location targetLocation,
     required _ParsedTime targetTime,
     required int advanceMinutes,
     required int occurrenceCount,
     Set<int>? usedIds,
   }) {
     final ids = usedIds ?? <int>{};
-    final location = now.location;
+    final deviceLocation = now.location;
+    final targetNow = tz.TZDateTime.from(now, targetLocation);
 
     // Find the first target calendar date whose adjusted instant is not past.
     var firstTargetOffset = 0;
     while (true) {
       final scheduled = _scheduledForCalendarOffset(
-        location: location,
-        now: now,
+        targetLocation: targetLocation,
+        targetNow: targetNow,
+        deviceLocation: deviceLocation,
         calendarOffset: firstTargetOffset,
         targetTime: targetTime,
         advanceMinutes: advanceMinutes,
@@ -175,8 +205,9 @@ abstract final class ReminderScheduleCalculator {
     final occurrences = <ReminderOccurrence>[];
     for (var index = 0; index < occurrenceCount; index++) {
       final scheduled = _scheduledForCalendarOffset(
-        location: location,
-        now: now,
+        targetLocation: targetLocation,
+        targetNow: targetNow,
+        deviceLocation: deviceLocation,
         calendarOffset: firstTargetOffset + index,
         targetTime: targetTime,
         advanceMinutes: advanceMinutes,
@@ -196,21 +227,49 @@ abstract final class ReminderScheduleCalculator {
   }
 
   static tz.TZDateTime _scheduledForCalendarOffset({
-    required tz.Location location,
-    required tz.TZDateTime now,
+    required tz.Location targetLocation,
+    required tz.TZDateTime targetNow,
+    required tz.Location deviceLocation,
     required int calendarOffset,
     required _ParsedTime targetTime,
     required int advanceMinutes,
   }) {
     final target = tz.TZDateTime(
-      location,
-      now.year,
-      now.month,
-      now.day + calendarOffset,
+      targetLocation,
+      targetNow.year,
+      targetNow.month,
+      targetNow.day + calendarOffset,
       targetTime.hour,
       targetTime.minute,
     );
-    return target.subtract(Duration(minutes: advanceMinutes));
+    final targetInstant = target.subtract(Duration(minutes: advanceMinutes));
+    return tz.TZDateTime.from(targetInstant, deviceLocation);
+  }
+
+  static tz.Location? _targetLocation({
+    required ReminderConfig config,
+    required tz.Location deviceLocation,
+    required String? partnerTimeZoneId,
+  }) {
+    final configuredId = config.timezoneId?.trim();
+    if (configuredId != null && configuredId.isNotEmpty) {
+      return _locationOrNull(configuredId);
+    }
+
+    if (config.timezoneMode == 'user') return deviceLocation;
+    if (config.timezoneMode != 'partner') return null;
+
+    final partnerId = partnerTimeZoneId?.trim();
+    if (partnerId == null || partnerId.isEmpty) return null;
+    return _locationOrNull(partnerId);
+  }
+
+  static tz.Location? _locationOrNull(String identifier) {
+    try {
+      return tz.getLocation(identifier);
+    } catch (_) {
+      return null;
+    }
   }
 
   static _ParsedTime? _parseTime(Object? value) {

@@ -21,6 +21,9 @@ const _applicationTables = {
   'ai_wiki_facts',
   'ai_conversation_summaries',
   'conversation_chunks',
+  'reminder_occurrences',
+  'chat_attachments',
+  'schema_migrations',
 };
 
 const _applicationIndexes = {
@@ -31,13 +34,18 @@ const _applicationIndexes = {
   'idx_ai_wiki_facts_category',
   'idx_ai_wiki_facts_entity',
   'idx_conversation_chunks_date',
+  'idx_chat_history_request',
+  'idx_reminder_configs_subject',
+  'idx_reminder_occurrences_config',
+  'idx_reminder_occurrences_status',
+  'idx_chat_attachments_message',
 };
 
 void main() {
   setUp(openTestDatabase);
   tearDown(closeTestDatabase);
 
-  test('fresh v4 database creates exactly the application tables', () async {
+  test('fresh database creates exactly the application tables', () async {
     final db = await DatabaseHelper.database;
 
     expect(await _applicationTableNames(db), _applicationTables);
@@ -48,6 +56,69 @@ void main() {
 
     final rows = await db.rawQuery('PRAGMA user_version');
     expect(rows.single['user_version'], DatabaseHelper.schemaVersion);
+  });
+
+  test(
+    'fresh database stores partner and reminder timezone semantics',
+    () async {
+      final db = await DatabaseHelper.database;
+
+      expect(
+        await _columnNames(db, 'partners'),
+        containsAll(<String>{
+          'timezone_id',
+          'timezone_source',
+          'timezone_confirmed',
+        }),
+      );
+      expect(
+        await _columnNames(db, 'reminder_configs'),
+        containsAll(<String>{'timezone_mode', 'timezone_id'}),
+      );
+    },
+  );
+
+  test('fresh database stores typed chat, subjects, and occurrences', () async {
+    final db = await DatabaseHelper.database;
+
+    expect(
+      await _columnNames(db, 'chat_history'),
+      containsAll(<String>{
+        'message_type',
+        'metadata_json',
+        'hidden_at',
+        'request_id',
+      }),
+    );
+    expect(
+      await _columnNames(db, 'reminder_configs'),
+      containsAll(<String>{'subject_kind', 'subject_id'}),
+    );
+    expect(
+      await _columnNames(db, 'reminder_occurrences'),
+      containsAll(<String>{
+        'config_id',
+        'subject_kind',
+        'subject_id',
+        'status',
+        'scheduled_for',
+        'delivered_at',
+        'responded_at',
+        'snoozed_until',
+        'response',
+      }),
+    );
+    expect(
+      await _columnNames(db, 'chat_attachments'),
+      containsAll(<String>{
+        'chat_message_id',
+        'local_path',
+        'mime_type',
+        'sha256',
+        'model_summary',
+        'extracted_facts_json',
+      }),
+    );
   });
 
   test('fresh database seeds every declared achievement', () async {
@@ -158,6 +229,134 @@ void main() {
       }
     }
   });
+
+  test('upgrades v4 timezone columns without losing existing rows', () async {
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'taworld-db-v4-migration-',
+    );
+    final databasePath = p.join(tempDirectory.path, 'legacy-v4.db');
+
+    try {
+      final legacyDatabase = await databaseFactoryFfi.openDatabase(
+        databasePath,
+        options: OpenDatabaseOptions(
+          version: 4,
+          onCreate: (db, _) async {
+            await db.execute('''
+              CREATE TABLE partners (
+                id TEXT PRIMARY KEY,
+                nickname TEXT NOT NULL DEFAULT '',
+                type TEXT NOT NULL DEFAULT 'friend',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE reminder_configs (
+                id TEXT PRIMARY KEY,
+                partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+                category TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                config TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.insert('partners', {
+              'id': 'partner-1',
+              'nickname': 'Legacy Ta',
+              'created_at': '2026-01-01T00:00:00.000Z',
+              'updated_at': '2026-01-01T00:00:00.000Z',
+            });
+            await db.insert('reminder_configs', {
+              'id': 'config-1',
+              'partner_id': 'partner-1',
+              'category': 'weather',
+              'created_at': '2026-01-01T00:00:00.000Z',
+              'updated_at': '2026-01-01T00:00:00.000Z',
+            });
+          },
+        ),
+      );
+      await legacyDatabase.close();
+
+      await openTestDatabase(path: databasePath);
+      final db = await DatabaseHelper.database;
+      final partner = (await db.query('partners')).single;
+      final reminder = (await db.query('reminder_configs')).single;
+
+      expect(partner['nickname'], 'Legacy Ta');
+      expect(partner['timezone_id'], isNull);
+      expect(partner['timezone_confirmed'], 0);
+      expect(reminder['timezone_mode'], 'user');
+      expect(reminder['timezone_id'], isNull);
+    } finally {
+      await DatabaseHelper.resetForTesting();
+      if (await tempDirectory.exists()) {
+        await tempDirectory.delete(recursive: true);
+      }
+    }
+  });
+
+  test('upgrades v5 interaction data without losing rows', () async {
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'taworld-db-v5-migration-',
+    );
+    final databasePath = p.join(tempDirectory.path, 'legacy-v5.db');
+
+    try {
+      final legacyDatabase = await databaseFactoryFfi.openDatabase(
+        databasePath,
+        options: OpenDatabaseOptions(
+          version: 5,
+          onCreate: _createVersionFiveInteractionFixture,
+        ),
+      );
+      await legacyDatabase.close();
+
+      await openTestDatabase(path: databasePath);
+      final db = await DatabaseHelper.database;
+      final chat = (await db.query('chat_history')).single;
+      final reminder = (await db.query('reminder_configs')).single;
+
+      expect(chat['content'], '旧对话');
+      expect(chat['message_type'], 'message');
+      expect(chat['metadata_json'], '{}');
+      expect(chat['hidden_at'], isNull);
+      expect(reminder['partner_id'], 'partner-legacy');
+      expect(reminder['subject_kind'], 'partner');
+      expect(reminder['subject_id'], 'partner-legacy');
+      expect(
+        await _applicationTableNames(db),
+        containsAll(<String>{
+          'reminder_occurrences',
+          'chat_attachments',
+          'schema_migrations',
+        }),
+      );
+      expect(
+        await _applicationIndexNames(db),
+        containsAll(<String>{
+          'idx_chat_history_request',
+          'idx_reminder_configs_subject',
+          'idx_reminder_occurrences_config',
+          'idx_reminder_occurrences_status',
+          'idx_chat_attachments_message',
+        }),
+      );
+    } finally {
+      await DatabaseHelper.resetForTesting();
+      if (await tempDirectory.exists()) {
+        await tempDirectory.delete(recursive: true);
+      }
+    }
+  });
+}
+
+Future<Set<String>> _columnNames(Database db, String table) async {
+  final rows = await db.rawQuery('PRAGMA table_info($table)');
+  return rows.map((row) => row['name'] as String).toSet();
 }
 
 Future<Set<String>> _applicationTableNames(Database db) async {
@@ -273,4 +472,60 @@ Future<void> _createVersionOneFixture(Database db, int version) async {
     'CREATE INDEX idx_user_achievements_achievement '
     'ON user_achievements(achievement_id)',
   );
+}
+
+Future<void> _createVersionFiveInteractionFixture(
+  Database db,
+  int version,
+) async {
+  await db.execute('''
+    CREATE TABLE partners (
+      id TEXT PRIMARY KEY,
+      nickname TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'friend',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE reminder_configs (
+      id TEXT PRIMARY KEY,
+      partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+      category TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      config TEXT NOT NULL DEFAULT '{}',
+      timezone_mode TEXT NOT NULL DEFAULT 'user',
+      timezone_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE chat_history (
+      id TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  ''');
+  await db.insert('partners', {
+    'id': 'partner-legacy',
+    'nickname': '旧人物',
+    'created_at': '2026-08-01T00:00:00.000Z',
+    'updated_at': '2026-08-01T00:00:00.000Z',
+  });
+  await db.insert('reminder_configs', {
+    'id': 'reminder-legacy',
+    'partner_id': 'partner-legacy',
+    'category': 'weather',
+    'created_at': '2026-08-01T00:00:00.000Z',
+    'updated_at': '2026-08-01T00:00:00.000Z',
+  });
+  await db.insert('chat_history', {
+    'id': 'chat-legacy',
+    'role': 'assistant',
+    'content': '旧对话',
+    'created_at': '2026-08-01T00:00:00.000Z',
+  });
 }

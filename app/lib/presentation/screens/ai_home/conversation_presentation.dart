@@ -11,6 +11,26 @@ class ConversationMessageSnapshot {
 
 final RegExp choiceMarkerPattern = RegExp(r'\[选项:([^\]]+)\]');
 
+/// Splits the model's conversational `|||` cadence while keeping a standalone
+/// choice marker attached to the question immediately before it.
+List<String> splitAssistantPresentationSegments(String content) {
+  final rawParts = content
+      .split('|||')
+      .map((part) => part.trim())
+      .where((part) => part.isNotEmpty);
+  final parts = <String>[];
+  for (final part in rawParts) {
+    final marker = choiceMarkerPattern.firstMatch(part);
+    final isMarkerOnly = marker != null && marker.group(0) == part;
+    if (isMarkerOnly && parts.isNotEmpty) {
+      parts[parts.length - 1] = '${parts.last}\n$part';
+    } else {
+      parts.add(part);
+    }
+  }
+  return parts;
+}
+
 enum OnboardingEntryPlan { none, introAndPrompt, promptOnly }
 
 OnboardingEntryPlan planOnboardingEntry({

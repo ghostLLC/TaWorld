@@ -84,7 +84,9 @@ class _TaLoadingState extends State<TaLoading>
   /// 光晕透明度：膨胀时亮，回弹后消退
   double _glow(double t) {
     if (t < 0.25) return 0.35 * Curves.easeOut.transform(t / 0.25);
-    if (t < 0.50) return 0.35 - 0.35 * Curves.easeIn.transform((t - 0.25) / 0.25);
+    if (t < 0.50) {
+      return 0.35 - 0.35 * Curves.easeIn.transform((t - 0.25) / 0.25);
+    }
     return 0;
   }
 
@@ -208,7 +210,7 @@ class _TaLoadingState extends State<TaLoading>
 
 /// AI 正在思考动画
 ///
-/// 三个珊瑚色圆点依次弹跳，600ms 循环。
+/// 三个珊瑚色圆点依次轻缓起伏，1.8 秒循环。
 class TaThinkingDots extends StatefulWidget {
   const TaThinkingDots({super.key});
 
@@ -225,7 +227,7 @@ class _TaThinkingDotsState extends State<TaThinkingDots>
     super.initState();
     _c = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 1800),
     )..repeat();
   }
 
@@ -238,6 +240,28 @@ class _TaThinkingDotsState extends State<TaThinkingDots>
   @override
   Widget build(BuildContext context) {
     final dotColor = TaLightColors.primary;
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+
+    if (reduceMotion) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(
+          3,
+          (_) => Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: Container(
+              width: 5,
+              height: 5,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: dotColor.withValues(alpha: 0.68),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return AnimatedBuilder(
       animation: _c,
@@ -245,17 +269,17 @@ class _TaThinkingDotsState extends State<TaThinkingDots>
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: List.generate(3, (i) {
-            final delay = i * 0.10;
+            final delay = i * 0.14;
             double localT = _c.value - delay;
             if (localT < 0) localT += 1.0;
 
             double dy;
-            if (localT < 0.4) {
-              dy = -6 *
+            if (localT < 0.52) {
+              dy = -4 *
                   Curves.easeOut
-                      .transform(localT < 0.2
-                          ? localT / 0.2
-                          : 1.0 - (localT - 0.2) / 0.2);
+                      .transform(localT < 0.26
+                          ? localT / 0.26
+                          : 1.0 - (localT - 0.26) / 0.26);
             } else {
               dy = 0;
             }

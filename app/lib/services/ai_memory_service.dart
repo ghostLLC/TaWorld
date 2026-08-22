@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/local/database_helper.dart';
 import '../data/models/ai_wiki_fact.dart';
+import 'ai_model_catalog.dart';
 import 'local/local_user_service.dart';
 import 'local/partner_service.dart';
 import 'local/local_reminder_service.dart';
@@ -18,16 +19,13 @@ import 'ai_rag_service.dart';
 
 /// AI 记忆服务
 abstract final class AiMemoryService {
-
   // ==================== 动态系统提示词构建 ====================
 
   /// 构建完整的动态系统提示词
   ///
   /// 将用户身份、关心的人、活跃提醒、时间感知、Wiki 事实、
   /// 以及 RAG 相关回忆注入到系统提示中。
-  static Future<String> buildSystemPrompt({
-    String? userMessage,
-  }) async {
+  static Future<String> buildSystemPrompt({String? userMessage}) async {
     final sections = <String>[];
 
     // 1. 基础指令（格式规则 + 行为规则）
@@ -52,7 +50,13 @@ abstract final class AiMemoryService {
         if (p.note != null && p.note!.isNotEmpty) {
           parts.add('备注: ${p.note}');
         }
-        lines.add('- ${parts.first}${parts.length > 1 ? '，${parts.skip(1).join('，')}' : ''}）');
+        if (p.timezoneId != null && p.timezoneId!.isNotEmpty) {
+          final confirmation = p.timezoneConfirmed ? '已确认' : '待确认';
+          parts.add('时区: ${p.timezoneId}（$confirmation）');
+        }
+        lines.add(
+          '- ${parts.first}${parts.length > 1 ? '，${parts.skip(1).join('，')}' : ''}）',
+        );
       }
       sections.add('【关心的人】\n${lines.join('\n')}');
     }
@@ -64,23 +68,34 @@ abstract final class AiMemoryService {
         final configs = await LocalReminderService.getConfigs(p.id);
         final enabled = configs.where((c) => c.enabled).toList();
         if (enabled.isNotEmpty) {
-          final categories = enabled.map((c) {
-            switch (c.category) {
-              case 'sleep':
-                final time = c.config['target_sleep_time'] ?? '';
-                return '睡觉提醒${time.isNotEmpty ? "($time)" : ""}';
-              case 'meal':
-                final meals = c.config['meals'] as List?;
-                final time = meals != null && meals.isNotEmpty
-                    ? meals[0]['target_time'] ?? ''
-                    : '';
-                return '吃饭提醒${time.isNotEmpty ? "($time)" : ""}';
-              case 'weather':
-                return '天气提醒';
-              default:
-                return c.category;
-            }
-          }).join('、');
+          final categories = enabled
+              .map((c) {
+                final timeBasis = c.timezoneMode == 'partner'
+                    ? 'Ta当地时间'
+                    : '用户当地时间';
+                switch (c.category) {
+                  case 'sleep':
+                    final time = c.config['target_sleep_time'] ?? '';
+                    return '睡觉提醒${time.isNotEmpty ? "($time，$timeBasis)" : "($timeBasis)"}';
+                  case 'meal':
+                    final meals = c.config['meals'] as List?;
+                    final time = meals != null && meals.isNotEmpty
+                        ? meals[0]['target_time'] ?? ''
+                        : '';
+                    return '吃饭提醒${time.isNotEmpty ? "($time，$timeBasis)" : "($timeBasis)"}';
+                  case 'weather':
+                    if (c.config['mode'] == 'weather_change') {
+                      final start = c.config['monitor_start'] ?? '07:00';
+                      final end = c.config['monitor_end'] ?? '23:00';
+                      return '天气突变监测($start-$end，$timeBasis)';
+                    }
+                    final time = c.config['digest_time'] ?? '08:00';
+                    return '天气简报($time，$timeBasis)';
+                  default:
+                    return c.category;
+                }
+              })
+              .join('、');
           reminderLines.add('- ${p.nickname}: $categories');
         }
       }
@@ -174,7 +189,8 @@ abstract final class AiMemoryService {
   }
 
   /// 更新一条 Wiki 事实
-  static Future<void> updateFact(String id, {
+  static Future<void> updateFact(
+    String id, {
     String? content,
     double? importance,
     double? strength,
@@ -280,14 +296,17 @@ abstract final class AiMemoryService {
       'id': DatabaseHelper.newId(),
       'summary': summary,
       'message_count': messageCount,
-      'date': '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}',
+      'date':
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}',
       'topics': topics,
       'created_at': now.toIso8601String(),
     });
   }
 
   /// 获取最近的对话摘要
-  static Future<List<Map<String, dynamic>>> getRecentSummaries({int limit = 3}) async {
+  static Future<List<Map<String, dynamic>>> getRecentSummaries({
+    int limit = 3,
+  }) async {
     final db = await DatabaseHelper.database;
     return db.query(
       'ai_conversation_summaries',
@@ -341,20 +360,24 @@ abstract final class AiMemoryService {
 
       // 加载 cutoff 之后的所有消息
       final rows = cutoff != null
-          ? await db.query('chat_history',
+          ? await db.query(
+              'chat_history',
               where: 'created_at > ?',
               whereArgs: [cutoff],
-              orderBy: 'created_at ASC')
+              orderBy: 'created_at ASC',
+            )
           : await db.query('chat_history', orderBy: 'created_at ASC');
 
       if (rows.isEmpty) return;
 
       final messages = rows
-          .map((r) => {
-                'role': r['role'] as String,
-                'content': r['content'] as String,
-                'created_at': r['created_at'] as String,
-              })
+          .map(
+            (r) => {
+              'role': r['role'] as String,
+              'content': r['content'] as String,
+              'created_at': r['created_at'] as String,
+            },
+          )
           .toList();
 
       // 估算总 token
@@ -399,8 +422,7 @@ abstract final class AiMemoryService {
 
       // 构建对话文本
       final convText = batch
-          .map((m) =>
-              '${m['role'] == 'user' ? '用户' : 'AI'}：${m['content']}')
+          .map((m) => '${m['role'] == 'user' ? '用户' : 'AI'}：${m['content']}')
           .join('\n');
 
       final summary = await _summarizeText(convText);
@@ -409,10 +431,7 @@ abstract final class AiMemoryService {
           'id': DatabaseHelper.newId(),
           'summary': summary,
           'message_count': batch.length,
-          'date': DateTime.now()
-              .toIso8601String()
-              .split('T')
-              .first,
+          'date': DateTime.now().toIso8601String().split('T').first,
           'topics': null,
           'created_at': DateTime.now().toIso8601String(),
         });
@@ -434,12 +453,14 @@ abstract final class AiMemoryService {
       final dio = Dio();
       final response = await dio.post(
         'https://api.deepseek.com/v1/chat/completions',
-        options: Options(headers: {
-          'Authorization': 'Bearer $key',
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $key',
+            'Content-Type': 'application/json',
+          },
+        ),
         data: {
-          'model': 'deepseek-v4-pro',
+          'model': AiModelCatalog.primary,
           'temperature': 0.3,
           'max_tokens': 500,
           'messages': [
@@ -509,9 +530,24 @@ abstract final class AiMemoryService {
 - 创建或修改完成后，用 get_partner_detail 验证一下是否真的成功
 - 当提出选择题（如关系类型、提醒类别）时，用 [选项:A|B|C] 提供快捷按钮，用户可直接点击
 - 每个选择题最多4个选项
+- 可以同时选择多个兼容选项时，把“都要”作为最后一个选项；用户点击后依次执行对应操作，不要再次逐项确认
+- 关系类型、时间基准这类互斥问题不要添加“都要”
+- 用户要设置提醒且人物、类型、时间语义已经明确时，必须调用 create_reminder；不能只回复“我去弄”或“稍等”后结束
+- 睡觉、吃饭和每日天气简报必须有 HH:mm；天气突变监测需要监测时段，不需要伪造一个每日提醒时间
+- 天气提醒必须区分“每天固定时间看天气”和“监测未来天气突变”，不确定时用一次简短选择题确认
+- 删除天气提醒时也必须区分每日天气简报和天气突变监测；若两种都存在且用户没说清，只追问一次，不能一次删掉两种
+- “每天早上8点提醒我看Ta天气”通常按用户当地时间；“Ta那边早上8点”以及围绕Ta作息的睡觉/吃饭提醒通常按Ta当地时间
+- 海外或跨时区提醒保存当地钟表时间和 IANA 时区；若Ta的时区缺失或城市无法唯一确定，只追问一次时区/城市后再创建
+- 天气突变监测是受 Android 后台调度和省电策略影响的尽力而为能力，不得承诺实时、秒级或绝不漏报
+- 本应用提醒用户去关心Ta，不会自动向Ta发送消息，回复中不要制造已经替用户发消息的误解
 
 重要：操作验证规则（必须遵守）：
 - 每次执行工具后，必须根据工具返回的结果来判断是否成功，不要凭空声称"搞定了"或"设置好了"
+- 状态变更工具返回后，必须先读取结构化结果里的 status 和 verified；这两个字段是操作结果的唯一依据
+- 工具返回 success / partial_success / failure 时必须如实区分；partial_success 需说明尚缺的权限或保障条件
+- create_reminder 返回后不能停在将来时表达；成功时明确复述人物、模式、时间基准，失败时给出下一步
+- 状态变更工具调用结束后，最终回复必须使用已完成、部分完成或未完成的结果表述
+- 绝不能以“稍等”“我这就弄”“马上帮你”等未来时态结束；即使工具后的模型正文为空，工具结构化结果也已给用户确定反馈
 - 如果工具返回失败或错误信息，要如实告诉用户，并尝试解决
 - 设置完城市或提醒后，用 get_partner_detail 工具验证一下是否真的设置成功
 - 查天气前，先用 get_partner_detail 确认对方是否已设置城市，如果没设置先问用户城市
@@ -532,6 +568,9 @@ abstract final class AiMemoryService {
 
 示例回复（问提醒类型）：
 想给Ta设置什么提醒呢|||[选项:睡觉提醒|吃饭提醒|天气提醒]
+
+示例回复（天气提醒模式可同时开启）：
+你想每天定时看，还是也留意天气突变|||[选项:每天定时|突变监测|都要]
 
 示例回复（操作失败时）：
 抱歉，刚才设置出了点问题|||我重新帮你试一下
