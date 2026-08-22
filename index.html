@@ -48,7 +48,7 @@
   --ease:cubic-bezier(.22,.8,.28,1);
 }
 *{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth}
+html{scroll-behavior:smooth;overflow-x:hidden}
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
@@ -129,9 +129,9 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .eyebrow::before{content:"";width:34px;height:1.5px;background:currentColor}
 .hero h1{font-family:var(--serif);font-size:clamp(42px,6.2vw,76px);font-weight:700;line-height:1.26;letter-spacing:.015em;margin-bottom:10px;color:var(--text)}
 .hero h1 .line2{display:block}
-/* 打字机标题：逐字异色出现 / 停顿 / 消失 / 循环 */
-.hero h1 .ch{display:inline-block;opacity:0;transform:translateY(.35em);transition:opacity .14s ease,transform .14s ease}
-.hero h1 .ch.on{opacity:1;transform:none}
+/* 打字机标题（通用）：逐字异色出现 / 停顿 / 消失 / 循环 */
+.tw-type .ch{display:inline-block;opacity:0;transform:translateY(.35em);transition:opacity .14s ease,transform .14s ease}
+.tw-type .ch.on{opacity:1;transform:none}
 .tw-caret{display:inline-block;width:3px;height:.82em;background:var(--gold-lt);margin-left:7px;border-radius:2px;vertical-align:-.06em;opacity:0}
 .tw-caret.on{opacity:1;animation:caretBlink 1s steps(1) infinite}
 @keyframes caretBlink{0%,55%{opacity:1}56%,100%{opacity:.15}}
@@ -507,6 +507,26 @@ footer a:hover{color:var(--gold-lt)}
 .reveal.visible{opacity:1;transform:none}
 .d1{transition-delay:.09s}.d2{transition-delay:.18s}.d3{transition-delay:.27s}.d4{transition-delay:.36s}
 
+/* ========== 章节选单（电影胶片轨） ========== */
+.act-rail{position:fixed;right:26px;top:50%;transform:translateY(-50%);z-index:60;display:flex;flex-direction:column;gap:15px}
+.act-rail a{display:flex;align-items:center;gap:11px;flex-direction:row-reverse;color:var(--mut)}
+.act-rail i{width:9px;height:9px;border:1.5px solid rgba(232,153,141,.65);transform:rotate(45deg);border-radius:2px;transition:all .35s var(--ease)}
+.act-rail span{font-size:12.5px;font-family:var(--serif);opacity:0;transform:translateX(8px);transition:all .35s var(--ease);letter-spacing:.12em}
+.act-rail a:hover span,.act-rail a.on span{opacity:1;transform:none}
+.act-rail a.on i{background:var(--coral);border-color:transparent;box-shadow:0 0 14px rgba(232,153,141,.6)}
+@media(max-width:1180px){.act-rail{display:none}}
+/* ========== 提灯夜行（光标暖光） ========== */
+.lantern{position:fixed;inset:0;pointer-events:none;z-index:1;opacity:0;transition:opacity 1.2s ease;mix-blend-mode:screen;background:radial-gradient(300px 300px at 50% 50%,rgba(232,153,141,.11) 0%,rgba(220,178,106,.05) 42%,transparent 68%);background-repeat:no-repeat}
+/* ========== 按钮涟漪 ========== */
+.ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.35);transform:scale(0);animation:ripple .65s ease-out forwards;pointer-events:none}
+@keyframes ripple{to{transform:scale(3.4);opacity:0}}
+/* ========== 通知卡呼吸脉动（引导点击） ========== */
+.notif{position:relative}
+.notif.pulsing::after{content:"";position:absolute;inset:-7px;border-radius:26px;border:1.5px solid color-mix(in srgb,var(--acc) 55%,transparent);animation:notifPulse 2.2s ease-out infinite;pointer-events:none}
+@keyframes notifPulse{0%{opacity:.7;transform:scale(.98)}70%{opacity:0;transform:scale(1.05)}100%{opacity:0}}
+/* ========== 页脚巨型签名 ========== */
+.foot-mark{font-family:var(--serif);font-weight:900;font-size:clamp(88px,16vw,210px);line-height:.9;text-align:center;color:transparent;-webkit-text-stroke:1px rgba(245,230,223,.08);user-select:none;pointer-events:none;margin:34px 0 -8px;letter-spacing:.02em}
+
 /* ========== 响应式 ========== */
 @media (max-width:1020px){
   .b-hero{grid-column:span 6;grid-template-columns:1fr}
@@ -600,6 +620,7 @@ footer a:hover{color:var(--gold-lt)}
   <div class="orb orb-3" data-parallax="9"></div>
 </div>
 <div class="vignette" aria-hidden="true"></div>
+<div class="lantern" id="lantern" aria-hidden="true"></div>
 
 <!-- ================= 导航 ================= -->
 <nav class="nav" id="nav">
@@ -627,7 +648,7 @@ footer a:hover{color:var(--gold-lt)}
   <div class="wrap hero-grid">
     <div>
       <span class="eyebrow">本地优先 · AI 关怀助手</span>
-      <h1 id="heroTitle">把牵挂，<span class="line2">变成恰到好处的行动</span></h1>
+      <h1 id="heroTitle" class="tw-type">把牵挂，<span class="line2">变成恰到好处的行动</span></h1>
       <div class="hero-en">TaWorld · Ta's World</div>
       <p class="hero-desc">添加你在乎的人，让小念帮你记住关于 Ta 的点点滴滴——生日与喜好、天气与时差、你们聊过的每一件小事；然后在<em>对的时间</em>，轻轻提醒你，把关心送到。</p>
       <div class="hero-actions">
@@ -1146,7 +1167,7 @@ footer a:hover{color:var(--gold-lt)}
 <!-- ================= 尾声 ================= -->
 <section class="finale">
   <div class="wrap reveal">
-    <h2>牵挂不必轰烈，<br><span class="gld">恰到好处，就很好。</span></h2>
+    <h2 class="tw-type" id="finaleTitle">牵挂不必轰烈，<br>恰到好处，就很好。</h2>
     <p>愿每一段重要的关系，都被好好经营。</p>
     <a class="btn btn-primary" href="#download">带上小念，去关心 Ta<svg class="ic ic-sm"><use href="#i-arrow"/></svg></a>
   </div>
@@ -1181,10 +1202,12 @@ footer a:hover{color:var(--gold-lt)}
       <span>© 2026 TaWorld Team · 以用心制作</span>
       <span>Flutter · Material 3 · 本地优先</span>
     </div>
+    <div class="foot-mark" aria-hidden="true">TaWorld</div>
   </div>
 </footer>
 
 <button class="totop" id="totop" aria-label="回到顶部"><svg class="ic"><use href="#i-up"/></svg></button>
+<nav class="act-rail" id="actRail" aria-label="章节导航"></nav>
 
 <script>
 (function(){
@@ -1211,12 +1234,8 @@ footer a:hover{color:var(--gold-lt)}
   }
   if(!reduced){seedStars($("#stars"),52);seedStars($("#graphStars"),26)}
 
-  /* ---- 首屏标题：异色打字机循环 ---- */
-  (function(){
-    var h=$("#heroTitle");
-    if(!h)return;
-    /* 异色取自应用五套主题色：暖珊瑚 / 薰衣草 / 海洋蓝 / 樱花粉 / 森林绿，点缀奶油 */
-    var palette=["#F5E6DF","#DCB26A","#E8998D","#9B8EC4","#E88DAA","#7EB8CC","#DCB26A","#E8998D","#F5E6DF","#7EAA88","#DCB26A","#E8998D","#F5E6DF"];
+  /* ---- 打字机引擎（首屏 / 结尾共用） ---- */
+  function typeCycle(h,palette,D,HOLD,DEL,PAUSE){
     var chars=[];
     (function walk(node){
       Array.prototype.slice.call(node.childNodes).forEach(function(ch){
@@ -1230,13 +1249,12 @@ footer a:hover{color:var(--gold-lt)}
             chars.push(s);frag.appendChild(s);
           });
           node.replaceChild(frag,ch);
-        }else if(ch.nodeType===1){walk(ch)}
+        }else if(ch.nodeType===1&&ch.tagName!=="BR"){walk(ch)}
       });
     })(h);
-    if(reduced){chars.forEach(function(s){s.classList.add("on")});return}
+    if(reduced){chars.forEach(function(s){s.classList.add("on")});return{start:function(){}}}
     var caret=document.createElement("span");caret.className="tw-caret";
     function placeCaret(i){var c=chars[i];if(c&&c.parentNode)c.parentNode.insertBefore(caret,c.nextSibling)}
-    var D=90,HOLD=3200,DEL=45,PAUSE=800;
     function typeLoop(i){
       if(i>=chars.length){
         caret.classList.add("on");placeCaret(chars.length-1);
@@ -1252,8 +1270,20 @@ footer a:hover{color:var(--gold-lt)}
       if(i>0)placeCaret(i-1);
       setTimeout(function(){delLoop(i-1)},DEL);
     }
-    setTimeout(function(){typeLoop(0)},500);
-  })();
+    return{start:function(){typeLoop(0)}};
+  }
+  /* 首屏：暖色系轮换 */
+  var heroPal=["#F5E6DF","#DCB26A","#E8998D","#9B8EC4","#E88DAA","#7EB8CC","#DCB26A","#E8998D","#F5E6DF","#7EAA88","#DCB26A","#E8998D","#F5E6DF"];
+  var heroTw=typeCycle($("#heroTitle"),heroPal,90,3200,45,800);
+  setTimeout(heroTw.start,500);
+  /* 结尾：落日余晖系，进入视口后开演 */
+  var finPal=["#F5E6DF","#E8998D","#DCB26A","#E88DAA","#F5E6DF","#7EB8CC","#DCB26A","#E8998D","#F5E6DF","#9B8EC4","#DCB26A","#E8998D","#F5E6DF","#DCB26A","#E8998D","#F5E6DF"];
+  var finTw=typeCycle($("#finaleTitle"),finPal,75,3400,42,900);
+  var finStarted=false;
+  var finIO=new IntersectionObserver(function(es){es.forEach(function(e){
+    if(e.isIntersecting&&!finStarted){finStarted=true;finIO.disconnect();setTimeout(finTw.start,650)}
+  })},{threshold:.35});
+  finIO.observe($("#finaleTitle"));
 
   /* ---- 导航：阴影 + 进度条 + scrollspy ---- */
   var nav=$("#nav"),progress=$("#progress"),totop=$("#totop");
@@ -1450,6 +1480,77 @@ footer a:hover{color:var(--gold-lt)}
       tp.style.setProperty("--tp-deep",b.dataset.d);
       tp.style.background=b.dataset.bg;
     });
+  });
+
+  /* ---- 章节选单（电影胶片轨） ---- */
+  var rail=$("#actRail");
+  var railDefs=[["who","念"],["features","护"],["memory","忆"],["graph","图"],["reminders","醒"],["privacy","诺"],["download","启"],["faq","问"]];
+  var railLinks=railDefs.map(function(d){
+    var a=document.createElement("a");
+    a.href="#"+d[0];
+    a.innerHTML="<span>"+d[1]+"</span><i></i>";
+    a.setAttribute("aria-label","第 "+d[1]+" 幕");
+    rail.appendChild(a);
+    return a;
+  });
+  var railIO=new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){
+        var idx=railDefs.findIndex(function(d){return d[0]===e.target.id});
+        if(idx>-1)railLinks.forEach(function(a,i){a.classList.toggle("on",i===idx)});
+      }
+    });
+  },{rootMargin:"-42% 0px -52% 0px"});
+  railDefs.forEach(function(d){var el=document.getElementById(d[0]);if(el)railIO.observe(el)});
+
+  /* ---- 提灯夜行：光标暖光（全视口层，随光标移动渐变位置） ---- */
+  if(!reduced&&matchMedia("(pointer:fine)").matches){
+    var lan=$("#lantern"),lx=innerWidth/2,ly=innerHeight/2,tx=lx,ty=ly,lanSeen=false;
+    addEventListener("pointermove",function(e){
+      tx=e.clientX;ty=e.clientY;
+      if(!lanSeen){lanSeen=true;lan.style.opacity="1"}
+    },{passive:true});
+    (function tick(){
+      lx+=(tx-lx)*.085;ly+=(ty-ly)*.085;
+      lan.style.backgroundPosition=lx.toFixed(1)+"px "+ly.toFixed(1)+"px";
+      requestAnimationFrame(tick);
+    })();
+  }
+
+  /* ---- 幽灵大字滚动视差 ---- */
+  if(!reduced){
+    var ghosts=$$(".ghost");
+    addEventListener("scroll",function(){
+      var vh=innerHeight;
+      ghosts.forEach(function(g){
+        var r=g.parentElement.getBoundingClientRect();
+        if(r.bottom>-200&&r.top<vh+200){
+          var d=(r.top+r.height/2)-vh/2;
+          g.style.transform="translateY("+(d*.07).toFixed(1)+"px)";
+        }
+      });
+    },{passive:true});
+  }
+
+  /* ---- 按钮涟漪 ---- */
+  $$(".btn").forEach(function(b){
+    b.addEventListener("pointerdown",function(e){
+      var r=b.getBoundingClientRect(),s=document.createElement("span");
+      s.className="ripple";
+      var d=Math.max(r.width,r.height)*.5;
+      s.style.width=s.style.height=d+"px";
+      s.style.left=(e.clientX-r.left-d/2)+"px";
+      s.style.top=(e.clientY-r.top-d/2)+"px";
+      b.appendChild(s);
+      setTimeout(function(){s.remove()},700);
+    });
+  });
+
+  /* ---- 通知卡呼吸脉动，首次点击后停止 ---- */
+  var notifCard=$("#notifDemo");
+  if(notifCard&&!reduced)notifCard.classList.add("pulsing");
+  $$("#notifDemo .notif-actions button").forEach(function(b){
+    b.addEventListener("click",function(){notifCard.classList.remove("pulsing")},{once:true});
   });
 
   /* ---- 背景视差（仅桌面且未减弱动效） ---- */
