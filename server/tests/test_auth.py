@@ -7,6 +7,8 @@
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import TEST_PASSWORD
+
 
 @pytest.mark.asyncio
 class TestAuthRegister:
@@ -18,7 +20,7 @@ class TestAuthRegister:
             "/api/v1/auth/register",
             json={
                 "phone": "13900139000",
-                "password": "test123456",
+                "password": TEST_PASSWORD,
                 "nickname": "测试用户",
             },
         )
@@ -31,7 +33,7 @@ class TestAuthRegister:
         """重复手机号注册"""
         payload = {
             "phone": "13900139001",
-            "password": "test123456",
+            "password": TEST_PASSWORD,
         }
         await client.post("/api/v1/auth/register", json=payload)
         response = await client.post("/api/v1/auth/register", json=payload)
@@ -41,7 +43,7 @@ class TestAuthRegister:
         """无效手机号"""
         response = await client.post(
             "/api/v1/auth/register",
-            json={"phone": "12345", "password": "test123456"},
+            json={"phone": "12345", "password": TEST_PASSWORD},
         )
         assert response.status_code == 422
 
@@ -55,12 +57,12 @@ class TestAuthLogin:
         # 先注册
         await client.post(
             "/api/v1/auth/register",
-            json={"phone": "13900139010", "password": "test123456"},
+            json={"phone": "13900139010", "password": TEST_PASSWORD},
         )
         # 再登录
         response = await client.post(
             "/api/v1/auth/login",
-            json={"phone": "13900139010", "password": "test123456"},
+            json={"phone": "13900139010", "password": TEST_PASSWORD},
         )
         assert response.status_code == 200
         data = response.json()
@@ -72,7 +74,7 @@ class TestAuthLogin:
         """密码错误"""
         await client.post(
             "/api/v1/auth/register",
-            json={"phone": "13900139011", "password": "test123456"},
+            json={"phone": "13900139011", "password": TEST_PASSWORD},
         )
         response = await client.post(
             "/api/v1/auth/login",
@@ -90,11 +92,11 @@ class TestAuthRefresh:
         # 注册并登录
         await client.post(
             "/api/v1/auth/register",
-            json={"phone": "13900139020", "password": "test123456"},
+            json={"phone": "13900139020", "password": TEST_PASSWORD},
         )
         login_resp = await client.post(
             "/api/v1/auth/login",
-            json={"phone": "13900139020", "password": "test123456"},
+            json={"phone": "13900139020", "password": TEST_PASSWORD},
         )
         refresh_token = login_resp.json()["data"]["refresh_token"]
 

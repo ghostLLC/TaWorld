@@ -9,6 +9,8 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import TEST_PASSWORD, random_digits
+
 
 @pytest.mark.asyncio
 class TestRelationshipFlow:
@@ -16,31 +18,29 @@ class TestRelationshipFlow:
 
     async def test_invite_and_join_flow(self, client: AsyncClient):
         """两人建立关系：A邀请 → B加入 → 验证关系生效"""
-        import random
-
         # 注册用户A和B
-        suffix_a = ''.join(random.choices('0123456789', k=8))
-        suffix_b = ''.join(random.choices('0123456789', k=8))
+        suffix_a = random_digits()
+        suffix_b = random_digits()
 
         # 注册A
         await client.post("/api/v1/auth/register", json={
             "phone": f"138{suffix_a}",
-            "password": "test123456",
+            "password": TEST_PASSWORD,
         })
         resp_a = await client.post("/api/v1/auth/login", json={
             "phone": f"138{suffix_a}",
-            "password": "test123456",
+            "password": TEST_PASSWORD,
         })
         token_a = resp_a.json()["data"]["access_token"]
 
         # 注册B
         await client.post("/api/v1/auth/register", json={
             "phone": f"138{suffix_b}",
-            "password": "test123456",
+            "password": TEST_PASSWORD,
         })
         resp_b = await client.post("/api/v1/auth/login", json={
             "phone": f"138{suffix_b}",
-            "password": "test123456",
+            "password": TEST_PASSWORD,
         })
         token_b = resp_b.json()["data"]["access_token"]
 
@@ -75,15 +75,14 @@ class TestRelationshipFlow:
 
     async def test_invite_self_join_rejected(self, client: AsyncClient):
         """不能自己加入自己的邀请"""
-        import random
-        suffix = ''.join(random.choices('0123456789', k=8))
+        suffix = random_digits()
         phone = f"138{suffix}"
 
         await client.post("/api/v1/auth/register", json={
-            "phone": phone, "password": "test123456",
+            "phone": phone, "password": TEST_PASSWORD,
         })
         resp = await client.post("/api/v1/auth/login", json={
-            "phone": phone, "password": "test123456",
+            "phone": phone, "password": TEST_PASSWORD,
         })
         token = resp.json()["data"]["access_token"]
         client.headers["Authorization"] = f"Bearer {token}"
@@ -103,17 +102,16 @@ class TestRelationshipFlow:
 
     async def test_dissolve_relationship(self, client: AsyncClient):
         """解除关系后列表不再包含活跃关系"""
-        import random
-        s_a = ''.join(random.choices('0123456789', k=8))
-        s_b = ''.join(random.choices('0123456789', k=8))
+        s_a = random_digits()
+        s_b = random_digits()
 
         # 注册并建立关系
-        await client.post("/api/v1/auth/register", json={"phone": f"138{s_a}", "password": "testpass"})
-        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_a}", "password": "testpass"})
+        await client.post("/api/v1/auth/register", json={"phone": f"138{s_a}", "password": TEST_PASSWORD})
+        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_a}", "password": TEST_PASSWORD})
         ta = r.json()["data"]["access_token"]
 
-        await client.post("/api/v1/auth/register", json={"phone": f"138{s_b}", "password": "testpass"})
-        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_b}", "password": "testpass"})
+        await client.post("/api/v1/auth/register", json={"phone": f"138{s_b}", "password": TEST_PASSWORD})
+        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_b}", "password": TEST_PASSWORD})
         tb = r.json()["data"]["access_token"]
 
         client.headers["Authorization"] = f"Bearer {ta}"

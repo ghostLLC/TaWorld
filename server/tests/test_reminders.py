@@ -4,24 +4,25 @@
 覆盖提醒配置CRUD、一键提醒、确认流程。
 """
 
-import random
 import uuid
 
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import TEST_PASSWORD, random_digits
+
 
 async def _create_relationship(client: AsyncClient) -> tuple[str, str, str, str]:
     """辅助函数：创建两个用户并建立关系，返回 (token_a, token_b, user_a_id, rel_id)"""
-    s_a = ''.join(random.choices('0123456789', k=8))
-    s_b = ''.join(random.choices('0123456789', k=8))
+    s_a = random_digits()
+    s_b = random_digits()
 
-    await client.post("/api/v1/auth/register", json={"phone": f"138{s_a}", "password": "testpass"})
-    await client.post("/api/v1/auth/register", json={"phone": f"138{s_b}", "password": "testpass"})
+    await client.post("/api/v1/auth/register", json={"phone": f"138{s_a}", "password": TEST_PASSWORD})
+    await client.post("/api/v1/auth/register", json={"phone": f"138{s_b}", "password": TEST_PASSWORD})
 
-    r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_a}", "password": "testpass"})
+    r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_a}", "password": TEST_PASSWORD})
     ta = r.json()["data"]["access_token"]
-    r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_b}", "password": "testpass"})
+    r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_b}", "password": TEST_PASSWORD})
     tb = r.json()["data"]["access_token"]
 
     client.headers["Authorization"] = f"Bearer {ta}"
@@ -105,22 +106,21 @@ class TestReminderConfigCRUD:
 
     async def test_create_config_without_relationship_access(self, client: AsyncClient):
         """不能为不属于自己的关系创建提醒配置"""
-        import random
-        s_a = ''.join(random.choices('0123456789', k=8))
-        s_b = ''.join(random.choices('0123456789', k=8))
-        s_c = ''.join(random.choices('0123456789', k=8))
+        s_a = random_digits()
+        s_b = random_digits()
+        s_c = random_digits()
 
         # 注册C（无关用户）
-        await client.post("/api/v1/auth/register", json={"phone": f"138{s_c}", "password": "testpass"})
-        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_c}", "password": "testpass"})
+        await client.post("/api/v1/auth/register", json={"phone": f"138{s_c}", "password": TEST_PASSWORD})
+        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_c}", "password": TEST_PASSWORD})
         tc = r.json()["data"]["access_token"]
 
         # A和B建立关系
-        await client.post("/api/v1/auth/register", json={"phone": f"138{s_a}", "password": "testpass"})
-        await client.post("/api/v1/auth/register", json={"phone": f"138{s_b}", "password": "testpass"})
-        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_a}", "password": "testpass"})
+        await client.post("/api/v1/auth/register", json={"phone": f"138{s_a}", "password": TEST_PASSWORD})
+        await client.post("/api/v1/auth/register", json={"phone": f"138{s_b}", "password": TEST_PASSWORD})
+        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_a}", "password": TEST_PASSWORD})
         ta = r.json()["data"]["access_token"]
-        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_b}", "password": "testpass"})
+        r = await client.post("/api/v1/auth/login", json={"phone": f"138{s_b}", "password": TEST_PASSWORD})
         tb = r.json()["data"]["access_token"]
 
         client.headers["Authorization"] = f"Bearer {ta}"

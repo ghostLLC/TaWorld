@@ -5,10 +5,22 @@
 """
 
 import asyncio
+import secrets
 from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
+
+# 测试口令在每次测试进程启动时随机生成，仓库中不保留任何明文凭据
+TEST_PASSWORD = "Tp-" + secrets.token_urlsafe(12)
+
+
+def random_digits(k: int = 8) -> str:
+    """生成 k 位随机数字（加密安全），用于拼接测试手机号。"""
+    return f"{secrets.randbelow(10 ** k):0{k}d}"
+
+
+
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -84,18 +96,17 @@ async def auth_client(client: AsyncClient) -> AsyncClient:
     注册测试用户并设置 Authorization header。
     每个测试方法会使用不同的手机号，避免重复注册冲突。
     """
-    import random
-    suffix = ''.join(random.choices('0123456789', k=8))
+    suffix = random_digits()
     phone = f"138{suffix}"
 
     register_data = {
         "phone": phone,
-        "password": "test123456",
+        "password": TEST_PASSWORD,
         "nickname": "测试用户",
     }
     await client.post("/api/v1/auth/register", json=register_data)
 
-    login_data = {"phone": phone, "password": "test123456"}
+    login_data = {"phone": phone, "password": TEST_PASSWORD}
     response = await client.post("/api/v1/auth/login", json=login_data)
     token = response.json()["data"]["access_token"]
 
