@@ -54,7 +54,8 @@ html{scroll-behavior:smooth}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
 body{font-family:var(--sans);background:var(--bg0);color:var(--text);line-height:1.9;-webkit-font-smoothing:antialiased;overflow-x:hidden;font-size:15.5px}
-body::after{content:"";position:fixed;inset:0;z-index:2000;pointer-events:none;opacity:.05;mix-blend-mode:soft-light;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E")}
+body::after{content:"";position:fixed;inset:0;z-index:2000;pointer-events:none;opacity:.05;mix-blend-mode:soft-light;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");animation:grain 1.1s steps(4) infinite}
+@keyframes grain{0%{background-position:0 0}25%{background-position:-42px 28px}50%{background-position:28px -34px}75%{background-position:-24px -18px}100%{background-position:0 0}}
 ::selection{background:var(--coral);color:#fff}
 ::-webkit-scrollbar{width:10px}
 ::-webkit-scrollbar-track{background:var(--bg0)}
@@ -124,7 +125,7 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .shooting{position:absolute;width:90px;height:1px;background:linear-gradient(90deg,transparent,rgba(245,230,223,.8));border-radius:2px;opacity:0;animation:shoot 9s linear infinite;pointer-events:none}
 @keyframes shoot{0%,86%{opacity:0;transform:translate(0,0) rotate(-32deg)}88%{opacity:1}97%{opacity:0;transform:translate(-420px,240px) rotate(-32deg)}100%{opacity:0}}
 .hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:56px;align-items:center}
-.eyebrow{display:inline-flex;align-items:center;gap:12px;font-size:12px;letter-spacing:.32em;font-weight:600;color:var(--gold-lt)}
+.eyebrow{display:inline-flex;align-items:center;gap:12px;font-size:12px;letter-spacing:.32em;font-weight:600;color:var(--acc,#DCB26A)}
 .eyebrow::before{content:"";width:34px;height:1.5px;background:currentColor}
 .hero h1{font-family:var(--serif);font-size:clamp(42px,6.2vw,76px);font-weight:700;line-height:1.26;letter-spacing:.015em;margin-bottom:10px;color:var(--text)}
 .hero h1 .line2{display:block}
@@ -134,7 +135,7 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .tw-caret{display:inline-block;width:3px;height:.82em;background:var(--gold-lt);margin-left:7px;border-radius:2px;vertical-align:-.06em;opacity:0}
 .tw-caret.on{opacity:1;animation:caretBlink 1s steps(1) infinite}
 @keyframes caretBlink{0%,55%{opacity:1}56%,100%{opacity:.15}}
-.gld{font-style:normal;font-family:var(--serif);background:linear-gradient(115deg,#E8C489 10%,var(--gold-lt) 45%,#C89B55 90%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--gold-lt)}
+.gld{font-style:normal;font-family:var(--serif);background:linear-gradient(115deg,var(--acc,#E8C489) 8%,color-mix(in srgb,var(--acc,#DCB26A) 72%,#F5E6DF) 55%,color-mix(in srgb,var(--acc,#C89B55) 60%,#8A6428) 95%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--gold-lt)}
 .hero-en{font-size:12.5px;letter-spacing:.42em;text-transform:uppercase;color:var(--faint);margin:18px 0 22px}
 .hero-desc{font-size:16.5px;color:var(--mut);max-width:33em;margin-bottom:38px}
 .hero-desc em{font-style:normal;color:var(--text);border-bottom:2px solid var(--gold);padding-bottom:1px}
@@ -207,20 +208,45 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 @keyframes marquee{to{transform:translateX(-50%)}}
 
 /* ========== 章节 ========== */
+/* ========== 章节 · 电影分幕调色 ========== */
+.section{padding:120px 0;--acc:#E8998D;--acc-soft:rgba(232,153,141,.13)}
+section::before{content:"";position:absolute;inset:0;background:radial-gradient(72% 46% at 50% 0%,var(--acc-soft),transparent 72%);pointer-events:none;z-index:0}
+.sc-gold{--acc:#DCB26A;--acc-soft:rgba(220,178,106,.13)}
+.sc-lav{--acc:#B7A8E3;--acc-soft:rgba(183,168,227,.13);background:linear-gradient(180deg,#191220 0%,#150C09 64%)}
+.sc-blue{--acc:#8FBFDD;--acc-soft:rgba(143,191,221,.13);background:linear-gradient(180deg,#11151C 0%,#150C09 64%)}
+.sc-sakura{--acc:#E990AC;--acc-soft:rgba(233,144,172,.12)}
+.sc-void{--acc:#C2913D;--acc-soft:rgba(194,145,61,.055);background:linear-gradient(180deg,#110A07 0%,#150C09 60%)}
+.sc-ember{--acc:#DE8070;--acc-soft:rgba(222,128,112,.13)}
+/* 场记板标签 */
+.act-tag{display:inline-flex;align-items:center;gap:10px;font-size:12px;letter-spacing:.28em;color:var(--acc);border:1px solid color-mix(in srgb,var(--acc) 42%,transparent);border-radius:100px;padding:5px 16px 5px 13px;margin-bottom:18px;background:color-mix(in srgb,var(--acc) 7%,transparent);font-weight:600}
+.act-tag::before{content:"";width:5px;height:5px;background:var(--acc);transform:rotate(45deg);border-radius:1px}
+/* 居中大幕头 */
+.head-center{flex-direction:column;align-items:center;text-align:center;gap:0;margin-bottom:48px}
+.head-center .chapter-no{font-size:clamp(44px,5vw,64px);margin-bottom:12px}
+.head-center .chapter-no::after{left:50%;right:auto;width:90px;transform:translateX(-50%)}
+.head-center .eyebrow::after{content:"";width:34px;height:1.5px;background:currentColor}
+.head-center .lede{margin:14px auto 0}
+.head-center h2{font-size:clamp(30px,4.4vw,52px)}
+/* 镜头暗角 */
+.vignette{position:fixed;inset:0;pointer-events:none;z-index:2;background:radial-gradient(125% 92% at 50% 44%,transparent 52%,rgba(7,4,3,.44) 100%)}
+
 .section{padding:120px 0}
-.ghost{position:absolute;top:-20px;right:1%;font-family:var(--serif);font-weight:700;font-size:clamp(150px,20vw,280px);line-height:1;color:rgba(245,230,223,.032);z-index:0;user-select:none;pointer-events:none}
+.ghost{position:absolute;top:-20px;right:1%;font-family:var(--serif);font-weight:700;font-size:clamp(150px,20vw,280px);line-height:1;color:color-mix(in srgb,var(--acc) 7%,transparent);z-index:0;user-select:none;pointer-events:none}
+.ghost-l{right:auto;left:1%}
 .chapter-head{display:flex;gap:28px;align-items:flex-start;margin-bottom:54px;position:relative}
-.chapter-no{font-family:var(--serif);font-size:clamp(56px,7vw,84px);font-weight:700;line-height:.9;color:transparent;-webkit-text-stroke:1.5px rgba(220,178,106,.6);flex-shrink:0;user-select:none;position:relative}
-.chapter-no::after{content:"";position:absolute;left:2px;right:-8px;bottom:-14px;height:1.5px;background:linear-gradient(90deg,var(--gold),transparent)}
-.chapter-head h2{font-family:var(--serif);font-size:clamp(28px,3.8vw,44px);font-weight:700;line-height:1.4;margin-top:6px;color:var(--text)}
+.chapter-no{font-family:var(--serif);font-size:clamp(56px,7vw,84px);font-weight:700;line-height:.9;color:transparent;-webkit-text-stroke:1.5px color-mix(in srgb,var(--acc) 62%,transparent);flex-shrink:0;user-select:none;position:relative}
+.chapter-no::after{content:"";position:absolute;left:2px;right:-8px;bottom:-14px;height:1.5px;background:linear-gradient(90deg,var(--acc),transparent)}
+.chapter-head h2{font-family:var(--serif);font-size:clamp(28px,3.8vw,44px);font-weight:700;line-height:1.4;margin-top:6px;color:var(--text);text-shadow:0 0 46px color-mix(in srgb,var(--acc) 26%,transparent)}
+.chapter-head.reveal h2{transition:clip-path .95s var(--ease) .08s,transform .95s var(--ease) .08s;clip-path:inset(-16% -10% 108% -10%);transform:translateY(28px)}
+.chapter-head.reveal.visible h2{clip-path:inset(-16% -10% -22% -10%);transform:none}
 .chapter-head h2 .gld{background:linear-gradient(115deg,var(--gold-lt),#B47F30);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--gold-lt)}
 .lede{font-size:16px;color:var(--mut);max-width:40em;margin-top:14px}
 
 /* ========== 01 人群 ========== */
 .persona-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-bottom:66px}
 .persona{background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:24px;position:relative;overflow:hidden;transition:transform .45s var(--ease),box-shadow .45s,border-color .45s}
-.persona::before{content:"";position:absolute;top:0;left:24px;right:24px;height:2.5px;border-radius:2px;background:linear-gradient(90deg,var(--gold),var(--coral));transform:scaleX(0);transform-origin:left;transition:transform .5s var(--ease)}
-.persona:hover{transform:translateY(-6px);box-shadow:var(--shadow-2);border-color:rgba(220,178,106,.35)}
+.persona::before{content:"";position:absolute;top:0;left:24px;right:24px;height:2.5px;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--coral));transform:scaleX(0);transform-origin:left;transition:transform .5s var(--ease)}
+.persona:hover{transform:translateY(-6px);box-shadow:var(--shadow-2);border-color:color-mix(in srgb,var(--acc) 36%,transparent)}
 .persona:hover::before{transform:scaleX(1)}
 .persona .plate{padding:16px;margin-bottom:18px}
 .persona .plate img{width:100%;height:150px;object-fit:contain}
@@ -241,9 +267,9 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .b-card>.spot{content:"";position:absolute;inset:0;background:radial-gradient(240px circle at var(--mx) var(--my),rgba(220,178,106,.12),transparent 65%);opacity:0;transition:opacity .4s;pointer-events:none}
 .b-card:hover>.spot{opacity:1}
 .b-card::after{content:"";position:absolute;top:0;left:22px;right:22px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--gold),var(--coral));transform:scaleX(0);transform-origin:left;transition:transform .5s var(--ease)}
-.b-card:hover{transform:translateY(-5px);box-shadow:var(--shadow-2);border-color:rgba(220,178,106,.3)}
+.b-card:hover{transform:translateY(-5px);box-shadow:var(--shadow-2);border-color:color-mix(in srgb,var(--acc) 38%,transparent)}
 .b-card:hover::after{transform:scaleX(1)}
-.b-ico{width:52px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:25px;background:rgba(220,178,106,.1);color:var(--gold-lt);border:1px solid rgba(220,178,106,.22);margin-bottom:18px;transition:transform .4s var(--ease),background .4s,color .4s}
+.b-ico{width:52px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:25px;background:color-mix(in srgb,var(--acc) 10%,transparent);color:var(--acc);border:1px solid color-mix(in srgb,var(--acc) 26%,transparent);margin-bottom:18px;transition:transform .4s var(--ease),background .4s,color .4s}
 .b-card:hover .b-ico{transform:rotate(-6deg) scale(1.06);background:var(--coral);color:#fff;border-color:transparent}
 .b-card h3{font-size:17px;font-weight:700;margin-bottom:8px;color:var(--text)}
 .b-card p{font-size:13.8px;color:var(--mut);line-height:1.85}
@@ -267,12 +293,12 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 /* ========== 03 记忆 ========== */
 .mem-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:56px}
 .mem{background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:30px 26px;position:relative;transition:transform .4s var(--ease),box-shadow .4s}
-.mem::before{content:"";position:absolute;top:26px;bottom:26px;left:0;width:3.5px;border-radius:0 4px 4px 0;background:linear-gradient(to bottom,var(--gold),var(--coral));opacity:.9}
+.mem::before{content:"";position:absolute;top:26px;bottom:26px;left:0;width:3.5px;border-radius:0 4px 4px 0;background:linear-gradient(to bottom,var(--acc),var(--coral));opacity:.9}
 .mem:hover{transform:translateY(-5px);box-shadow:var(--shadow-2)}
 .mem-ico{width:48px;height:48px;border-radius:14px;background:rgba(220,178,106,.1);color:var(--gold-lt);display:flex;align-items:center;justify-content:center;font-size:23px;margin-bottom:16px;border:1px solid rgba(220,178,106,.2)}
 .mem h3{font-size:16px;font-weight:700;margin-bottom:8px;color:var(--text)}
 .mem p{font-size:13.4px;color:var(--mut);line-height:1.85}
-.mem .no{position:absolute;top:24px;right:24px;font-family:var(--serif);font-size:26px;font-weight:700;color:transparent;-webkit-text-stroke:1px rgba(220,178,106,.55)}
+.mem .no{position:absolute;top:24px;right:24px;font-family:var(--serif);font-size:26px;font-weight:700;color:transparent;-webkit-text-stroke:1px color-mix(in srgb,var(--acc) 55%,transparent)}
 .chat-demo{max-width:640px;margin:0 auto;background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-xl);padding:40px 36px 30px;box-shadow:var(--shadow-2);position:relative}
 .chat-demo::before{content:"";position:absolute;top:0;left:36px;right:36px;height:2.5px;border-radius:2px;background:linear-gradient(90deg,var(--gold),var(--coral),transparent)}
 .chat-title{text-align:center;font-family:var(--serif);font-size:17.5px;font-weight:600;color:var(--text);margin-bottom:28px;display:flex;align-items:center;justify-content:center;gap:14px}
@@ -322,15 +348,15 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .graph-points{list-style:none;display:grid;gap:8px;margin-top:8px}
 .graph-points li{display:flex;gap:18px;padding:20px 0;border-bottom:1px solid var(--line-2)}
 .graph-points li:last-child{border-bottom:none}
-.gp-no{font-family:var(--serif);font-size:15px;font-weight:700;color:var(--gold-lt);width:34px;flex-shrink:0;padding-top:2px}
+.gp-no{font-family:var(--serif);font-size:15px;font-weight:700;color:var(--acc);width:34px;flex-shrink:0;padding-top:2px}
 .graph-points b{display:block;font-size:16.5px;font-family:var(--serif);margin-bottom:5px;color:var(--text)}
 .graph-points p{font-size:13.8px;color:var(--mut)}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:78px}
 .stat{background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:32px 26px 26px;position:relative;overflow:hidden;transition:transform .4s var(--ease),box-shadow .4s}
-.stat::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--gold),transparent)}
+.stat::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--acc),transparent)}
 .stat:hover{transform:translateY(-4px);box-shadow:var(--shadow-2)}
 .stat .num{font-family:var(--serif);font-size:48px;font-weight:700;line-height:1;color:var(--text);display:flex;align-items:baseline;gap:5px}
-.stat .num small{font-size:16px;color:var(--gold-lt);font-weight:600}
+.stat .num small{font-size:16px;color:var(--acc);font-weight:600}
 .stat p{font-size:13px;color:var(--faint);margin-top:10px;letter-spacing:.04em}
 
 /* ========== 05 提醒 ========== */
@@ -361,8 +387,8 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .step-n{width:26px;height:26px;border-radius:9px;background:rgba(220,178,106,.12);color:var(--gold-lt);font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:3px;font-family:var(--serif)}
 .weather-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:28px}
 .wcard{background:var(--bg2);border:1px solid var(--line-2);border-radius:var(--r-md);padding:14px 12px;text-align:center;position:relative;overflow:hidden;transition:transform .45s var(--ease),box-shadow .45s,border-color .45s}
-.wcard::before{content:"";position:absolute;top:10px;left:12px;right:12px;height:1.5px;background:linear-gradient(90deg,var(--gold),transparent);opacity:0;transition:opacity .4s}
-.wcard:hover{transform:translateY(-6px) rotate(-1deg);box-shadow:var(--shadow-2);border-color:rgba(220,178,106,.35)}
+.wcard::before{content:"";position:absolute;top:10px;left:12px;right:12px;height:1.5px;background:linear-gradient(90deg,var(--acc),transparent);opacity:0;transition:opacity .4s}
+.wcard:hover{transform:translateY(-6px) rotate(-1deg);box-shadow:var(--shadow-2);border-color:color-mix(in srgb,var(--acc) 38%,transparent)}
 .wcard:hover::before{opacity:1}
 .wcard .plate{padding:10px;margin-bottom:10px}
 .wcard img{width:70px;height:70px;object-fit:contain;margin:0 auto}
@@ -374,7 +400,7 @@ section{scroll-margin-top:84px;position:relative;overflow:hidden}
 .badge{position:relative;overflow:hidden;background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-md);padding:14px 8px 14px;text-align:center;transition:transform .4s var(--ease),box-shadow .4s,border-color .4s}
 .badge::after{content:"";position:absolute;top:0;bottom:0;left:-70%;width:45%;background:linear-gradient(105deg,transparent,rgba(220,178,106,.16),transparent);transform:skewX(-20deg);transition:left .7s var(--ease)}
 .badge:hover::after{left:130%}
-.badge:hover{transform:translateY(-5px);box-shadow:var(--shadow-2);border-color:rgba(220,178,106,.35)}
+.badge:hover{transform:translateY(-5px);box-shadow:var(--shadow-2);border-color:color-mix(in srgb,var(--acc) 36%,transparent)}
 .badge .plate{padding:8px;margin-bottom:9px}
 .badge img{width:62px;height:62px;object-fit:contain;margin:0 auto;transition:transform .4s var(--ease)}
 .badge:hover img{transform:scale(1.1) rotate(5deg)}
@@ -573,6 +599,7 @@ footer a:hover{color:var(--gold-lt)}
   <div class="orb orb-2" data-parallax="-12"></div>
   <div class="orb orb-3" data-parallax="9"></div>
 </div>
+<div class="vignette" aria-hidden="true"></div>
 
 <!-- ================= 导航 ================= -->
 <nav class="nav" id="nav">
@@ -693,6 +720,7 @@ footer a:hover{color:var(--gold-lt)}
     <div class="chapter-head reveal">
       <div class="chapter-no">01</div>
       <div>
+        <span class="act-tag">第一幕 · 念</span>
         <span class="eyebrow">For You</span>
         <h2>写给心里装着某个人的人</h2>
         <p class="lede">不是不想关心，而是常常忘记、不知道时机、话到嘴边不知从何说起。TaWorld 想把关心，变回一件自然、松弛、<span class="gld">恰到好处</span>的小事。</p>
@@ -738,12 +766,13 @@ footer a:hover{color:var(--gold-lt)}
 </section>
 
 <!-- ================= 02 功能 Bento ================= -->
-<section class="section" id="features">
-  <span class="ghost" aria-hidden="true">护</span>
+<section class="section sc-gold" id="features">
+  <span class="ghost ghost-l" aria-hidden="true">护</span>
   <div class="wrap">
     <div class="chapter-head reveal">
       <div class="chapter-no">02</div>
       <div>
+        <span class="act-tag">第二幕 · 护</span>
         <span class="eyebrow">Capabilities</span>
         <h2>一位安静的守护者<br>能为你做的事</h2>
       </div>
@@ -804,14 +833,15 @@ footer a:hover{color:var(--gold-lt)}
 </section>
 
 <!-- ================= 03 记忆 ================= -->
-<section class="section" id="memory">
+<section class="section sc-lav" id="memory">
   <span class="ghost" aria-hidden="true">忆</span>
   <div class="wrap">
-    <div class="chapter-head reveal">
+    <div class="chapter-head head-center reveal">
       <div class="chapter-no">03</div>
       <div>
+        <span class="act-tag">第三幕 · 忆</span>
         <span class="eyebrow">Memory</span>
-        <h2>有记忆的 AI，<br>才是<span class="gld">真的懂你</span></h2>
+        <h2>有记忆的 AI，<span class="gld">才是真的懂你</span></h2>
         <p class="lede">不必每次都从零开始。TaWorld 参考人类记忆的分层方式：重要的事刻进长期记忆，日常对话留在情景记忆里，时间久了自动整理——像朋友一样，越处越懂。</p>
       </div>
     </div>
@@ -832,8 +862,17 @@ footer a:hover{color:var(--gold-lt)}
 </section>
 
 <!-- ================= 04 夜空图谱 ================= -->
-<section class="section" id="graph">
+<section class="section sc-blue" id="graph">
   <div class="wrap">
+    <div class="chapter-head head-center reveal">
+      <div class="chapter-no">04</div>
+      <div>
+        <span class="act-tag">第四幕 · 图</span>
+        <span class="eyebrow">Care Graph</span>
+        <h2>你的牵挂，一张温暖的<span class="gld">星座图</span></h2>
+        <p class="lede">城市、时间与天气，在一片夜空里各安其位——牵挂有了形状，也有了秩序。</p>
+      </div>
+    </div>
     <div class="graph-split">
       <div class="graph-wrap reveal" id="graphWrap">
         <div class="ring r1" aria-hidden="true"></div>
@@ -879,13 +918,6 @@ footer a:hover{color:var(--gold-lt)}
       </div>
 
       <div class="reveal d1">
-        <div class="chapter-head" style="margin-bottom:8px">
-          <div class="chapter-no">04</div>
-          <div>
-            <span class="eyebrow">Care Graph</span>
-            <h2 style="font-size:clamp(26px,3.2vw,38px)">你的牵挂，<br>一张温暖的<span class="gld">星座图</span></h2>
-          </div>
-        </div>
         <ul class="graph-points">
           <li><span class="gp-no">一</span><div><b>每个 Ta，都有自己的世界</b><p>城市、当地时间、天气与关系，同屏呈现——再也不会在凌晨三点发出一条消息。</p></div></li>
           <li><span class="gp-no">二</span><div><b>以你为原点的关系网络</b><p>恋人、家人、朋友，三种关系各自成环；支持关系编辑与全屏拖拽缩放。</p></div></li>
@@ -904,12 +936,13 @@ footer a:hover{color:var(--gold-lt)}
 </section>
 
 <!-- ================= 05 提醒闭环 & 天气 ================= -->
-<section class="section" id="reminders">
-  <span class="ghost" aria-hidden="true">醒</span>
+<section class="section sc-sakura" id="reminders">
+  <span class="ghost ghost-l" aria-hidden="true">醒</span>
   <div class="wrap">
     <div class="chapter-head reveal">
       <div class="chapter-no">05</div>
       <div>
+        <span class="act-tag">第五幕 · 醒</span>
         <span class="eyebrow">Gentle Reminders</span>
         <h2>主动，而不打扰</h2>
         <p class="lede">好的提醒不是多一条通知，而是少一条多余的通知。在 TaWorld 里，每一次提醒都有回应、有记录、有后续。</p>
@@ -956,6 +989,7 @@ footer a:hover{color:var(--gold-lt)}
       <div class="chapter-head reveal" style="margin-bottom:6px">
         <div class="chapter-no">06</div>
         <div>
+          <span class="act-tag">第六幕 · 礼</span>
           <span class="eyebrow">Moments &amp; Themes</span>
           <h2>让坚持关心，<br>成为一件有<span class="gld">成就感</span>的事</h2>
         </div>
@@ -1005,13 +1039,14 @@ footer a:hover{color:var(--gold-lt)}
 </section>
 
 <!-- ================= 07 隐私 ================= -->
-<section class="section" id="privacy">
+<section class="section sc-void" id="privacy">
   <div class="wrap">
     <div class="privacy reveal">
       <div class="glow" aria-hidden="true"></div><div class="glow2" aria-hidden="true"></div>
       <div class="chapter-head" style="margin-bottom:8px">
         <div class="chapter-no" style="-webkit-text-stroke-color:rgba(220,178,106,.6)">07</div>
         <div>
+          <span class="act-tag">第七幕 · 诺</span>
           <span class="eyebrow">Principles</span>
           <h2>人是连接的桥梁，<br>隐私是关怀的底线</h2>
           <p class="lede">TaWorld 永远不会代替你联系任何人，也永远不会把你的数据上传到任何服务器。AI 只负责提醒你、建议你、帮你记住——关心的行动，永远由你亲自完成。</p>
@@ -1037,11 +1072,12 @@ footer a:hover{color:var(--gold-lt)}
 </section>
 
 <!-- ================= 08 下载（夜） ================= -->
-<section class="section" id="download">
+<section class="section sc-ember" id="download">
   <div class="wrap">
     <div class="chapter-head reveal">
       <div class="chapter-no">08</div>
       <div>
+        <span class="act-tag">第八幕 · 启</span>
         <span class="eyebrow">Download</span>
         <h2>现在就开始，<br>好好关心 Ta</h2>
       </div>
