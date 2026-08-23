@@ -28,12 +28,14 @@ python -m http.server 8123
 
 ## 部署
 
+> 完整且最新的三端部署流程见 **[HANDOFF.md 第五节](HANDOFF.md)**。以下为摘要。
+
 ### 方式一：腾讯云 CloudBase 静态托管（推荐，大陆访问快）
 
-1. MCP 已接入 CloudBase（`cloudbase` 工具），登录并绑定环境后：
-   - `manageApps(action="deployApp", serviceName="taworld", framework="static", installCmd="", buildCmd="", filePath=<website 绝对路径>)`
-   - APK 上传到同一环境：`manageStorage(action="upload", localPath=<apk>, cloudPath="downloads/TaWorld-v0.1.1-arm64-v8a.apk")`，并把站点路由的 `/downloads/...` 指向该对象。
-2. 默认域名形如 `https://<name>-<envId>.webapps.tcloudbase.com`，大陆直连；绑定自定义域名需 ICP 备案。
+1. MCP `cloudbase` 工具已绑定环境 `cloud1-8grf0qgi8c6c0603`：
+   `manageApps(action="deployApp", serviceName="taworld", framework="static", installCmd="", buildCmd="", buildPath=".", filePath=<website 绝对路径>, ignore=["**/node_modules/**","**/.git/**","**/README.md"])`
+   —— APK 随部署目录一起上传（`downloads/` 相对路径直链），随后 `queryApps(getAppVersion)` 轮询到 SUCCESS。
+2. 默认域名 `https://taworld-cloud1-8grf0qgi8c6c0603.webapps.tcloudbase.com`，大陆直连；绑定自定义域名需 ICP 备案。
 
 ### 方式二：任意静态服务器 / 对象存储
 
@@ -41,7 +43,7 @@ python -m http.server 8123
 
 ### 方式三：GitHub Pages（海外/备用）
 
-把 `website/` 推到 `gh-pages` 分支或仓库 `/docs`；大陆访问 github.io 不稳定，仅作备用镜像。
+gh-pages 分支已配置为发布源；大陆访问 github.io 不稳定，仅作镜像。推送方式：worktree 检出 gh-pages → 拷贝 `index.html`+`assets/` → **sed 把 `downloads/...apk` 链接改写为 GitHub Release 附件地址**（仓库不放 56MB APK）→ push。
 
 ## 更新版本时
 
