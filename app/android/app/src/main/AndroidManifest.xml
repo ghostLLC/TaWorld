@@ -19,6 +19,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
     <application
+        android:allowBackup="false"
         android:label="TaWorld-想念"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
@@ -73,6 +74,7 @@
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false" />
+        <receiver android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

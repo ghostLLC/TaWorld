@@ -4,6 +4,7 @@
 library;
 
 import '../../data/local/database_helper.dart';
+import '../care_activity_service.dart';
 import '../../data/models/user.dart';
 
 abstract final class LocalUserService {
@@ -36,19 +37,19 @@ abstract final class LocalUserService {
   /// 更新昵称
   static Future<void> updateNickname(String nickname) async {
     final db = await DatabaseHelper.database;
-    await db.update(
-      'users',
-      {'nickname': nickname, 'updated_at': DateTime.now().toIso8601String()},
-    );
+    await db.update('users', {
+      'nickname': nickname,
+      'updated_at': DateTime.now().toIso8601String(),
+    });
   }
 
   /// 更新头像（本地文件路径）
   static Future<void> updateAvatar(String filePath) async {
     final db = await DatabaseHelper.database;
-    await db.update(
-      'users',
-      {'avatar_path': filePath, 'updated_at': DateTime.now().toIso8601String()},
-    );
+    await db.update('users', {
+      'avatar_path': filePath,
+      'updated_at': DateTime.now().toIso8601String(),
+    });
   }
 
   /// 检查是否已创建用户
@@ -68,31 +69,14 @@ abstract final class LocalUserService {
     );
     final partnerCount = partnerResult.first['cnt'] as int? ?? 0;
 
-    // 总提醒次数
+    // 只有用户明确确认的记录才计入关心次数。
     final reminderResult = await db.rawQuery(
-      "SELECT COUNT(*) as cnt FROM reminder_logs WHERE status IN ('sent', 'confirmed')",
+      "SELECT COUNT(*) as cnt FROM reminder_logs WHERE status = 'confirmed'",
     );
     final reminderCount = reminderResult.first['cnt'] as int? ?? 0;
 
-    // 连续活跃天数（从今天往回数，最多30天）
-    int streakDays = 0;
-    final now = DateTime.now();
-    for (int i = 0; i < 30; i++) {
-      final day = now.subtract(Duration(days: i));
-      final dayStart = DateTime(day.year, day.month, day.day);
-      final dayEnd = dayStart.add(const Duration(days: 1));
-      final result = await db.rawQuery(
-        'SELECT COUNT(*) as cnt FROM reminder_logs '
-        'WHERE triggered_at >= ? AND triggered_at < ?',
-        [dayStart.toIso8601String(), dayEnd.toIso8601String()],
-      );
-      final count = result.first['cnt'] as int? ?? 0;
-      if (count > 0) {
-        streakDays++;
-      } else {
-        break;
-      }
-    }
+    // 按用户本地日期计算连续确认天数。
+    final streakDays = await CareActivityService.streakDays();
 
     return {
       'partnerCount': partnerCount,

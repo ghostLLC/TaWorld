@@ -27,21 +27,41 @@ class _PartnersLocalSnapshot {
   const _PartnersLocalSnapshot({
     required this.partners,
     required this.configsByPartner,
+    this.error,
   });
 
   final List<Partner> partners;
   final Map<String, List<ReminderConfig>> configsByPartner;
+  final String? error;
 }
 
 Future<_PartnersLocalSnapshot> _loadPartnersLocalSnapshot() async {
-  final results = await Future.wait([
-    PartnerService.getAll(),
-    LocalReminderService.getAllConfigs(),
-  ]);
-  return _PartnersLocalSnapshot(
-    partners: results[0] as List<Partner>,
-    configsByPartner: results[1] as Map<String, List<ReminderConfig>>,
-  );
+  List<Partner> partners;
+  try {
+    partners = await PartnerService.getAll();
+  } catch (_) {
+    return const _PartnersLocalSnapshot(
+      partners: [],
+      configsByPartner: {},
+      error: '资料暂时无法读取，请重试。现有数据没有被清除。',
+    );
+  }
+  try {
+    final configs = await LocalReminderService.getAllConfigs();
+    return _PartnersLocalSnapshot(
+      partners: partners,
+      configsByPartner: configs,
+      error: configs.values.expand((c) => c).any((c) => !c.isValid)
+          ? '部分提醒配置需要修复，人物资料仍可正常使用。'
+          : null,
+    );
+  } catch (_) {
+    return _PartnersLocalSnapshot(
+      partners: partners,
+      configsByPartner: const {},
+      error: '提醒暂时无法读取，人物资料仍可正常使用。',
+    );
+  }
 }
 
 class HomeScreen extends StatefulWidget {
@@ -181,6 +201,7 @@ class _PartnersTabState extends State<_PartnersTab>
   final Set<String> _weatherLoadingIds = {};
   _PartnersViewMode _viewMode = _PartnersViewMode.list;
   int _loadGeneration = 0;
+  String? _loadError;
 
   @override
   void initState() {
@@ -214,7 +235,10 @@ class _PartnersTabState extends State<_PartnersTab>
       if (!mounted || generation != _loadGeneration) return;
       final partnerIds = snapshot.partners.map((partner) => partner.id).toSet();
       setState(() {
-        _partners = snapshot.partners;
+        if (snapshot.error == null || snapshot.partners.isNotEmpty) {
+          _partners = snapshot.partners;
+        }
+        _loadError = snapshot.error;
         _configsByPartner = snapshot.configsByPartner;
         _weatherByPartner.removeWhere((id, _) => !partnerIds.contains(id));
         _weatherLoadingIds.clear();
@@ -231,7 +255,10 @@ class _PartnersTabState extends State<_PartnersTab>
       }
     } catch (_) {
       if (mounted && generation == _loadGeneration) {
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _loadError = '刷新失败，已保留上次显示的资料。请重试。';
+        });
       }
     }
   }
@@ -317,6 +344,25 @@ class _PartnersTabState extends State<_PartnersTab>
       return const SafeArea(child: TaLoading(message: '加载中...'));
     }
 
+    if (_partners.isEmpty && _loadError != null) {
+      return SafeArea(
+        child: Center(
+          child: Padding(
+            padding: TaSpacing.page,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_loadError!, textAlign: TextAlign.center),
+                TextButton(
+                  onPressed: () => _loadAll(showLoading: true),
+                  child: const Text('重新加载'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     if (_partners.isEmpty) {
       return SafeArea(
         child: TaEmptyState(
@@ -392,6 +438,16 @@ class _PartnersTabState extends State<_PartnersTab>
               ),
             ),
           ),
+          if (_loadError != null)
+            Padding(
+              padding: TaSpacing.page,
+              child: Text(
+                _loadError!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            ),
           Expanded(
             child: _viewMode == _PartnersViewMode.graph
                 ? CareGraphView(
@@ -536,7 +592,7 @@ class _PartnerCard extends StatelessWidget {
     final subtitleParts = <String>[];
     if (hasCity) subtitleParts.add(partner.city!);
     subtitleParts.add(partner.typeLabel);
-    subtitleParts.add('已陪伴 $days 天');
+    subtitleParts.add('已记录 $days 天');
 
     // 构建天气时间条
     final infoParts = <String>[];
@@ -1020,13 +1076,13 @@ class _ProfileTabState extends State<_ProfileTab>
                       _StatItem(
                         icon: Icons.check_circle_outline_rounded,
                         value: '$totalReminders',
-                        label: '关怀次数',
+                        label: '已确认关心',
                       ),
                       const SizedBox(width: TaSpacing.md),
                       _StatItem(
                         icon: Icons.local_fire_department_rounded,
                         value: '$streakDays',
-                        label: '连续天数',
+                        label: '连续确认天数',
                       ),
                     ],
                   ),

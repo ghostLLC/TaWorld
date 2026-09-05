@@ -54,11 +54,14 @@ class ReminderDeletionSelection {
 }
 
 abstract final class ReminderToolPlanner {
-  static const _categories = {'sleep', 'meal', 'weather'};
+  static const _categories = {'sleep', 'meal', 'weather', 'custom'};
   static const _timeBases = {'user', 'partner'};
   static const _weatherModes = {'daily_digest', 'weather_change'};
 
-  static ReminderToolParseResult parse(Map<String, dynamic> arguments) {
+  static ReminderToolParseResult parse(
+    Map<String, dynamic> arguments, {
+    DateTime? now,
+  }) {
     final requestedSubject = (arguments['subject'] as String? ?? '').trim();
     final requestedName = (arguments['partner_name'] as String? ?? '').trim();
     final isSelf =
@@ -98,6 +101,64 @@ abstract final class ReminderToolPlanner {
 
     final timezoneId = _trimmedString(arguments['timezone_id']);
     final customMessage = _trimmedString(arguments['message']);
+    if (category == 'custom') {
+      if (customMessage == null) {
+        return ReminderToolParseResult.failure('请说明要提醒的事');
+      }
+      final current = now ?? DateTime.now();
+      final relative = arguments['relative_minutes'];
+      final rawAt = _trimmedString(arguments['scheduled_at']);
+      DateTime? at;
+      if (relative != null) {
+        if (relative is! num ||
+            relative <= 0 ||
+            relative > 525600 ||
+            relative != relative.roundToDouble()) {
+          return ReminderToolParseResult.failure('相对时间必须是 1 到 525600 之间的整数分钟');
+        }
+        at = current.add(Duration(minutes: relative.toInt()));
+      } else if (rawAt != null) {
+        if (!RegExp(r'(Z|[+-]\d{2}:\d{2})$').hasMatch(rawAt)) {
+          return ReminderToolParseResult.failure('单次提醒日期必须包含时区偏移');
+        }
+        at = DateTime.tryParse(rawAt);
+        if (at == null) return ReminderToolParseResult.failure('单次提醒日期无效');
+      }
+      if (at != null && !at.isAfter(current)) {
+        return ReminderToolParseResult.failure('提醒时间已经过去');
+      }
+      final time = _clock(arguments['time']);
+      if (at == null && time == null) {
+        return ReminderToolParseResult.failure('缺少提醒时间');
+      }
+      if (at == null && arguments['repeat_daily'] == false) {
+        return ReminderToolParseResult.failure('单次提醒请提供具体日期 scheduled_at');
+      }
+      final days = arguments['weekdays'];
+      if (days != null &&
+          (days is! List ||
+              days.isEmpty ||
+              days.any((d) => d is! int || d < 1 || d > 7))) {
+        return ReminderToolParseResult.failure('星期必须是 1 到 7，至少选一天');
+      }
+      return ReminderToolParseResult.success(
+        ReminderToolPlan(
+          partnerName: partnerName,
+          category: category,
+          timezoneMode: at != null ? 'user' : timezoneMode,
+          timezoneId: at != null ? null : timezoneId,
+          displayTime: at != null ? at.toLocal().toIso8601String() : time,
+          subjectKind: isSelf ? 'user' : 'partner',
+          config: {
+            'message': customMessage,
+            'repeat_daily': at == null,
+            if (at != null) 'scheduled_at': at.toUtc().toIso8601String(),
+            'target_time': ?time,
+            if (at == null && days != null) 'weekdays': days,
+          },
+        ),
+      );
+    }
 
     if (category == 'weather' && weatherMode == 'weather_change') {
       final start = _clock(arguments['monitor_start'] ?? '07:00');
@@ -171,7 +232,7 @@ abstract final class ReminderToolPlanner {
         'target_sleep_time': time,
         'advance_minutes': _boundedInt(
           arguments['advance_minutes'],
-          fallback: 30,
+          fallback: 0,
           min: 0,
           max: 720,
         ),
@@ -183,7 +244,7 @@ abstract final class ReminderToolPlanner {
             'target_time': time,
             'advance_minutes': _boundedInt(
               arguments['advance_minutes'],
-              fallback: 15,
+              fallback: 0,
               min: 0,
               max: 720,
             ),

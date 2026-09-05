@@ -37,10 +37,30 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
   CitySelection? _selectedCity;
 
   static const _types = <_PartnerType>[
-    _PartnerType('couple', '\u2764\uFE0F', '情侣', 'assets/images/type_couple.png'),
-    _PartnerType('partner', '\uD83D\uDC91', '伴侣', 'assets/images/type_couple.png'),
-    _PartnerType('family', '\uD83C\uDFE0', '家人', 'assets/images/type_family.png'),
-    _PartnerType('friend', '\uD83E\uDD1D', '朋友', 'assets/images/type_friend.png'),
+    _PartnerType(
+      'couple',
+      '\u2764\uFE0F',
+      '情侣',
+      'assets/images/type_couple.png',
+    ),
+    _PartnerType(
+      'partner',
+      '\uD83D\uDC91',
+      '伴侣',
+      'assets/images/type_couple.png',
+    ),
+    _PartnerType(
+      'family',
+      '\uD83C\uDFE0',
+      '家人',
+      'assets/images/type_family.png',
+    ),
+    _PartnerType(
+      'friend',
+      '\uD83E\uDD1D',
+      '朋友',
+      'assets/images/type_friend.png',
+    ),
   ];
 
   @override
@@ -99,16 +119,24 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
       // 4. 反向地理编码：经纬度 → 地址
       try {
         final placemarks = await placemarkFromCoordinates(
-          position.latitude, position.longitude,
+          position.latitude,
+          position.longitude,
         );
         if (placemarks.isNotEmpty && mounted) {
           final p = placemarks.first;
           final addr = p.subLocality?.isNotEmpty == true
               ? '${p.locality ?? ''} ${p.subLocality}'
-              : p.locality ?? p.administrativeArea ?? p.subAdministrativeArea ?? '';
-          setState(() => _address = addr.trim().isNotEmpty ? addr.trim() : null);
+              : p.locality ??
+                    p.administrativeArea ??
+                    p.subAdministrativeArea ??
+                    '';
+          setState(
+            () => _address = addr.trim().isNotEmpty ? addr.trim() : null,
+          );
 
-          if (_selectedCity == null && p.locality != null && p.locality!.isNotEmpty) {
+          if (_selectedCity == null &&
+              p.locality != null &&
+              p.locality!.isNotEmpty) {
             setState(() {
               _selectedCity = CitySelection(
                 country: p.country ?? '中国',
@@ -245,54 +273,34 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
   // ============================================================
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_saving || !_formKey.currentState!.validate()) return;
 
     setState(() => _saving = true);
 
     try {
-      // 如果没有手动获取位置，尝试自动获取（静默，带超时）
-      Position? position = _position;
-      if (position == null) {
-        try {
-          final serviceOk = await Geolocator.isLocationServiceEnabled();
-          if (serviceOk) {
-            final perm = await Geolocator.checkPermission();
-            if (perm == LocationPermission.whileInUse ||
-                perm == LocationPermission.always) {
-              position = await Geolocator.getCurrentPosition(
-                locationSettings: const LocationSettings(
-                    accuracy: LocationAccuracy.medium,
-                    timeLimit: Duration(seconds: 15)),
-              );
-            }
-          }
-        } catch (_) {
-          // 位置获取失败/超时，不影响保存
-        }
-      }
-
       await PartnerService.add(
         nickname: _nicknameController.text.trim(),
         type: _selectedType,
         note: _noteController.text.trim().isNotEmpty
             ? _noteController.text.trim()
             : null,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
+        latitude: _selectedCity == null ? _position?.latitude : null,
+        longitude: _selectedCity == null ? _position?.longitude : null,
         city: _selectedCity?.city,
+        country: _selectedCity?.country,
       );
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('添加成功')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('添加成功')));
       context.pop(true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('添加失败，请重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('添加失败，请重试')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -307,10 +315,7 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('添加关心的人'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('添加关心的人'), centerTitle: true),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -422,8 +427,7 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
                       ? const SizedBox(
                           width: 16,
                           height: 16,
-                          child:
-                              CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.my_location_rounded),
                   label: Text(_fetchingLocation ? '获取中...' : '获取我的位置'),
@@ -447,8 +451,9 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
                   vertical: TaSpacing.sm,
                 ),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest
-                      .withValues(alpha: 0.3),
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.3,
+                  ),
                   borderRadius: TaRadius.borderXs,
                   border: Border.all(
                     color: theme.colorScheme.outline.withValues(alpha: 0.3),
@@ -456,11 +461,13 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.location_city_rounded,
-                        size: 20,
-                        color: _selectedCity != null
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurfaceVariant),
+                    Icon(
+                      Icons.location_city_rounded,
+                      size: 20,
+                      color: _selectedCity != null
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
                     const SizedBox(width: TaSpacing.xs),
                     Expanded(
                       child: Text(
@@ -477,14 +484,18 @@ class _AddPartnerScreenState extends State<AddPartnerScreen> {
                     if (_selectedCity != null)
                       GestureDetector(
                         onTap: () => setState(() => _selectedCity = null),
-                        child: Icon(Icons.close_rounded,
-                            size: 18,
-                            color: theme.colorScheme.onSurfaceVariant),
+                        child: Icon(
+                          Icons.close_rounded,
+                          size: 18,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     const SizedBox(width: TaSpacing.xs),
-                    Icon(Icons.chevron_right_rounded,
-                        size: 20,
-                        color: theme.colorScheme.onSurfaceVariant),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      size: 20,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ],
                 ),
               ),
@@ -561,11 +572,7 @@ class _TypeCard extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset(
-              type.asset,
-              width: 48,
-              height: 48,
-            ),
+            Image.asset(type.asset, width: 48, height: 48),
             const SizedBox(height: TaSpacing.xxs),
             Text(
               type.label,

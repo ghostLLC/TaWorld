@@ -4,6 +4,7 @@ library;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../data/models/reminder_config.dart';
+import 'notification_identity.dart';
 
 /// One notification and its corresponding pre-created log.
 class ReminderOccurrence {
@@ -38,7 +39,9 @@ abstract final class ReminderScheduleCalculator {
     String? partnerTimeZoneId,
     int occurrenceCount = 7,
   }) {
-    if (occurrenceCount <= 0) return const [];
+    if (occurrenceCount <= 0 || !config.enabled || !config.isValid) {
+      return const [];
+    }
 
     final targetLocation = _targetLocation(
       config: config,
@@ -69,7 +72,13 @@ abstract final class ReminderScheduleCalculator {
         targetLocation: targetLocation,
         occurrenceCount: occurrenceCount,
       ),
-      'custom' => const [],
+      'custom' => _buildCustom(
+        config: config,
+        partnerName: partnerName,
+        now: now,
+        targetLocation: targetLocation,
+        occurrenceCount: occurrenceCount,
+      ),
       _ => const [],
     };
   }
@@ -203,7 +212,25 @@ abstract final class ReminderScheduleCalculator {
     }
 
     final occurrences = <ReminderOccurrence>[];
-    for (var index = 0; index < occurrenceCount; index++) {
+    final weekdays = config.config['weekdays'];
+    final allowedDays = weekdays is List
+        ? weekdays.whereType<int>().where((d) => d >= 1 && d <= 7).toSet()
+        : null;
+    if (allowedDays != null && allowedDays.isEmpty) return const [];
+    for (
+      var index = 0;
+      occurrences.length < occurrenceCount && index < 366;
+      index++
+    ) {
+      final targetDate = tz.TZDateTime(
+        targetLocation,
+        targetNow.year,
+        targetNow.month,
+        targetNow.day + firstTargetOffset + index,
+      );
+      if (allowedDays != null && !allowedDays.contains(targetDate.weekday)) {
+        continue;
+      }
       final scheduled = _scheduledForCalendarOffset(
         targetLocation: targetLocation,
         targetNow: targetNow,
@@ -212,7 +239,11 @@ abstract final class ReminderScheduleCalculator {
         targetTime: targetTime,
         advanceMinutes: advanceMinutes,
       );
-      final notificationId = _uniqueNotificationId(configKey, index, ids);
+      final notificationId = _uniqueNotificationId(
+        configKey,
+        scheduled.millisecondsSinceEpoch,
+        ids,
+      );
       occurrences.add(
         ReminderOccurrence(
           notificationId: notificationId,
@@ -224,6 +255,74 @@ abstract final class ReminderScheduleCalculator {
       );
     }
     return occurrences;
+  }
+
+  static List<ReminderOccurrence> _buildCustom({
+    required ReminderConfig config,
+    required String partnerName,
+    required tz.TZDateTime now,
+    required tz.Location targetLocation,
+    required int occurrenceCount,
+  }) {
+    final message = config.config['message'];
+    if (message is! String || message.trim().isEmpty) return const [];
+    final absolute = config.config['scheduled_at'];
+    final isOnce = absolute != null || config.config['repeat_daily'] == false;
+    if (isOnce) {
+      DateTime? at = absolute is String ? DateTime.tryParse(absolute) : null;
+      if (absolute == null) {
+        // Old single reminders are anchored to creation, never moved to tomorrow
+        // on every app launch.
+        final time = _parseTime(config.config['target_time']);
+        if (time == null) return const [];
+        final created = tz.TZDateTime.from(config.createdAt, targetLocation);
+        var target = tz.TZDateTime(
+          targetLocation,
+          created.year,
+          created.month,
+          created.day,
+          time.hour,
+          time.minute,
+        );
+        if (!target.isAfter(created)) {
+          target = tz.TZDateTime(
+            targetLocation,
+            created.year,
+            created.month,
+            created.day + 1,
+            time.hour,
+            time.minute,
+          );
+        }
+        at = target;
+      }
+      if (at == null || !at.isAfter(now)) return const [];
+      final scheduled = tz.TZDateTime.from(at, now.location);
+      return [
+        ReminderOccurrence(
+          notificationId: notificationIdFor(
+            '${config.id}:${scheduled.millisecondsSinceEpoch}',
+          ),
+          title: config.isSelfReminder ? '你的提醒' : '关于$partnerName的提醒',
+          body: message.trim(),
+          payload: 'configId:${config.id}',
+          scheduledTime: scheduled,
+        ),
+      ];
+    }
+    final time = _parseTime(config.config['target_time']);
+    if (time == null) return const [];
+    return _buildDaily(
+      configKey: config.id,
+      title: config.isSelfReminder ? '你的提醒' : '关于$partnerName的提醒',
+      body: message.trim(),
+      config: config,
+      now: now,
+      targetLocation: targetLocation,
+      targetTime: time,
+      advanceMinutes: 0,
+      occurrenceCount: occurrenceCount,
+    );
   }
 
   static tz.TZDateTime _scheduledForCalendarOffset({
@@ -304,9 +403,7 @@ abstract final class ReminderScheduleCalculator {
   /// Keep the existing config-key/hash plus day-offset ID strategy, while
   /// ensuring the result is always a positive signed 32-bit value.
   static int _baseNotificationId(String configKey, int dayOffset) {
-    final raw = configKey.hashCode ^ (dayOffset * 1000);
-    final id = raw.abs() % _maxNotificationId;
-    return id == 0 ? 1 : id;
+    return notificationIdFor('$configKey@$dayOffset');
   }
 }
 

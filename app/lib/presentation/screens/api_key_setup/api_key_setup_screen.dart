@@ -9,6 +9,7 @@ import 'package:dio/dio.dart';
 import '../../../app/design_tokens.dart';
 import '../../widgets/widgets.dart';
 import '../../../services/ai_service.dart';
+import '../../../services/ai_model_catalog.dart';
 
 class ApiKeySetupScreen extends StatefulWidget {
   const ApiKeySetupScreen({super.key});
@@ -22,6 +23,7 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   bool _aiConfigured = false;
   String? _aiTestResult;
   bool _aiTesting = false;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -36,7 +38,14 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   }
 
   Future<void> _loadKeys() async {
-    final aiKey = await AiService.getApiKey();
+    String? aiKey;
+    try {
+      aiKey = await AiService.getApiKey();
+    } catch (_) {
+      if (mounted) setState(() => _aiTestResult = '密钥暂时无法读取，请重新输入或稍后重试');
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _aiConfigured = aiKey != null && aiKey.isNotEmpty;
       if (_aiConfigured) {
@@ -46,23 +55,32 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   }
 
   Future<void> _saveAiKey() async {
+    if (_saving) return;
     final key = _aiKeyController.text.trim();
     if (key.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请输入 API Key')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请输入 API Key')));
       return;
     }
-    await AiService.setApiKey(key);
-    setState(() => _aiConfigured = true);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('DeepSeek API Key 已保存，即将返回...')),
-    );
-    // 2 秒后自动返回上一页
-    await Future.delayed(const Duration(seconds: 2));
-    if (!mounted) return;
-    context.pop(true);
+    setState(() => _saving = true);
+    try {
+      await AiService.setApiKey(key);
+      if (!mounted) return;
+      setState(() => _aiConfigured = true);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('API Key 已安全保存')));
+      context.pop(true);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('密钥未能安全保存，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Future<void> _testAiKey() async {
@@ -73,7 +91,12 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
       _aiTestResult = null;
     });
     try {
-      final dio = Dio();
+      final dio = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 40),
+        ),
+      );
       final response = await dio.post(
         'https://api.deepseek.com/v1/chat/completions',
         options: Options(
@@ -83,20 +106,35 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
           },
         ),
         data: {
-          'model': 'deepseek-chat',
+          'model': AiModelCatalog.primary,
           'max_tokens': 5,
           'messages': [
             {'role': 'user', 'content': 'Hi'},
           ],
         },
       );
+      if (!mounted) return;
       setState(() {
-        _aiTestResult = response.statusCode == 200 ? '连接成功' : '连接失败';
+        _aiTestResult = response.statusCode == 200
+            ? '主对话模型连接成功；图片模型需单独发送图片验证'
+            : '连接失败';
       });
-    } catch (e) {
-      setState(() => _aiTestResult = '连接失败：${e.toString().substring(0, e.toString().length.clamp(0, 50))}');
+    } on DioException catch (error) {
+      if (!mounted) return;
+      final status = error.response?.statusCode;
+      setState(
+        () => _aiTestResult = status == 401 || status == 403
+            ? '密钥无效或无权限'
+            : status == 429
+            ? '额度不足或请求过多'
+            : status == 404
+            ? '当前账号不支持 ${AiModelCatalog.primary}'
+            : '网络请求未完成，请重试',
+      );
+    } catch (_) {
+      if (mounted) setState(() => _aiTestResult = '测试未完成，请稍后重试');
     } finally {
-      setState(() => _aiTesting = false);
+      if (mounted) setState(() => _aiTesting = false);
     }
   }
 
@@ -136,8 +174,11 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.psychology_rounded,
-                            color: theme.colorScheme.primary, size: 24),
+                        Icon(
+                          Icons.psychology_rounded,
+                          color: theme.colorScheme.primary,
+                          size: 24,
+                        ),
                         const SizedBox(width: TaSpacing.xs),
                         Expanded(
                           child: Column(
@@ -199,10 +240,7 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                         ),
                         const SizedBox(width: TaSpacing.sm),
                         Expanded(
-                          child: TaButton(
-                            onPressed: _saveAiKey,
-                            text: '保存',
-                          ),
+                          child: TaButton(onPressed: _saveAiKey, text: '保存'),
                         ),
                       ],
                     ),

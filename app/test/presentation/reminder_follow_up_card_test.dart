@@ -31,9 +31,9 @@ void main() {
       ),
     );
 
-    expect(find.text('这条提醒处理好了吗？'), findsOneWidget);
+    expect(find.text('这件事还需要提醒吗？'), findsOneWidget);
     expect(find.text('提醒小乐带伞'), findsOneWidget);
-    expect(find.text('已经处理'), findsOneWidget);
+    expect(find.text('关心过了'), findsOneWidget);
     expect(find.text('5分钟后'), findsOneWidget);
     expect(find.text('已过时'), findsOneWidget);
 

@@ -1,19 +1,16 @@
-/// TaWorld 提醒调度器
-///
-/// 负责根据用户配置的提醒规则，使用 flutter_local_notifications
-/// 的 zonedSchedule 精确定时调度通知。
-///
-/// 调度策略：
-/// - sleep 提醒：每天在 target_sleep_time - advance_minutes 触发
-/// - meal 提醒：每天在各 meal.target_time - advance_minutes 触发
-/// - weather 提醒：每天早上 8:00 触发一次天气关注提醒
-/// - custom 提醒：暂不支持自动调度（用户手动触发）
-///
-/// 通知 ID 策略：使用 configId.hashCode XOR 时间偏移量，确保唯一性。
+/// Reconciles future reminder plans without removing visible notifications.
+/// Stable IDs identify each actual instant. Android publication, buttons and
+/// reboot restoration are owned by the local notification plugin.
+/// Custom reminders support one fixed instant or daily/weekday wall times.
 library;
 
+import 'dart:io';
+
 import 'dart:async';
-import 'dart:developer' as dev;
+import 'dart:convert';
+import '../data/local/database_helper.dart';
+import 'notification_ledger.dart';
+import 'native_notification_bridge.dart';
 
 import 'package:timezone/timezone.dart' as tz;
 
@@ -116,33 +113,216 @@ abstract final class ReminderScheduler {
   /// 初始化：调度所有启用的提醒
   ///
   /// 在 App 启动时调用，读取所有 enabled=1 的配置并调度。
-  static Future<void> scheduleAll() async {
+  static Future<void>? _inFlight;
+  static bool _rerun = false;
+
+  static Future<void> scheduleAll() {
+    if (_inFlight != null) {
+      _rerun = true;
+      return _inFlight!;
+    }
+    return _inFlight = (() async {
+      do {
+        _rerun = false;
+        await _synchronize();
+      } while (_rerun);
+    })().whenComplete(() => _inFlight = null);
+  }
+
+  static Future<void> _synchronize() async {
     if (!TimezoneService.isInitialized || !NotificationService.isInitialized) {
-      dev.log('跳过提醒调度：设备时区或通知服务尚未初始化', name: 'TaWorld');
       return;
     }
-
-    final executor = ReminderScheduleBatchExecutor<_PlannedReminder>(
-      buildPlan: _buildSchedulePlan,
-      cancelAll: NotificationService.cancelAll,
-      schedule: (planned) => NotificationService.schedule(
-        id: planned.occurrence.notificationId,
-        title: planned.occurrence.title,
-        body: planned.occurrence.body,
-        scheduledTime: planned.occurrence.scheduledTime,
-        payload: 'occurrenceId:${planned.occurrenceId}',
-      ),
-    );
-    final plan = await executor.execute();
-
-    // Write logs only after the complete notification plan succeeds. This
-    // prevents a partial first attempt from duplicating logs on retry.
-    for (final planned in plan) {
-      await LocalReminderService.createScheduledLog(
-        configId: planned.config.id,
-        partnerId: planned.config.partnerId,
-        message: planned.occurrence.body,
-        scheduledTime: planned.occurrence.scheduledTime,
+    final db = await DatabaseHelper.database;
+    final owner = '$pid:${DatabaseHelper.newId()}';
+    final now = DateTime.now().toUtc();
+    final waitingSince = DateTime.now();
+    var acquired = false;
+    while (!acquired) {
+      final now = DateTime.now().toUtc();
+      acquired = await db.transaction((tx) async {
+        final rows = await tx.query(
+          'runtime_locks',
+          where: 'name = ?',
+          whereArgs: ['reminder_schedule'],
+        );
+        if (rows.isNotEmpty) {
+          final row = rows.single;
+          final holder = int.tryParse(
+            (row['owner'] as String).split(':').first,
+          );
+          final expires = DateTime.tryParse(row['expires_at'] as String);
+          // Android workers and UI isolates share the app UID. A missing process
+          // cannot own an active schedule; old unqualified development leases
+          // also cannot survive an application upgrade.
+          final abandoned =
+              holder == null ||
+              (Platform.isAndroid && !Directory('/proc/$holder').existsSync());
+          if (!abandoned && expires != null && expires.isAfter(now)) {
+            return false;
+          }
+          await tx.delete(
+            'runtime_locks',
+            where: 'name = ?',
+            whereArgs: ['reminder_schedule'],
+          );
+        }
+        await tx.insert('runtime_locks', {
+          'name': 'reminder_schedule',
+          'owner': owner,
+          'expires_at': now.add(const Duration(minutes: 2)).toIso8601String(),
+        });
+        return true;
+      });
+      if (!acquired) {
+        if (DateTime.now().difference(waitingSince) >
+            const Duration(minutes: 2)) {
+          throw StateError('提醒正在由另一任务更新，请稍后重试');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }
+    final renewal = Timer.periodic(const Duration(seconds: 30), (_) {
+      db
+          .update(
+            'runtime_locks',
+            {
+              'expires_at': DateTime.now()
+                  .toUtc()
+                  .add(const Duration(minutes: 2))
+                  .toIso8601String(),
+            },
+            where: 'name = ? AND owner = ?',
+            whereArgs: ['reminder_schedule', owner],
+          )
+          .catchError((_) => 0);
+    });
+    try {
+      await NotificationLedger.consumeNativeEvents();
+      if (!await NotificationService.pushEnabled()) {
+        await NotificationService.cancelAll();
+        return;
+      }
+      final plan = await _buildSchedulePlan();
+      final desired = plan.map((p) => p.occurrence.notificationId).toSet();
+      final native = await NativeNotificationBridge.records('pending');
+      if (native != null) {
+        // Only pending legacy requests are retired; visible old notifications stay.
+        await NotificationService.retireLegacyPending();
+        for (final row in native.where((r) => r['kind'] == 'snooze')) {
+          await NotificationLedger.rememberSchedule(
+            id: row['id'] as int,
+            title: row['title'] as String,
+            body: row['body'] as String,
+            at: DateTime.fromMillisecondsSinceEpoch(
+              row['at'] as int,
+              isUtc: true,
+            ),
+            payload: row['payload'] as String?,
+            kind: 'snooze',
+          );
+        }
+      }
+      final pending = (await NotificationService.getPending())
+          .map((p) => p.id)
+          .toSet();
+      final registry = await db.query('scheduled_notifications');
+      final registryById = {
+        for (final row in registry) row['notification_id'] as int: row,
+      };
+      // Publish additions before retiring obsolete future instances. On failure
+      // existing schedules remain available and a retry is idempotent.
+      for (final planned in plan) {
+        final occurrence = planned.occurrence;
+        final payload = 'occurrenceId:${planned.occurrenceId}';
+        final fingerprint = NotificationLedger.fingerprint(
+          title: occurrence.title,
+          body: occurrence.body,
+          at: occurrence.scheduledTime,
+          payload: payload,
+        );
+        final previous = registryById[occurrence.notificationId];
+        if (!pending.contains(occurrence.notificationId) ||
+            previous?['fingerprint'] != fingerprint) {
+          await NotificationService.schedule(
+            id: occurrence.notificationId,
+            title: occurrence.title,
+            body: occurrence.body,
+            scheduledTime: occurrence.scheduledTime,
+            payload: payload,
+          );
+        }
+        await LocalReminderService.createScheduledLog(
+          configId: planned.config.id,
+          partnerId: planned.config.partnerId,
+          message: occurrence.body,
+          scheduledTime: occurrence.scheduledTime,
+          occurrenceId: planned.occurrenceId,
+        );
+      }
+      for (final row in registry) {
+        final id = row['notification_id'] as int;
+        final record = await ReminderOccurrenceService.getById(
+          row['occurrence_id'] as String,
+        );
+        final enabled = record == null
+            ? const []
+            : await db.query(
+                'reminder_configs',
+                columns: ['id'],
+                where:
+                    "id = ? AND enabled = 1 AND (subject_kind = 'user' OR "
+                    "EXISTS (SELECT 1 FROM partners p WHERE p.id = partner_id AND p.status = 'active'))",
+                whereArgs: [record.configId],
+              );
+        final future = DateTime.parse(
+          row['scheduled_for'] as String,
+        ).isAfter(now);
+        final keepSnooze =
+            row['kind'] == 'snooze' &&
+            record?.status == 'snoozed' &&
+            enabled.isNotEmpty;
+        if (keepSnooze && future && !pending.contains(id)) {
+          final spec =
+              jsonDecode(row['fingerprint'] as String) as Map<String, dynamic>;
+          await NotificationService.schedule(
+            id: id,
+            title: spec['title'] as String,
+            body: spec['body'] as String,
+            payload: spec['payload'] as String?,
+            kind: 'snooze',
+            scheduledTime: tz.TZDateTime.from(
+              DateTime.parse(row['scheduled_for'] as String),
+              tz.local,
+            ),
+          );
+        } else if (enabled.isEmpty ||
+            (future && !desired.contains(id) && !keepSnooze)) {
+          await NotificationService.cancel(id);
+          if (record != null) {
+            await db.update(
+              'reminder_occurrences',
+              {'status': 'cancelled', 'updated_at': now.toIso8601String()},
+              where: "id = ? AND status IN ('scheduled', 'snoozed')",
+              whereArgs: [record.id],
+            );
+          }
+        }
+      }
+      // System evidence may arrive during scheduling; ingest once more.
+      await NotificationLedger.consumeNativeEvents();
+    } catch (error) {
+      await NotificationLedger.record(
+        'reconcile_failed',
+        detail: error.runtimeType.toString(),
+      );
+      rethrow;
+    } finally {
+      renewal.cancel();
+      await db.delete(
+        'runtime_locks',
+        where: 'name = ? AND owner = ?',
+        whereArgs: ['reminder_schedule', owner],
       );
     }
   }
@@ -158,6 +338,7 @@ abstract final class ReminderScheduler {
     final notificationIds = <int>{};
 
     for (final config in configs) {
+      if (!config.isValid) continue;
       final partner = config.isSelfReminder
           ? null
           : partnerMap[config.partnerId];
@@ -178,6 +359,13 @@ abstract final class ReminderScheduler {
           scheduledFor: occurrence.scheduledTime,
           message: occurrence.body,
         );
+        if (const {
+          'acknowledged',
+          'dismissed',
+          'snoozed',
+        }.contains(record.status)) {
+          continue;
+        }
         plan.add(
           _PlannedReminder(
             config: config,

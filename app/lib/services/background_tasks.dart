@@ -9,7 +9,7 @@ library;
 
 import 'dart:developer' as dev;
 
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'notification_identity.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:workmanager/workmanager.dart';
@@ -21,6 +21,7 @@ import '../services/reminder_scheduler.dart';
 import '../services/weather_service.dart';
 import '../services/weather_background_processor.dart';
 import '../services/ai_proactive_service.dart';
+import 'background_run_service.dart';
 import '../services/ai_memory_dreamer.dart';
 import '../services/timezone_service.dart';
 
@@ -34,8 +35,6 @@ const _taskAiMemoryDream = 'taworld_ai_memory_dream';
 abstract final class BackgroundTaskService {
   /// 注册所有周期性后台任务
   static Future<void> registerAll() async {
-    await Workmanager().cancelAll();
-
     // 天气突变轮询：WorkManager 只保证“尽力执行”，Doze / 厂商省电
     // 可能延迟任务，30 分钟不是实时送达承诺。
     await Workmanager().registerPeriodicTask(
@@ -43,7 +42,7 @@ abstract final class BackgroundTaskService {
       _taskWeatherCheck,
       frequency: const Duration(minutes: 30),
       constraints: Constraints(networkType: NetworkType.connected),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
 
     // 通知续期：每 12 小时执行，确保 zonedSchedule 不超 7 天窗口
@@ -51,7 +50,7 @@ abstract final class BackgroundTaskService {
       _taskNotificationRenew,
       _taskNotificationRenew,
       frequency: const Duration(hours: 12),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
 
     // AI 主动评估：每 2 小时检查是否需要主动发消息
@@ -60,7 +59,7 @@ abstract final class BackgroundTaskService {
       _taskAiProactiveCheck,
       frequency: const Duration(hours: 2),
       constraints: Constraints(networkType: NetworkType.connected),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
 
     // AI 记忆整合（Dreaming）：每天执行一次，整合、去重、衰减记忆
@@ -69,7 +68,7 @@ abstract final class BackgroundTaskService {
       _taskAiMemoryDream,
       frequency: const Duration(hours: 24),
       constraints: Constraints(networkType: NetworkType.connected),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
   }
 
@@ -86,10 +85,12 @@ abstract final class BackgroundTaskService {
 void callbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
     dev.log('后台任务开始: $taskName', name: 'TaWorld');
-
+    String? runId;
     try {
+      runId = await BackgroundRunService.start(taskName);
       // 后台 Isolate 的静态变量为空，必须在任务内初始化设备时区。
       await TimezoneService.initialize();
+      await NotificationService.init();
 
       switch (taskName) {
         case _taskWeatherCheck:
@@ -104,10 +105,18 @@ void callbackDispatcher() {
           // iOS 后台任务（暂不处理）
           break;
       }
+      await BackgroundRunService.finish(runId, 'completed');
       dev.log('后台任务完成: $taskName', name: 'TaWorld');
       return true;
-    } catch (e, st) {
-      dev.log('后台任务失败: $taskName\n$e\n$st', name: 'TaWorld');
+    } catch (e) {
+      if (runId != null) {
+        await BackgroundRunService.finish(
+          runId,
+          'failed',
+          detail: e.runtimeType.toString(),
+        );
+      }
+      dev.log('后台任务失败: $taskName ${e.runtimeType}', name: 'TaWorld');
       return false;
     }
   });
@@ -119,6 +128,7 @@ void callbackDispatcher() {
 ///
 /// 这是设备端 best-effort 监测：系统省电、网络和后台限制都可能造成延迟。
 Future<void> _runWeatherCheck() async {
+  if (!await NotificationService.pushEnabled()) return;
   final partners = await PartnerService.getAll();
   if (partners.isEmpty) return;
 
@@ -126,15 +136,8 @@ Future<void> _runWeatherCheck() async {
   final prefs = await SharedPreferences.getInstance();
   final nowUtc = DateTime.now().toUtc();
 
-  // 初始化后台通知插件
-  final bgPlugin = FlutterLocalNotificationsPlugin();
-  await bgPlugin.initialize(
-    const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    ),
-  );
   final stateStore = _PreferencesWeatherAlertStateStore(prefs);
-  final alertSink = _PluginWeatherAlertSink(bgPlugin);
+  final alertSink = _PluginWeatherAlertSink();
 
   for (final partner in partners) {
     final configs =
@@ -204,30 +207,17 @@ class _PreferencesWeatherAlertStateStore implements WeatherAlertStateStore {
 }
 
 class _PluginWeatherAlertSink implements WeatherAlertSink {
-  const _PluginWeatherAlertSink(this.plugin);
-
-  final FlutterLocalNotificationsPlugin plugin;
-
   @override
-  Future<void> show(WeatherAlertDelivery delivery) async {
-    var notificationId = delivery.event.eventKey.hashCode & 0x7fffffff;
-    if (notificationId == 0) notificationId = 1;
-    await plugin.show(
-      notificationId,
-      '天气变化提醒',
-      delivery.event.message,
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'taworld_weather_alert',
-          '天气变化提醒',
-          channelDescription: 'TaWorld 对未来天气变化的尽力监测提醒',
-          importance: Importance.high,
-          priority: Priority.high,
-        ),
-      ),
-      payload: 'configId:${delivery.configId}',
-    );
-  }
+  Future<void> show(WeatherAlertDelivery delivery) => NotificationService.show(
+    id: notificationIdFor(
+      'weather:${delivery.configId}:${delivery.event.eventKey}',
+    ),
+    title: '天气变化提醒',
+    body: delivery.event.message,
+    channelId: 'taworld_weather_alert',
+    channelName: '天气变化提醒',
+    payload: 'configId:${delivery.configId}',
+  );
 }
 
 // ==================== 通知续期任务 ====================

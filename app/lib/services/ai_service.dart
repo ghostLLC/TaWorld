@@ -4,14 +4,18 @@
 library;
 
 import 'dart:convert';
+import 'dart:async';
 import 'dart:developer' as dev;
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../data/local/database_helper.dart';
 import 'ai_model_catalog.dart';
 import 'ai_memory_service.dart';
 import 'chat_history_service.dart';
+import 'tool_operation_journal.dart';
+import 'api_key_store.dart';
 
 class AiChatException implements Exception {
   const AiChatException(this.message);
@@ -79,7 +83,8 @@ abstract final class AiService {
 
   // ==================== 工具定义（Function Calling）====================
 
-  static const _toolDefinitions = [
+  static final _toolDefinitions = _buildToolDefinitions();
+  static const _baseToolDefinitions = [
     {
       'type': 'function',
       'function': {
@@ -296,6 +301,97 @@ abstract final class AiService {
     },
   ];
 
+  static List<Map<String, dynamic>> _buildToolDefinitions() {
+    final definitions = (jsonDecode(jsonEncode(_baseToolDefinitions)) as List)
+        .map((x) => Map<String, dynamic>.from(x as Map))
+        .toList();
+    for (final tool in definitions) {
+      final function = tool['function'] as Map<String, dynamic>;
+      final parameters = function['parameters'] as Map<String, dynamic>;
+      final properties = parameters['properties'] as Map<String, dynamic>;
+      if (properties.containsKey('partner_name')) {
+        properties['partner_id'] = {
+          'type': 'string',
+          'description': '优先使用数据快照中的人物ID，避免重名误操作',
+        };
+        (parameters['required'] as List?)?.remove('partner_name');
+      }
+      if (properties.containsKey('relationship')) {
+        properties['relationship']['enum'] = [
+          'couple',
+          'partner',
+          'family',
+          'friend',
+          'colleague',
+          'classmate',
+          'other',
+        ];
+      }
+      if (function['name'] == 'create_reminder') {
+        function['description'] =
+            '创建固定、单次、自定义或天气监测提醒；已有同一提醒要修改时使用 update_reminder。';
+        properties['category']['enum'] = ['sleep', 'meal', 'weather', 'custom'];
+        properties.addAll({
+          'scheduled_at': {
+            'type': 'string',
+            'description': 'custom 单次日期，ISO8601，必须带时区偏移或Z',
+          },
+          'relative_minutes': {
+            'type': 'integer',
+            'description': 'custom 相对现在多少分钟后，仅一次',
+          },
+          'repeat_daily': {
+            'type': 'boolean',
+            'description': '是否重复，单次必须提供日期或相对分钟',
+          },
+          'weekdays': {
+            'type': 'array',
+            'items': {'type': 'integer', 'minimum': 1, 'maximum': 7},
+            'description': '指定星期，1周一到7周日',
+          },
+        });
+      }
+    }
+    final create =
+        definitions.first['function']['parameters']['properties']
+            as Map<String, dynamic>;
+    definitions.add({
+      'type': 'function',
+      'function': {
+        'name': 'update_reminder',
+        'description':
+            '按 reminder_id 修改现有提醒时间、内容或 enabled 开关。仅提供要变更的字段，未提供的保留。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            ...create,
+            'reminder_id': {'type': 'string', 'description': '已有提醒的ID'},
+            'enabled': {'type': 'boolean', 'description': 'false暂停，true恢复'},
+            'meal_name': {'type': 'string', 'description': '多餐次时指定要改的餐次名称'},
+          },
+          'required': ['reminder_id'],
+        },
+      },
+    });
+    definitions.add({
+      'type': 'function',
+      'function': {
+        'name': 'get_reminders',
+        'description': '读取全部已保存提醒（包括暂停、自己的提醒），返回ID及配置',
+        'parameters': {'type': 'object', 'properties': {}},
+      },
+    });
+    definitions.add({
+      'type': 'function',
+      'function': {
+        'name': 'get_capabilities',
+        'description': '检查当前可用能力和提醒通知状态',
+        'parameters': {'type': 'object', 'properties': {}},
+      },
+    });
+    return definitions;
+  }
+
   // ==================== Token 估算与动态上下文 ====================
 
   /// 估算文本的 token 数量（中英文混合场景）
@@ -388,15 +484,8 @@ abstract final class AiService {
 
   // ==================== API Key 管理 ====================
 
-  static Future<String?> getApiKey() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('deepseek_api_key');
-  }
-
-  static Future<void> setApiKey(String key) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('deepseek_api_key', key);
-  }
+  static Future<String?> getApiKey() => ApiKeyStore.read();
+  static Future<void> setApiKey(String key) => ApiKeyStore.write(key);
 
   static Future<bool> hasApiKey() async {
     final key = await getApiKey();
@@ -660,6 +749,16 @@ abstract final class AiService {
   /// [onToken] 每收到一个 content token 时调用。
   /// [onToolCall] 当 AI 请求执行工具时调用，返回工具执行结果。
   /// 返回完整回复文本。
+  static CancelToken? _activeChat;
+  @visibleForTesting
+  static Dio Function(BaseOptions options)? chatClientFactoryForTesting;
+  static Completer<void>? _chatFinished;
+  static void cancelCurrentChat() => _activeChat?.cancel('user_cancelled');
+  static Future<void> stopAndWait() async {
+    cancelCurrentChat();
+    await _chatFinished?.future.timeout(const Duration(seconds: 60));
+  }
+
   static Future<String> chatWithTools(
     String userMessage, {
     required void Function(String accumulated) onToken,
@@ -670,224 +769,151 @@ abstract final class AiService {
     String userMessageType = 'message',
   }) async {
     final key = await getApiKey();
-    if (key == null || key.isEmpty) {
-      onToken('AI 服务未配置，请先在设置中填入 DeepSeek API Key');
-      return 'AI 服务未配置';
-    }
-
-    // 1. 保存用户消息
-    final db = await DatabaseHelper.database;
-    if (requestId == null) {
-      await ChatHistoryService.append(
-        role: 'user',
-        content: userMessage,
-        messageType: userMessageType,
-        hidden: hideUserMessage,
-      );
-    } else {
-      await ChatHistoryService.appendOnce(
-        requestId: requestId,
-        role: 'user',
-        content: userMessage,
-        messageType: userMessageType,
-        hidden: hideUserMessage,
-      );
-    }
-
-    // 2. 构建消息列表（动态 prompt + 动态历史）
-    final baseMessages = await _buildMessages(
-      userMessage,
-      excludeRequestId: requestId,
+    if (key == null || key.isEmpty) throw const AiChatException('请先配置模型');
+    final request = requestId ?? 'chat:${DatabaseHelper.newId()}';
+    final cancel = CancelToken();
+    if (_activeChat != null) throw const AiChatException('上一轮尚未结束');
+    final finished = Completer<void>();
+    _chatFinished = finished;
+    _activeChat = cancel;
+    final dio = (chatClientFactoryForTesting ?? Dio.new)(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        sendTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 60),
+      ),
     );
-    final messages = baseMessages
-        .map((m) => Map<String, dynamic>.from(m))
-        .toList();
-
-    final dio = Dio();
-
+    final toolResults = <String>[];
     try {
-      // 3. 第一轮调用（非流式），检查工具调用
-      final firstResponse = await dio.post(
-        '$_defaultBaseUrl/v1/chat/completions',
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $key',
-            'Content-Type': 'application/json',
-          },
-        ),
-        data: {
-          'model': _defaultModel,
-          'temperature': 0.7,
-          'max_tokens': 4000,
-          'stream': false,
-          'messages': messages,
-          'tools': _toolDefinitions,
-        },
+      await ChatHistoryService.appendOnce(
+        requestId: request,
+        role: 'user',
+        content: userMessage,
+        messageType: userMessageType,
+        hidden: hideUserMessage,
       );
-
-      final choice = firstResponse.data['choices']?[0];
-      final assistantMessage = choice?['message'];
-      var currentToolCalls = assistantMessage?['tool_calls'] as List?;
-
-      // 跟踪 DeepSeek 缓存命中情况
-      _trackCacheUsage(firstResponse.data['usage'] as Map<String, dynamic>?);
-
-      // 5. 如果有工具调用，执行工具并回传结果
-      if (currentToolCalls != null && currentToolCalls.isNotEmpty) {
-        // 添加 assistant 消息（含 tool_calls）到上下文
-        messages.add(Map<String, dynamic>.from(assistantMessage as Map));
-
-        int toolRounds = 0;
-        const maxToolRounds = 5;
-
-        while (currentToolCalls != null &&
-            currentToolCalls.isNotEmpty &&
-            toolRounds < maxToolRounds) {
-          // 执行所有工具调用
-          for (final toolCall in currentToolCalls) {
-            final funcName = toolCall['function']?['name'] as String? ?? '';
-            final argsStr =
-                toolCall['function']?['arguments'] as String? ?? '{}';
-            final callId = toolCall['id'] as String? ?? '';
-
-            Map<String, dynamic> args = {};
+      final messages = (await _buildMessages(
+        userMessage,
+        excludeRequestId: request,
+        historyTokenBudget: 18000,
+      )).map((m) => Map<String, dynamic>.from(m)).toList();
+      for (var round = 0; round <= 6; round++) {
+        if (cancel.isCancelled) throw cancel.cancelError!;
+        final response = await dio.post(
+          '$_defaultBaseUrl/v1/chat/completions',
+          cancelToken: cancel,
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $key',
+              'Content-Type': 'application/json',
+            },
+          ),
+          data: {
+            'model': _defaultModel,
+            'temperature': 0.4,
+            'max_tokens': 2500,
+            'stream': false,
+            'messages': messages,
+            'tools': _toolDefinitions,
+            if (round == 6) 'tool_choice': 'none',
+          },
+        );
+        _trackCacheUsage(response.data['usage'] as Map<String, dynamic>?);
+        final message = Map<String, dynamic>.from(
+          response.data['choices'][0]['message'] as Map,
+        );
+        final calls = message['tool_calls'];
+        if (calls is List && calls.isNotEmpty && round < 6) {
+          if (calls.length > 12) throw const AiChatException('操作数量过多，请缩小本次任务');
+          messages.add(message);
+          for (final call in calls) {
+            if (cancel.isCancelled) throw cancel.cancelError!;
+            final name = call['function']?['name'] as String? ?? '';
+            final callId = call['id'] as String?;
+            if (callId == null) throw const AiChatException('模型工具响应格式不完整');
+            String result;
+            Map<String, dynamic>? args;
             try {
-              args = jsonDecode(argsStr) as Map<String, dynamic>;
-            } catch (_) {}
-
-            // 执行工具
-            final result = await onToolCall(funcName, args);
-
-            // 添加工具结果到上下文
+              args = Map<String, dynamic>.from(
+                jsonDecode(call['function']['arguments'] as String) as Map,
+              );
+            } catch (_) {
+              /* Return a protocol error; never call with empty fabricated args. */
+            }
+            if (args == null) {
+              result = jsonEncode({
+                'status': 'failure',
+                'verified': true,
+                'message': '工具参数必须是完整 JSON，请修正参数后再调用',
+              });
+            } else {
+              final validArgs = args;
+              result = await ToolOperationJournal.execute(
+                requestId: request,
+                tool: name,
+                arguments: validArgs,
+                action: () => onToolCall(name, validArgs),
+              );
+            }
+            toolResults.add(result);
             messages.add({
               'role': 'tool',
               'tool_call_id': callId,
               'content': result,
             });
           }
-
-          // 再次调用 API（非流式）检查是否有更多工具调用
-          final nextResponse = await dio.post(
-            '$_defaultBaseUrl/v1/chat/completions',
-            options: Options(
-              headers: {
-                'Authorization': 'Bearer $key',
-                'Content-Type': 'application/json',
-              },
-            ),
-            data: {
-              'model': _defaultModel,
-              'temperature': 0.7,
-              'max_tokens': 4000,
-              'stream': false,
-              'messages': messages,
-              'tools': _toolDefinitions,
-            },
-          );
-
-          final nextChoice = nextResponse.data['choices']?[0];
-          final nextMsg = nextChoice?['message'];
-          currentToolCalls = nextMsg?['tool_calls'] as List?;
-
-          // 跟踪 DeepSeek 缓存命中情况
-          _trackCacheUsage(nextResponse.data['usage'] as Map<String, dynamic>?);
-
-          if (currentToolCalls != null && currentToolCalls.isNotEmpty) {
-            messages.add(Map<String, dynamic>.from(nextMsg as Map));
-            toolRounds++;
-            continue; // 继续执行下一轮工具
-          }
-
-          // 没有更多工具调用，取最终文本回复
-          final finalContent = nextMsg?['content'] as String? ?? '';
-          if (finalContent.isNotEmpty) {
-            onToken(finalContent);
-
-            await db.insert('chat_history', {
-              'id': DatabaseHelper.newId(),
-              'role': 'assistant',
-              'content': finalContent,
-              'created_at': DateTime.now().toIso8601String(),
-            });
-            AiMemoryService.checkAndSummarize();
-            return finalContent;
-          }
-          break;
+          continue;
         }
-      }
-
-      // 6. 无工具调用（或工具链结束无文本），直接取文本
-      final directContent = assistantMessage?['content'] as String?;
-      if (directContent != null && directContent.isNotEmpty) {
-        onToken(directContent);
-
-        await db.insert('chat_history', {
-          'id': DatabaseHelper.newId(),
-          'role': 'assistant',
-          'content': directContent,
-          'created_at': DateTime.now().toIso8601String(),
-        });
-        AiMemoryService.checkAndSummarize();
-        return directContent;
-      }
-
-      // 7. 如果第一轮有文本但需要流式输出，重新调用（流式）
-      final streamResponse = await dio.post(
-        '$_defaultBaseUrl/v1/chat/completions',
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $key',
-            'Content-Type': 'application/json',
-          },
-          responseType: ResponseType.stream,
-        ),
-        data: {
-          'model': _defaultModel,
-          'temperature': 0.7,
-          'max_tokens': 4000,
-          'stream': true,
-          'messages': messages,
-        },
-      );
-
-      final buffer = StringBuffer();
-      await for (final chunk in streamResponse.data.stream) {
-        final text = utf8.decode(chunk);
-        for (final line in text.split('\n')) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data: ')) continue;
-          final json = trimmed.substring(6);
-          if (json == '[DONE]') continue;
-          try {
-            final parsed = jsonDecode(json) as Map<String, dynamic>;
-            final delta =
-                parsed['choices']?[0]?['delta']?['content'] as String?;
-            if (delta != null && delta.isNotEmpty) {
-              buffer.write(delta);
-              onToken(buffer.toString());
-            }
-          } catch (_) {}
+        var content = message['content'] is String
+            ? (message['content'] as String).trim()
+            : '';
+        if (content.isEmpty && toolResults.isNotEmpty) {
+          content = toolResults
+              .map((r) {
+                try {
+                  return (jsonDecode(r) as Map)['message']?.toString() ?? '';
+                } catch (_) {
+                  return '';
+                }
+              })
+              .where((s) => s.isNotEmpty)
+              .join('|||');
         }
+        if (content.isEmpty) throw const AiChatException('模型没有返回内容，请重试');
+        if (cancel.isCancelled) throw cancel.cancelError!;
+        await ChatHistoryService.appendOnce(
+          requestId: '$request:assistant',
+          role: 'assistant',
+          content: content,
+        );
+        onToken(content);
+        AiMemoryService.checkAndSummarize().catchError((_) {});
+        return content;
       }
-
-      final reply = buffer.toString();
-      if (reply.isNotEmpty) {
-        await db.insert('chat_history', {
-          'id': DatabaseHelper.newId(),
-          'role': 'assistant',
-          'content': reply,
-          'created_at': DateTime.now().toIso8601String(),
-        });
-      }
-      AiMemoryService.checkAndSummarize();
-      if (reply.isEmpty) {
-        throw const AiChatException('AI 暂时没有返回内容');
-      }
-      return reply;
+      throw const AiChatException('本轮操作已达上限，请查看已完成的结果');
     } on AiChatException {
       rethrow;
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) {
+        throw const AiChatException('已停止，已完成的操作仍保留');
+      }
+      final status = error.response?.statusCode;
+      throw AiChatException(
+        status == 401 || status == 403
+            ? '模型授权失败，请检查 API Key'
+            : status == 429
+            ? '模型服务繁忙或额度不足，请稍后重试'
+            : status == 404
+            ? '当前账号无法使用配置的模型，请检查模型能力'
+            : '模型请求未完成，已完成的操作仍保留，可安全重试',
+      );
     } catch (_) {
-      throw const AiChatException('网络连接失败');
+      throw const AiChatException('本轮未完整完成，请查看已保存的结果后重试');
+    } finally {
+      if (identical(_activeChat, cancel)) _activeChat = null;
+      finished.complete();
+      if (identical(_chatFinished, finished)) _chatFinished = null;
+      dio.close();
     }
   }
 
@@ -895,14 +921,24 @@ abstract final class AiService {
   static Future<List<Map<String, dynamic>>> getChatHistory({
     int limit = 50,
     bool includeHidden = false,
+    String? beforeTime,
+    String? beforeId,
   }) async {
     final db = await DatabaseHelper.database;
-    return db.query(
+    final filters = <String>[
+      if (!includeHidden) 'hidden_at IS NULL',
+      if (beforeTime != null) '(created_at < ? OR (created_at = ? AND id < ?))',
+    ];
+    final rows = await db.query(
       'chat_history',
-      where: includeHidden ? null : 'hidden_at IS NULL',
-      orderBy: 'created_at ASC',
+      where: filters.isEmpty ? null : filters.join(' AND '),
+      whereArgs: beforeTime == null
+          ? null
+          : [beforeTime, beforeTime, beforeId ?? ''],
+      orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
+    return rows.reversed.toList(growable: false);
   }
 
   /// 调用后台文本模型（用于记忆提取、摘要、Dreaming 整合）。

@@ -1,15 +1,14 @@
-import 'dart:math' as math;
-
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:timezone/timezone.dart' as tz;
-
-import '../../../app/design_tokens.dart';
 import '../../../data/models/partner.dart';
 import '../../../data/models/reminder_config.dart';
 import '../../../services/weather_service.dart';
+import 'care_graph_scene.dart';
+import 'care_graph_board.dart';
 import 'care_graph_share_poster.dart';
 
-/// 以用户为中心、以同尺寸节点呈现所有关心的人。
 class CareGraphView extends StatefulWidget {
   const CareGraphView({
     super.key,
@@ -20,352 +19,403 @@ class CareGraphView extends StatefulWidget {
     required this.onChatPartner,
     required this.onAddReminder,
     required this.onOpenProfile,
+    this.fullscreen = false,
   });
-
   final List<Partner> partners;
   final Map<String, FullWeatherResult?> weatherByPartner;
   final Set<String> weatherLoadingIds;
   final Map<String, List<ReminderConfig>> configsByPartner;
-  final ValueChanged<Partner> onChatPartner;
-  final ValueChanged<Partner> onAddReminder;
-  final ValueChanged<Partner> onOpenProfile;
-
+  final ValueChanged<Partner> onChatPartner, onAddReminder, onOpenProfile;
+  final bool fullscreen;
   @override
   State<CareGraphView> createState() => _CareGraphViewState();
 }
 
 class _CareGraphViewState extends State<CareGraphView> {
-  String? _selectedPartnerId;
-
-  Partner? get _selectedPartner {
-    final selectedId = _selectedPartnerId;
-    if (selectedId == null) return null;
-    for (final partner in widget.partners) {
-      if (partner.id == selectedId) return partner;
-    }
-    return null;
+  final _board = GlobalKey<CareGraphBoardState>();
+  final _search = TextEditingController();
+  String? _selectedId;
+  String _group = 'all';
+  bool _searching = false;
+  Timer? _clock;
+  @override
+  void initState() {
+    super.initState();
+    _clock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
-  void didUpdateWidget(covariant CareGraphView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (_selectedPartnerId != null && _selectedPartner == null) {
-      _selectedPartnerId = null;
-    }
+  void dispose() {
+    _clock?.cancel();
+    _search.dispose();
+    super.dispose();
   }
 
+  List<Partner> get _ordered => [...widget.partners]
+    ..sort((a, b) {
+      final created = a.createdAt.compareTo(b.createdAt);
+      return created == 0 ? a.id.compareTo(b.id) : created;
+    });
+  Partner? get _selected =>
+      widget.partners.where((p) => p.id == _selectedId).firstOrNull;
+  void _select(String id) {
+    HapticFeedback.selectionClick();
+    setState(() => _selectedId = id);
+  }
+
+  void _share() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (_) => FractionallySizedBox(
+      heightFactor: 0.92,
+      child: CareGraphShareSheet(
+        partners: _ordered,
+        reminderCount: widget.configsByPartner.values
+            .expand((c) => c)
+            .where((c) => c.enabled)
+            .length,
+      ),
+    ),
+  );
+  void _fullscreen() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => Scaffold(
+        body: CareGraphView(
+          partners: widget.partners,
+          weatherByPartner: widget.weatherByPartner,
+          weatherLoadingIds: widget.weatherLoadingIds,
+          configsByPartner: widget.configsByPartner,
+          fullscreen: true,
+          onChatPartner: (p) {
+            Navigator.of(context).pop();
+            widget.onChatPartner(p);
+          },
+          onAddReminder: (p) {
+            Navigator.of(context).pop();
+            widget.onAddReminder(p);
+          },
+          onOpenProfile: (p) {
+            Navigator.of(context).pop();
+            widget.onOpenProfile(p);
+          },
+        ),
+      ),
+    ),
+  );
   @override
   Widget build(BuildContext context) {
-    final selected = _selectedPartner;
-    return AnimatedSwitcher(
-      duration: TaAnimation.fast,
-      switchInCurve: TaAnimation.curveOut,
-      switchOutCurve: TaAnimation.curveIn,
-      child: selected == null
-          ? _buildOverview(context)
-          : _buildSelected(context, selected),
+    final theme = Theme.of(context), colors = theme.colorScheme;
+    final ordered = _ordered;
+    final query = _search.text.trim().toLowerCase();
+    final visible = ordered
+        .where(
+          (p) =>
+              (_group == 'all' || p.type == _group) &&
+              (query.isEmpty ||
+                  '${p.nickname} ${p.city ?? ''} ${p.typeLabel}'
+                      .toLowerCase()
+                      .contains(query)),
+        )
+        .toList();
+    final now = DateTime.now();
+    final nodes = [
+      for (final p in visible)
+        CareGraphNodeData(
+          id: p.id,
+          label: p.nickname,
+          relationship: p.typeLabel,
+          city: p.city?.isNotEmpty == true ? p.city! : '地点待确认',
+          localTime: CareGraphPartnerMeta.localTime(
+            p,
+            now,
+          ).replaceFirst('当地 ', ''),
+          weather: CareGraphPartnerMeta.weatherLabel(
+            widget.weatherByPartner[p.id],
+            loading: widget.weatherLoadingIds.contains(p.id),
+          ),
+          reminderCount:
+              widget.configsByPartner[p.id]?.where((c) => c.enabled).length ??
+              0,
+        ),
+    ];
+    final selected = _selected;
+    final board = CareGraphBoard(
+      key: _board,
+      nodes: nodes,
+      allIds: ordered.map((p) => p.id).toList(),
+      onSelect: _select,
+      selectedId: _selectedId,
+      immersive: widget.fullscreen,
     );
-  }
-
-  Widget _buildOverview(BuildContext context) {
-    final theme = Theme.of(context);
-    return ListView(
-      key: const ValueKey('care-graph-overview'),
-      padding: const EdgeInsets.fromLTRB(
-        TaSpacing.pagePadding,
-        TaSpacing.sm,
-        TaSpacing.pagePadding,
-        TaSpacing.xl,
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          '关心图谱',
-          style: theme.textTheme.headlineLarge?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: TaSpacing.xxs),
-        Text(
-          '轻点一个人，看看你们之间积累的关心。',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: TaSpacing.md),
-        Stack(
-          children: [
-            _GraphCanvas(
-              partners: widget.partners,
-              weatherByPartner: widget.weatherByPartner,
-              weatherLoadingIds: widget.weatherLoadingIds,
-              configsByPartner: widget.configsByPartner,
-              onPartnerTap: (partner) {
-                setState(() => _selectedPartnerId = partner.id);
-              },
+        if (!widget.fullscreen)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '关心图谱',
+                            style: theme.textTheme.headlineMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '${ordered.length} 位牵挂的人，在你的世界里',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '搜索人物',
+                      onPressed: () => setState(() => _searching = !_searching),
+                      icon: const Icon(Icons.search_rounded),
+                    ),
+                    IconButton(
+                      tooltip: '分享关心图谱',
+                      onPressed: _share,
+                      icon: const Icon(Icons.ios_share_rounded),
+                    ),
+                    IconButton(
+                      tooltip: '全屏查看图谱',
+                      onPressed: _fullscreen,
+                      icon: const Icon(Icons.fullscreen_rounded),
+                    ),
+                  ],
+                ),
+                if (_searching)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: TextField(
+                      controller: _search,
+                      autofocus: true,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        hintText: '搜索名字、关系或城市',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: IconButton(
+                          tooltip: '清除搜索',
+                          onPressed: () {
+                            _search.clear();
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.close),
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 44,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      for (final group in [
+                        'all',
+                        ...ordered.map((p) => p.type).toSet(),
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: FilterChip(
+                            label: Text(
+                              group == 'all'
+                                  ? '全部'
+                                  : ordered
+                                        .firstWhere((p) => p.type == group)
+                                        .typeLabel,
+                            ),
+                            selected: _group == group,
+                            onSelected: (_) => setState(() => _group = group),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (query.isNotEmpty && visible.isNotEmpty)
+                  SizedBox(
+                    height: 44,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        for (final p in visible)
+                          TextButton(
+                            onPressed: () {
+                              _select(p.id);
+                              _board.currentState?.focus(p.id);
+                            },
+                            child: Text(
+                              '${p.nickname} · ${p.city ?? p.typeLabel}',
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
-            Positioned(
-              top: TaSpacing.xs,
-              right: TaSpacing.xs,
-              child: Row(
-                children: [
-                  IconButton.filledTonal(
-                    tooltip: '分享关心图谱',
-                    onPressed: _openSharePreview,
-                    icon: const Icon(Icons.ios_share_rounded),
+          ),
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: widget.fullscreen ? 0 : 12,
                   ),
-                  const SizedBox(width: TaSpacing.xxs),
-                  IconButton.filledTonal(
-                    tooltip: '全屏查看图谱',
-                    onPressed: _openFullscreen,
-                    icon: const Icon(Icons.fullscreen_rounded),
+                  child: board,
+                ),
+              ),
+              if (visible.isEmpty)
+                Center(
+                  child: Text('没有匹配的人物', style: theme.textTheme.bodyLarge),
+                ),
+              if (widget.fullscreen)
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: IconButton.filledTonal(
+                      key: const Key('care-graph-fullscreen-close'),
+                      tooltip: '退出全屏图谱',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
                   ),
-                ],
+                ),
+              if (selected != null)
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: 520,
+                          maxHeight: MediaQuery.sizeOf(context).height * 0.36,
+                        ),
+                        child: SingleChildScrollView(
+                          child: _selectionCard(selected, theme),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (!widget.fullscreen)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text(
+              '点选查看 · 双指缩放 · 长按拖动',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: colors.onSurfaceVariant,
               ),
             ),
-          ],
-        ),
+          ),
       ],
     );
   }
 
-  void _openFullscreen() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (context) => Scaffold(
-          appBar: AppBar(
-            title: const Text('关心图谱'),
-            actions: [
-              IconButton(
-                tooltip: '分享关心图谱',
-                onPressed: _openSharePreview,
-                icon: const Icon(Icons.ios_share_rounded),
-              ),
-            ],
-          ),
-          body: InteractiveViewer(
-            minScale: 0.65,
-            maxScale: 2.6,
-            boundaryMargin: const EdgeInsets.all(180),
-            child: SizedBox(
-              width: 760,
-              height: 760,
-              child: Center(
-                child: SizedBox(
-                  width: 680,
-                  child: _GraphCanvas(
-                    height: 680,
-                    partners: widget.partners,
-                    weatherByPartner: widget.weatherByPartner,
-                    weatherLoadingIds: widget.weatherLoadingIds,
-                    configsByPartner: widget.configsByPartner,
-                    onPartnerTap: (partner) {
-                      Navigator.of(context).pop();
-                      setState(() => _selectedPartnerId = partner.id);
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
+  Widget _selectionCard(Partner person, ThemeData theme) {
+    final count =
+        widget.configsByPartner[person.id]?.where((c) => c.enabled).length ?? 0;
+    return Material(
+      key: ValueKey('care-graph-selected-${person.id}'),
+      elevation: 6,
+      shadowColor: Colors.black.withValues(alpha: 0.12),
+      color: theme.colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
       ),
-    );
-  }
-
-  void _openSharePreview() {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) => FractionallySizedBox(
-        heightFactor: 0.92,
-        child: CareGraphShareSheet(
-          partners: widget.partners,
-          reminderCount: widget.configsByPartner.values
-              .expand((configs) => configs)
-              .where((config) => config.enabled)
-              .length,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSelected(BuildContext context, Partner partner) {
-    final theme = Theme.of(context);
-    final weather = widget.weatherByPartner[partner.id];
-    final weatherLabel = CareGraphPartnerMeta.weatherLabel(
-      weather,
-      loading: widget.weatherLoadingIds.contains(partner.id),
-    );
-    final localTime = CareGraphPartnerMeta.localTime(partner, DateTime.now());
-    final activeReminders =
-        widget.configsByPartner[partner.id]
-            ?.where((item) => item.enabled)
-            .length ??
-        0;
-
-    return ListView(
-      key: ValueKey('care-graph-selected-${partner.id}'),
-      padding: const EdgeInsets.fromLTRB(
-        TaSpacing.pagePadding,
-        TaSpacing.sm,
-        TaSpacing.pagePadding,
-        TaSpacing.xl,
-      ),
-      children: [
-        Row(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton.filledTonal(
-              tooltip: '返回图谱总览',
-              onPressed: () => setState(() => _selectedPartnerId = null),
-              icon: const Icon(Icons.arrow_back_rounded),
-            ),
-            const SizedBox(width: TaSpacing.sm),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '选中${partner.nickname}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.headlineLarge?.copyWith(
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${person.nickname} · ${person.typeLabel}',
+                    style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  Text(
-                    '天气、提醒和小念记住的信息都汇总在这里',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
+                ),
+                IconButton(
+                  tooltip: '收起人物卡片',
+                  onPressed: () => setState(() => _selectedId = null),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            Text(
+              '${person.city ?? '地点待确认'} · ${CareGraphPartnerMeta.localTime(person, DateTime.now())}',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              '${CareGraphPartnerMeta.weatherLabel(widget.weatherByPartner[person.id], loading: widget.weatherLoadingIds.contains(person.id))} · $count 个提醒',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
               ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 44),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    foregroundColor: theme.colorScheme.onPrimaryContainer,
+                  ),
+                  onPressed: () => widget.onChatPartner(person),
+                  icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+                  label: const Text('聊聊Ta'),
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 44),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  onPressed: () => widget.onAddReminder(person),
+                  icon: const Icon(Icons.add_alert_outlined, size: 18),
+                  label: const Text('提醒'),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 44),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  onPressed: () => widget.onOpenProfile(person),
+                  child: const Text('档案'),
+                ),
+              ],
             ),
           ],
         ),
-        const SizedBox(height: TaSpacing.md),
-        _SelectedPartnerHero(
-          partner: partner,
-          localTime: localTime,
-          weatherLabel: weatherLabel,
-          reminderCount: activeReminders,
-        ),
-        const SizedBox(height: TaSpacing.md),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: () => widget.onChatPartner(partner),
-            icon: const Icon(Icons.chat_bubble_rounded),
-            label: const Text('聊聊 Ta'),
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(56),
-              backgroundColor: theme.colorScheme.primary,
-              foregroundColor: theme.colorScheme.onPrimary,
-              textStyle: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(TaRadius.md),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: TaSpacing.md),
-        Container(
-          padding: TaSpacing.cardInnerLarge,
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            borderRadius: TaRadius.borderLg,
-            border: Border.all(
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.55),
-            ),
-            boxShadow: theme.brightness == Brightness.light
-                ? TaShadows.sm
-                : const <BoxShadow>[],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: _DetailRow(
-                      icon: Icons.link_rounded,
-                      label: '关系',
-                      value: partner.typeLabel,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '编辑关系',
-                    onPressed: () => widget.onOpenProfile(partner),
-                    icon: const Icon(Icons.edit_outlined, size: 19),
-                  ),
-                ],
-              ),
-              const SizedBox(height: TaSpacing.sm),
-              _DetailRow(
-                icon: Icons.place_outlined,
-                label: '所在地区',
-                value: partner.city?.trim().isNotEmpty == true
-                    ? partner.city!.trim()
-                    : '还没有记录',
-                color: theme.colorScheme.tertiary,
-              ),
-              const SizedBox(height: TaSpacing.sm),
-              _DetailRow(
-                icon: Icons.schedule_rounded,
-                label: '当地时间',
-                value: localTime,
-                color: theme.colorScheme.secondary,
-              ),
-              const SizedBox(height: TaSpacing.sm),
-              _DetailRow(
-                icon: Icons.cloud_outlined,
-                label: '当前天气',
-                value: weatherLabel,
-                color: theme.colorScheme.tertiary,
-              ),
-              const SizedBox(height: TaSpacing.sm),
-              _DetailRow(
-                icon: Icons.notifications_active_outlined,
-                label: '有效提醒',
-                value: '$activeReminders 个',
-                color: theme.colorScheme.secondary,
-              ),
-              const SizedBox(height: TaSpacing.lg),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => widget.onAddReminder(partner),
-                      icon: const Icon(Icons.add_alert_outlined, size: 18),
-                      label: const Text('添加提醒'),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(48),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: TaSpacing.sm),
-                  Expanded(
-                    child: TextButton.icon(
-                      onPressed: () => widget.onOpenProfile(partner),
-                      icon: const Icon(Icons.person_outline_rounded, size: 18),
-                      label: const Text('查看档案'),
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size.fromHeight(48),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -375,7 +425,7 @@ class CareGraphPartnerMeta {
 
   static String localTime(Partner partner, DateTime now) {
     final timezoneId = partner.timezoneId?.trim();
-    if (timezoneId?.isNotEmpty == true) {
+    if (partner.timezoneConfirmed && timezoneId?.isNotEmpty == true) {
       try {
         final location = tz.getLocation(timezoneId!);
         final local = tz.TZDateTime.from(now.toUtc(), location);
@@ -387,11 +437,6 @@ class CareGraphPartnerMeta {
       }
     }
 
-    final longitude = partner.longitude;
-    if (longitude != null) {
-      final local = now.toUtc().add(Duration(hours: (longitude / 15).round()));
-      return _formatClock(local.hour, local.minute);
-    }
     return '时间待确认';
   }
 
@@ -407,478 +452,5 @@ class CareGraphPartnerMeta {
 
   static String _formatClock(int hour, int minute) {
     return '当地 ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
-  }
-}
-
-class _GraphCanvas extends StatelessWidget {
-  const _GraphCanvas({
-    required this.partners,
-    required this.weatherByPartner,
-    required this.weatherLoadingIds,
-    required this.configsByPartner,
-    required this.onPartnerTap,
-    this.height = 430,
-  });
-
-  final List<Partner> partners;
-  final Map<String, FullWeatherResult?> weatherByPartner;
-  final Set<String> weatherLoadingIds;
-  final Map<String, List<ReminderConfig>> configsByPartner;
-  final ValueChanged<Partner> onPartnerTap;
-  final double height;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      height: height,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            theme.colorScheme.primaryContainer.withValues(alpha: 0.42),
-            theme.colorScheme.surface,
-            theme.colorScheme.tertiaryContainer.withValues(alpha: 0.32),
-          ],
-          stops: const [0, 0.58, 1],
-        ),
-        borderRadius: TaRadius.borderLg,
-        border: Border.all(
-          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
-        ),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final size = Size(constraints.maxWidth, constraints.maxHeight);
-          final center = Offset(size.width / 2, size.height / 2 - 8);
-          final positions = _nodePositions(size, partners.length);
-
-          return Stack(
-            children: [
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: _CareGraphLinePainter(
-                    center: center,
-                    partnerCenters: positions
-                        .map((position) => position + const Offset(56, 34))
-                        .toList(growable: false),
-                    relationships: partners
-                        .map((partner) => partner.typeLabel)
-                        .toList(growable: false),
-                    color: theme.colorScheme.outline.withValues(alpha: 0.38),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: center.dx - 36,
-                top: center.dy - 36,
-                child: Container(
-                  width: 72,
-                  height: 72,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        theme.colorScheme.primary,
-                        theme.colorScheme.primary.withValues(alpha: 0.78),
-                      ],
-                    ),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: theme.colorScheme.primary.withValues(
-                          alpha: 0.24,
-                        ),
-                        blurRadius: 22,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    '我',
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      color: theme.colorScheme.onPrimary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-              for (var index = 0; index < partners.length; index++)
-                Positioned(
-                  left: positions[index].dx,
-                  top: positions[index].dy,
-                  child: _PartnerGraphNode(
-                    partner: partners[index],
-                    weather: weatherByPartner[partners[index].id],
-                    weatherLoading: weatherLoadingIds.contains(
-                      partners[index].id,
-                    ),
-                    colorIndex: index,
-                    reminderCount:
-                        configsByPartner[partners[index].id]
-                            ?.where((config) => config.enabled)
-                            .length ??
-                        0,
-                    onTap: () => onPartnerTap(partners[index]),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  List<Offset> _nodePositions(Size size, int count) {
-    if (count == 0) return const [];
-    final center = Offset(size.width / 2, size.height / 2 - 8);
-    final horizontalRadius = math.min(size.width * 0.34, 128.0);
-    final verticalRadius = math.min(size.height * 0.31, 126.0);
-    return List.generate(count, (index) {
-      final angle = -math.pi / 2 + (2 * math.pi * index / count);
-      final ringMultiplier = count > 6 && index.isOdd ? 0.72 : 1.0;
-      final nodeCenter = Offset(
-        center.dx + math.cos(angle) * horizontalRadius * ringMultiplier,
-        center.dy + math.sin(angle) * verticalRadius * ringMultiplier,
-      );
-      return Offset(
-        (nodeCenter.dx - 56).clamp(4.0, size.width - 116),
-        (nodeCenter.dy - 34).clamp(8.0, size.height - 126),
-      );
-    });
-  }
-}
-
-class _PartnerGraphNode extends StatelessWidget {
-  const _PartnerGraphNode({
-    required this.partner,
-    required this.weather,
-    required this.weatherLoading,
-    required this.colorIndex,
-    required this.reminderCount,
-    required this.onTap,
-  });
-
-  final Partner partner;
-  final FullWeatherResult? weather;
-  final bool weatherLoading;
-  final int colorIndex;
-  final int reminderCount;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final palette = [
-      theme.colorScheme.secondaryContainer,
-      theme.colorScheme.tertiaryContainer,
-      theme.colorScheme.primaryContainer,
-    ];
-    final paletteIndex = colorIndex % palette.length;
-    final nodeColor = palette[paletteIndex];
-    final onNodeColor = switch (paletteIndex) {
-      1 => theme.colorScheme.onTertiaryContainer,
-      2 => theme.colorScheme.onPrimaryContainer,
-      _ => theme.colorScheme.onSecondaryContainer,
-    };
-    final city = partner.city?.trim().isNotEmpty == true
-        ? partner.city!.trim()
-        : '地点待确认';
-    final time = CareGraphPartnerMeta.localTime(partner, DateTime.now());
-    final weatherText = CareGraphPartnerMeta.weatherLabel(
-      weather,
-      loading: weatherLoading,
-    );
-    final informationScore =
-        <Object?>[partner.city, partner.timezoneId, partner.note]
-            .where(
-              (value) => value != null && value.toString().trim().isNotEmpty,
-            )
-            .length;
-    final nodeSize =
-        (64.0 + math.min(18, informationScore * 3 + reminderCount * 3));
-
-    return Semantics(
-      button: true,
-      label: '查看${partner.nickname}的关心信息',
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          width: 112,
-          height: 138,
-          child: Column(
-            children: [
-              AnimatedContainer(
-                duration: TaAnimation.fast,
-                width: nodeSize,
-                height: nodeSize,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: nodeColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: theme.colorScheme.surface.withValues(alpha: 0.9),
-                    width: 3,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: nodeColor.withValues(alpha: 0.34),
-                      blurRadius: 14,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Text(
-                  partner.nickname,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: onNodeColor,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                '$city · ${time.replaceFirst('当地 ', '')}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.78,
-                  ),
-                  letterSpacing: 0,
-                ),
-              ),
-              Text(
-                weatherText,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.72,
-                  ),
-                  letterSpacing: 0,
-                ),
-              ),
-              Text(
-                '${partner.typeLabel} · $reminderCount 个提醒',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.68,
-                  ),
-                  letterSpacing: 0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SelectedPartnerHero extends StatelessWidget {
-  const _SelectedPartnerHero({
-    required this.partner,
-    required this.localTime,
-    required this.weatherLabel,
-    required this.reminderCount,
-  });
-
-  final Partner partner;
-  final String localTime;
-  final String weatherLabel;
-  final int reminderCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: TaSpacing.lg,
-        vertical: TaSpacing.xl,
-      ),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            theme.colorScheme.secondaryContainer.withValues(alpha: 0.78),
-            theme.colorScheme.primaryContainer.withValues(alpha: 0.52),
-            theme.colorScheme.tertiaryContainer.withValues(alpha: 0.46),
-          ],
-        ),
-        borderRadius: TaRadius.borderLg,
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: 96,
-            height: 96,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: theme.colorScheme.secondary,
-              shape: BoxShape.circle,
-              border: Border.all(color: theme.colorScheme.surface, width: 4),
-              boxShadow: [
-                BoxShadow(
-                  color: theme.colorScheme.secondary.withValues(alpha: 0.28),
-                  blurRadius: 24,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: Text(
-              partner.nickname,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: theme.colorScheme.onSecondary,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(height: TaSpacing.md),
-          Text(
-            '${partner.nickname} · ${partner.typeLabel} · $reminderCount 个提醒',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: TaSpacing.xs),
-          Text(
-            '${partner.city ?? '地点待确认'} · $localTime\n$weatherLabel',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              height: 1.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Container(
-          width: 38,
-          height: 38,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(TaRadius.sm),
-          ),
-          child: Icon(icon, color: color, size: TaSizes.iconSm),
-        ),
-        const SizedBox(width: TaSpacing.sm),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _CareGraphLinePainter extends CustomPainter {
-  const _CareGraphLinePainter({
-    required this.center,
-    required this.partnerCenters,
-    required this.color,
-    required this.relationships,
-  });
-
-  final Offset center;
-  final List<Offset> partnerCenters;
-  final Color color;
-  final List<String> relationships;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.5
-      ..strokeCap = StrokeCap.round;
-    for (var index = 0; index < partnerCenters.length; index++) {
-      final partnerCenter = partnerCenters[index];
-      canvas.drawLine(center, partnerCenter, paint);
-      if (index >= relationships.length) continue;
-      final labelPosition = Offset.lerp(center, partnerCenter, 0.48)!;
-      final painter = TextPainter(
-        text: TextSpan(
-          text: relationships[index],
-          style: TextStyle(color: color, fontSize: 10),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      painter.paint(
-        canvas,
-        labelPosition - Offset(painter.width / 2, painter.height / 2),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _CareGraphLinePainter oldDelegate) {
-    if (oldDelegate.center != center ||
-        oldDelegate.color != color ||
-        oldDelegate.relationships.length != relationships.length) {
-      return true;
-    }
-    if (oldDelegate.partnerCenters.length != partnerCenters.length) return true;
-    for (var index = 0; index < partnerCenters.length; index++) {
-      if (oldDelegate.partnerCenters[index] != partnerCenters[index]) {
-        return true;
-      }
-    }
-    return false;
   }
 }

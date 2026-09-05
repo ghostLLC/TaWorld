@@ -422,9 +422,10 @@ const _paletteForest = TaColorPalette(
 String _activePaletteId = 'coral';
 
 /// 获取当前活动调色板
-TaColorPalette get activePalette =>
-    kTaPalettes.firstWhere((p) => p.id == _activePaletteId,
-        orElse: () => kTaPalettes.first);
+TaColorPalette get activePalette => kTaPalettes.firstWhere(
+  (p) => p.id == _activePaletteId,
+  orElse: () => kTaPalettes.first,
+);
 
 /// 设置活动调色板（内部调用，由 ThemeService 管理）
 void setActivePalette(String id) {
@@ -520,8 +521,11 @@ abstract final class TaSpacing {
 
   static const page = EdgeInsets.symmetric(horizontal: pagePadding);
   static const cardInner = EdgeInsets.all(md);
-  static const cardInnerLarge = EdgeInsets.all(lg);
-  static const listItem = EdgeInsets.symmetric(horizontal: pagePadding, vertical: xs);
+  static const cardInnerLarge = EdgeInsets.all(md);
+  static const listItem = EdgeInsets.symmetric(
+    horizontal: pagePadding,
+    vertical: xs,
+  );
 }
 
 // ============================================================
@@ -532,8 +536,8 @@ abstract final class TaRadius {
   static const double xs = 8;
   static const double sm = 12;
   static const double md = 16;
-  static const double lg = 24;
-  static const double xl = 32;
+  static const double lg = 20;
+  static const double xl = 28;
   static const double full = 999;
 
   static final borderXs = BorderRadius.circular(xs);
@@ -550,14 +554,26 @@ abstract final class TaRadius {
 
 abstract final class TaShadows {
   static List<BoxShadow> get sm => [
-        BoxShadow(color: TaLightColors.shadow, blurRadius: 8, offset: const Offset(0, 2)),
-      ];
+    BoxShadow(
+      color: TaLightColors.shadow,
+      blurRadius: 8,
+      offset: const Offset(0, 2),
+    ),
+  ];
   static List<BoxShadow> get md => [
-        BoxShadow(color: TaLightColors.shadow, blurRadius: 16, offset: const Offset(0, 4)),
-      ];
+    BoxShadow(
+      color: TaLightColors.shadow,
+      blurRadius: 16,
+      offset: const Offset(0, 4),
+    ),
+  ];
   static List<BoxShadow> get lg => [
-        BoxShadow(color: TaLightColors.shadow, blurRadius: 24, offset: const Offset(0, 8)),
-      ];
+    BoxShadow(
+      color: TaLightColors.shadow,
+      blurRadius: 24,
+      offset: const Offset(0, 8),
+    ),
+  ];
 }
 
 // ============================================================
@@ -586,15 +602,15 @@ abstract final class TaSizes {
   static const double avatarLg = 64;
   static const double avatarXl = 96;
 
-  static const double buttonHeight = 52;
-  static const double buttonHeightSm = 40;
+  static const double buttonHeight = 48;
+  static const double buttonHeightSm = 44;
   static const double inputHeight = 52;
   static const double bottomNavHeight = 72;
 
   static const double iconSm = 20;
   static const double iconMd = 24;
   static const double iconLg = 32;
-  static const double appBarHeight = 64;
+  static const double appBarHeight = 56;
 }
 
 // ============================================================
@@ -603,51 +619,55 @@ abstract final class TaSizes {
 
 abstract final class TaGradients {
   /// 主渐变（AppBar、主按钮）
-  static LinearGradient primary([Brightness b = Brightness.light]) => LinearGradient(
+  static LinearGradient primary([Brightness b = Brightness.light]) =>
+      LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
           _cs(b).primary,
           HSLColor.fromColor(_cs(b).primary)
               .withLightness(
-                  (HSLColor.fromColor(_cs(b).primary).lightness - 0.05)
-                      .clamp(0.0, 1.0))
+                (HSLColor.fromColor(_cs(b).primary).lightness - 0.05).clamp(
+                  0.0,
+                  1.0,
+                ),
+              )
               .toColor(),
         ],
       );
 
   /// 温暖渐变（卡片背景装饰）
-  static LinearGradient warm([Brightness b = Brightness.light]) => LinearGradient(
+  static LinearGradient warm([Brightness b = Brightness.light]) =>
+      LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [
-          _cs(b).primaryContainer,
-          _cs(b).secondaryContainer,
-        ],
+        colors: [_cs(b).primaryContainer, _cs(b).secondaryContainer],
       );
 
   /// 成就金色渐变
-  static LinearGradient gold([Brightness b = Brightness.light]) => LinearGradient(
+  static LinearGradient gold([Brightness b = Brightness.light]) =>
+      LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
           _cs(b).secondaryContainer,
           HSLColor.fromColor(_cs(b).secondary)
               .withLightness(
-                  (HSLColor.fromColor(_cs(b).secondary).lightness - 0.08)
-                      .clamp(0.0, 1.0))
+                (HSLColor.fromColor(_cs(b).secondary).lightness - 0.08).clamp(
+                  0.0,
+                  1.0,
+                ),
+              )
               .toColor(),
         ],
       );
 
   /// 天气蓝色渐变
-  static LinearGradient sky([Brightness b = Brightness.light]) => LinearGradient(
+  static LinearGradient sky([Brightness b = Brightness.light]) =>
+      LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [
-          _cs(b).tertiaryContainer,
-          _cs(b).tertiary,
-        ],
+        colors: [_cs(b).tertiaryContainer, _cs(b).tertiary],
       );
 
   static TaColorSet _cs(Brightness b) =>

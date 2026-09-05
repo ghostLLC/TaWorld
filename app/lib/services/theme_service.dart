@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app/design_tokens.dart';
+import 'reminder_scheduler.dart';
 
 class ThemeService extends ChangeNotifier {
   static final ThemeService instance = ThemeService._();
@@ -73,5 +74,6 @@ class ThemeService extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('push_enabled', enabled);
+    await ReminderScheduler.scheduleAll();
   }
 }

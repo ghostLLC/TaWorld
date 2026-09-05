@@ -20,17 +20,19 @@ void main() {
     () async {
       final prompt = await AiMemoryService.buildSystemPrompt();
 
-      expect(prompt, contains('结构化结果里的 status 和 verified'));
-      expect(prompt, contains('最终回复必须使用已完成、部分完成或未完成的结果表述'));
-      expect(prompt, contains('绝不能以“稍等”“我这就弄”“马上帮你”等未来时态结束'));
+      expect(prompt, contains('status、verified 和 entity_id'));
+      expect(prompt, contains('部分成功明确尚未完成的通知条件'));
+      expect(prompt, contains('失败不能说成功'));
+      expect(prompt, contains('不要以“稍等”“马上帮你”结束'));
+      expect(prompt, contains('"timezone_confirmed":false'));
     },
   );
 
   test('compatible multi-select choices offer a concise all option', () async {
     final prompt = await AiMemoryService.buildSystemPrompt();
 
-    expect(prompt, contains('可以同时选择多个兼容选项'));
+    expect(prompt, contains('执行所有兼容选项，不逐项确认'));
     expect(prompt, contains('都要'));
-    expect(prompt, contains('关系类型、时间基准这类互斥问题不要添加“都要”'));
+    expect(prompt, contains('关系类型、时间基准等互斥问题不提供“都要”'));
   });
 }

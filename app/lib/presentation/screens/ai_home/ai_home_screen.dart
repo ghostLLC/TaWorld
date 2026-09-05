@@ -4,6 +4,8 @@
 /// 包含：轻量状态条、AI 对话流（含主动消息）、快捷芯片、输入栏。
 library;
 
+import '../reminder_health/reminder_health_screen.dart';
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -20,6 +22,9 @@ import '../../../app/router.dart';
 import '../../../data/local/database_helper.dart';
 import '../../../data/models/reminder_occurrence_record.dart';
 import '../../../services/ai_service.dart';
+import '../../../services/partner_selection.dart';
+import '../../../services/reminder_edit_service.dart';
+import '../../../services/reminder_health_service.dart';
 import '../../../services/chat_history_service.dart';
 import '../../../services/ai_proactive_service.dart';
 import '../../../services/ai_memory_extractor.dart';
@@ -118,6 +123,8 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   final _imagePicker = ImagePicker();
 
   bool _sending = false;
+  bool _hasOlder = false, _loadingOlder = false;
+  String? _oldestTime, _oldestId, _historyError;
   bool _speechInitialized = false;
   bool _isListening = false;
   bool _processingImage = false;
@@ -209,84 +216,131 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   }
 
   Future<void> _init() async {
-    final has = await AiService.hasApiKey();
-    if (!mounted) return;
-    setState(() => _hasApiKey = has);
-
-    // 并行加载基础数据
     try {
-      final results = await Future.wait([
-        LocalUserService.getStats(),
-        LocalAchievementService.getAllWithProgress(),
-        AiService.getChatHistory(),
-      ]);
-      final history = results[2] as List;
-      final attachmentRows =
-          await ChatHistoryService.getAttachmentsByMessageIds(
-            history
-                .where((row) => row['message_type'] == 'image')
-                .map((row) => row['id'] as String),
-          );
+      final has = await AiService.hasApiKey();
+      if (mounted) setState(() => _hasApiKey = has);
+    } catch (_) {
+      /* Service configuration does not hide local history. */
+    }
+    try {
+      _stats = await LocalUserService.getStats();
+    } catch (_) {}
+    try {
+      _achievements = await LocalAchievementService.getAllWithProgress();
+    } catch (_) {}
+    try {
+      final history = await AiService.getChatHistory();
+      final messages = await _decodeHistoryRows(history);
       if (!mounted) return;
-
       setState(() {
-        _stats = results[0] as Map<String, dynamic>;
-        _achievements = results[1] as List;
-        // 加载历史消息（assistant 消息按 ||| 拆分为多条气泡）
-        for (final row in history) {
-          final id = row['id'] as String?;
-          final role = row['role'] as String;
-          final content = row['content'] as String;
-          final messageType = row['message_type'] as String? ?? 'message';
-          if (messageType == 'image') {
-            final attachment = attachmentRows[id];
-            _messages.add(
-              _ChatMessage(
-                id: id,
-                role: role,
-                content: content,
-                localImagePath: attachment?['local_path'] as String?,
-              ),
-            );
-            continue;
-          }
-          if (messageType == 'milestone') {
-            final milestone = _decodeMilestone(row['metadata_json'] as String?);
-            if (milestone != null) {
-              _messages.add(
-                _ChatMessage(
-                  id: id,
-                  role: role,
-                  content: content,
-                  milestone: milestone,
-                ),
-              );
-              continue;
-            }
-          }
-          if (role == 'assistant' && content.contains('|||')) {
-            final parts = splitAssistantPresentationSegments(content);
-            if (parts.length > 1) {
-              for (final part in parts) {
-                _messages.add(_ChatMessage(id: id, role: role, content: part));
-              }
-            } else {
-              _messages.add(_ChatMessage(id: id, role: role, content: content));
-            }
-          } else {
-            _messages.add(_ChatMessage(id: id, role: role, content: content));
-          }
-        }
+        final known = _messages.map((m) => m.id).whereType<String>().toSet();
+        _messages.insertAll(0, messages.where((m) => !known.contains(m.id)));
+        _setHistoryCursor(history);
+        _historyError = null;
         _loading = false;
       });
       _scrollToBottom();
-      // 生成主动消息
       _generateProactiveMessages();
-      // 消费后台 AI 主动消息
       _consumePendingProactiveMessages();
       _loadReminderFollowUps();
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _historyError = '对话暂未读出，点击重试；这不代表历史已丢失';
+        });
+      }
+    }
+  }
+
+  void _setHistoryCursor(List<Map<String, dynamic>> rows) {
+    _hasOlder = rows.length == 50;
+    if (rows.isNotEmpty) {
+      _oldestTime = rows.first['created_at'] as String;
+      _oldestId = rows.first['id'] as String;
+    }
+  }
+
+  Future<List<_ChatMessage>> _decodeHistoryRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final attachments = await ChatHistoryService.getAttachmentsByMessageIds(
+      rows
+          .where((r) => r['message_type'] == 'image')
+          .map((r) => r['id'] as String),
+    );
+    final messages = <_ChatMessage>[];
+    for (final row in rows) {
+      final id = row['id'] as String,
+          role = row['role'] as String,
+          content = row['content'] as String;
+      if (row['message_type'] == 'image') {
+        messages.add(
+          _ChatMessage(
+            id: id,
+            role: role,
+            content: content,
+            localImagePath: attachments[id]?['local_path'] as String?,
+          ),
+        );
+      } else if (row['message_type'] == 'milestone') {
+        messages.add(
+          _ChatMessage(
+            id: id,
+            role: role,
+            content: content,
+            milestone: _decodeMilestone(row['metadata_json'] as String?),
+          ),
+        );
+      } else if (role == 'assistant') {
+        for (final part in splitAssistantPresentationSegments(content)) {
+          messages.add(_ChatMessage(id: id, role: role, content: part));
+        }
+      } else {
+        messages.add(_ChatMessage(id: id, role: role, content: content));
+      }
+    }
+    return messages;
+  }
+
+  Future<void> _loadOlder() async {
+    if (_loadingOlder || !_hasOlder) return;
+    setState(() => _loadingOlder = true);
+    final previousMax = _scrollController.hasClients
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
+    final previousOffset = _scrollController.hasClients
+        ? _scrollController.offset
+        : 0.0;
+    try {
+      final rows = await AiService.getChatHistory(
+        beforeTime: _oldestTime,
+        beforeId: _oldestId,
+      );
+      final messages = await _decodeHistoryRows(rows);
+      if (!mounted) return;
+      setState(() {
+        _messages.insertAll(0, messages);
+        _setHistoryCursor(rows);
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.jumpTo(
+            (previousOffset +
+                    _scrollController.position.maxScrollExtent -
+                    previousMax)
+                .clamp(0, _scrollController.position.maxScrollExtent),
+          );
+        }
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('更早的对话暂未读出，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _loadingOlder = false);
     }
   }
 
@@ -516,7 +570,8 @@ class _AiHomeScreenState extends State<AiHomeScreen>
           0,
           _ChatMessage(
             role: 'assistant',
-            content: '今日天气速览\n${normalWeather.join('\n')}\n\n大家都挺好的，放心~',
+            content:
+                '今日天气速览\n${normalWeather.join('\n')}\n\n以上仅为当地天气，不代表人物当前状态。',
             proactiveType: ProactiveType.weather,
             weatherData: {'type': 'summary', 'partners': normalWeather.length},
           ),
@@ -828,7 +883,87 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     Map<String, dynamic> args,
   ) async {
     try {
+      if (const {
+            'create_reminder',
+            'delete_reminder',
+            'update_partner',
+            'get_partner_weather',
+            'get_partner_detail',
+          }.contains(name) &&
+          args['subject'] != 'self' &&
+          !const {'我', '自己', '本人', '用户'}.contains(args['partner_name']) &&
+          !(name == 'get_partner_weather' &&
+              args['partner_id'] == null &&
+              (args['partner_name'] ?? '') == '')) {
+        final person = PartnerSelection.resolve(
+          await PartnerService.getAll(),
+          id: args['partner_id'] as String?,
+          name: args['partner_name'] as String?,
+        );
+        args = {
+          ...args,
+          'partner_id': person.id,
+          'partner_name': person.nickname,
+        };
+      }
       switch (name) {
+        case 'update_reminder':
+          final saved = await ReminderEditService.update(args);
+          try {
+            await ReminderScheduler.scheduleAll();
+          } catch (_) {
+            return ToolExecutionResult.partialSuccess(
+              toolName: name,
+              modelMessage: '修改已保存，系统通知尚未同步，请查看提醒检查',
+              title: '提醒已更新',
+              detail: '通知待同步',
+              entityId: saved.id,
+              verified: true,
+            );
+          }
+          await ReminderHealthService.check();
+          final pending =
+              ReminderHealthService.current.value?.issues ?? const <String>[];
+          if (saved.enabled && pending.isNotEmpty) {
+            return ToolExecutionResult.partialSuccess(
+              toolName: name,
+              modelMessage: '修改已保存；${pending.join('；')}',
+              title: '提醒已更新',
+              detail: pending.first,
+              entityId: saved.id,
+              verified: true,
+            );
+          }
+          return ToolExecutionResult.success(
+            toolName: name,
+            modelMessage: '已保存并回读：${jsonEncode(saved.toMap())}',
+            title: saved.enabled ? '提醒已更新' : '提醒已暂停',
+            detail: saved.enabled ? '已同步未来的提醒安排' : '暂停期间不会安排这条提醒',
+            entityId: saved.id,
+            verified: true,
+          );
+        case 'get_reminders':
+          final all = await LocalReminderService.getAllConfigs();
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: jsonEncode([
+              for (final group in all.values)
+                for (final c in group) c.toMap(),
+            ]),
+          );
+        case 'get_capabilities':
+          await ReminderHealthService.check();
+          return ToolExecutionResult.information(
+            toolName: name,
+            modelMessage: jsonEncode({
+              'person_create_update': true,
+              'reminders_create_update_pause': true,
+              'one_time_daily_weekdays': true,
+              'weather_monitoring': 'device_best_effort',
+              'send_to_friend': false,
+              'notification': ReminderHealthService.current.value?.summary,
+            }),
+          );
         case 'create_reminder':
           return await _toolCreateReminder(args);
         case 'delete_reminder':
@@ -869,7 +1004,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
           toolName: name,
           modelMessage: '执行失败: $e',
           title: '操作未完成',
-          detail: '没有保存更改，请稍后重试',
+          detail: '操作未完整完成，请检查现有记录后重试',
         );
       }
       return ToolExecutionResult.information(
@@ -881,6 +1016,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
 
   bool _isStateChangingTool(String name) => const {
     'create_reminder',
+    'update_reminder',
     'delete_reminder',
     'create_partner',
     'update_partner',
@@ -906,7 +1042,11 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     if (!plan.isSelfReminder) {
       final partners = await PartnerService.getAll();
       final matchingPartners = partners
-          .where((partner) => partner.nickname == plan.partnerName)
+          .where(
+            (partner) => args['partner_id'] != null
+                ? partner.id == args['partner_id']
+                : partner.nickname == plan.partnerName,
+          )
           .toList();
       if (matchingPartners.isEmpty) {
         final message = '未找到名为"${plan.partnerName}"的关心的人，请先添加';
@@ -975,6 +1115,9 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     );
     final sameCategory = existingConfigs.where((config) {
       if (!config.enabled || config.category != plan.category) return false;
+      if (plan.category == 'custom') {
+        return jsonEncode(config.config) == jsonEncode(plan.config);
+      }
       if (plan.category != 'weather') return true;
       final existingMode = config.config['mode'] ?? 'daily_digest';
       return existingMode == plan.config['mode'];
@@ -988,7 +1131,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
           '${config['monitor_start'] ?? '07:00'}–${config['monitor_end'] ?? '23:00'}';
       final reminderLabel = _reminderPlanLabel(plan);
       final message =
-          '${plan.partnerName}已有$reminderLabel（$existingTime），如需修改请到提醒管理中编辑';
+          '${plan.partnerName}已有$reminderLabel（$existingTime），如用户要求修改，请调用 update_reminder，reminder_id=${sameCategory.first.id}';
       return ToolExecutionResult.failure(
         toolName: 'create_reminder',
         modelMessage: message,
@@ -1040,6 +1183,10 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     final reminderLabel = _reminderPlanLabel(plan);
     final timeDetail = plan.monitorsWeatherChanges
         ? '${plan.config['monitor_start']}–${plan.config['monitor_end']}'
+        : plan.config['scheduled_at'] != null
+        ? '单次 ${plan.displayTime}'
+        : plan.config['weekdays'] != null
+        ? '每周 ${plan.config['weekdays']} · ${plan.displayTime}'
         : '每天 ${plan.displayTime}';
     final zoneDetail = plan.timezoneMode == 'partner'
         ? '${plan.partnerName}当地时间 · $timezoneId'
@@ -1151,7 +1298,13 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     Partner? partner;
     if (!isSelf) {
       final partners = await PartnerService.getAll();
-      final matches = partners.where((p) => p.nickname == partnerName).toList();
+      final matches = partners
+          .where(
+            (p) => args['partner_id'] != null
+                ? p.id == args['partner_id']
+                : p.nickname == partnerName,
+          )
+          .toList();
       if (matches.isEmpty) {
         final message = '未找到名为"$partnerName"的关心的人';
         return ToolExecutionResult.failure(
@@ -1274,7 +1427,13 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     }
 
     final partners = await PartnerService.getAll();
-    final partner = partners.where((p) => p.nickname == partnerName).toList();
+    final partner = partners
+        .where(
+          (p) => args['partner_id'] != null
+              ? p.id == args['partner_id']
+              : p.nickname == partnerName,
+        )
+        .toList();
     if (partner.isEmpty) {
       return '未找到名为"$partnerName"的关心的人';
     }
@@ -1339,7 +1498,9 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       final cityInfo = p.city != null && p.city!.isNotEmpty
           ? '，城市: ${p.city}'
           : '，城市: 未设置';
-      lines.add('${p.nickname}（${p.typeLabel}，认识 $days 天$cityInfo）');
+      lines.add(
+        'ID=${p.id} ${p.nickname}（${p.typeLabel}，添加于 $days 天前$cityInfo）',
+      );
     }
     return '关心的人: ${lines.join('、')}';
   }
@@ -1352,7 +1513,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     final byCategory = stats['byCategory'] as Map<String, int>? ?? {};
 
     final parts = <String>[];
-    parts.add('总共发送过 $total 次提醒');
+    parts.add('总共确认过 $total 次关心');
     if (streak > 0) parts.add('连续关心 $streak 天');
     if (byCategory.isNotEmpty) {
       final catLines = byCategory.entries
@@ -1418,7 +1579,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     );
     // 验证创建结果
     final verify = await PartnerService.getAll();
-    final created = verify.where((p) => p.nickname == nickname).toList();
+    final created = verify.where((p) => p.id == provisional.id).toList();
     if (created.isEmpty) {
       final rolledBack = await _rollbackCreatedPartner(provisional.id);
       return ToolExecutionResult.failure(
@@ -1458,12 +1619,8 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       if (p.timezoneId?.isNotEmpty == true) '当地时区已确认 ${p.timezoneId}',
     ];
 
-    final modelMessage = city != null && city.isNotEmpty
-        ? '已成功添加 $nickname（$typeLabel${locationInfo.isEmpty ? '' : '，${locationInfo.join('，')}'}）。\n'
-              '接着问用户是否需要设置提醒。\n'
-              '用选择题格式：[选项:睡觉提醒|吃饭提醒|天气提醒|稍后再说]'
-        : '已成功添加 $nickname（$typeLabel）。\n'
-              '接着询问 $nickname 在哪个城市，再询问是否需要设置提醒。';
+    final modelMessage =
+        '已添加并回读验证 $nickname（$typeLabel），partner_id=${p.id}。${locationInfo.join('，')}。继续完成用户本轮已要求的其他操作，缺少非必要资料无需追问。';
     return ToolExecutionResult.success(
       toolName: 'create_partner',
       modelMessage: modelMessage,
@@ -1489,14 +1646,22 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     final partnerName = args['partner_name'] as String? ?? '';
 
     final partners = await PartnerService.getAll();
-    final partner = partners.where((p) => p.nickname == partnerName).toList();
+    final partner = partners
+        .where(
+          (p) => args['partner_id'] != null
+              ? p.id == args['partner_id']
+              : p.nickname == partnerName,
+        )
+        .toList();
     if (partner.isEmpty) {
       return '未找到名为"$partnerName"的关心的人';
     }
 
     final p = partner.first;
     final days = DateTime.now().difference(p.createdAt).inDays;
-    final parts = <String>['$partnerName（${p.typeLabel}，认识 $days 天）'];
+    final parts = <String>[
+      'ID=${p.id} $partnerName（${p.typeLabel}，添加于 $days 天前）',
+    ];
     if (p.city != null && p.city!.isNotEmpty) {
       parts.add('城市: ${p.city}');
     } else {
@@ -1570,7 +1735,13 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     }
 
     final partners = await PartnerService.getAll();
-    final partner = partners.where((p) => p.nickname == partnerName).toList();
+    final partner = partners
+        .where(
+          (p) => args['partner_id'] != null
+              ? p.id == args['partner_id']
+              : p.nickname == partnerName,
+        )
+        .toList();
     if (partner.isEmpty) {
       final message = '未找到名为"$partnerName"的关心的人';
       return ToolExecutionResult.failure(
@@ -1596,6 +1767,8 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       timezoneId: timezoneId?.isEmpty == true ? null : timezoneId,
       timezoneSource: timezoneId?.isNotEmpty == true ? 'user_confirmed' : null,
       timezoneConfirmed: timezoneId?.isNotEmpty == true ? true : null,
+      expectedUpdatedAt: p.updatedAt,
+      clearLocation: city != null && city.isEmpty,
     );
     if (newNickname != null && newNickname != partnerName) {
       changes.add('名字改为$newNickname');
@@ -1606,7 +1779,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     if (cityChanged) {
       changes.add('城市改为$city');
       if (timezoneId == null || timezoneId.isEmpty) {
-        changes.add('原时区已失效，需重新确认');
+        changes.add('已按新城市重新解析时区');
       }
     }
     if (timezoneId?.isNotEmpty == true) {
@@ -1630,7 +1803,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     // 验证更新结果
     final verifyName = newNickname ?? partnerName;
     final verify = await PartnerService.getAll();
-    final updated = verify.where((p) => p.nickname == verifyName).toList();
+    final updated = verify.where((row) => row.id == p.id).toList();
     if (updated.isEmpty) {
       final rolledBack = await _rollbackUpdatedPartner(p);
       return ToolExecutionResult.failure(
@@ -1654,8 +1827,9 @@ class _AiHomeScreenState extends State<AiHomeScreen>
             (saved.timezoneId == timezoneId && saved.timezoneConfirmed)) &&
         (!cityChanged ||
             timezoneId?.isNotEmpty == true ||
-            (saved.timezoneId == null && !saved.timezoneConfirmed)) &&
-        (note == null || saved.note == note);
+            ((saved.timezoneId == null && !saved.timezoneConfirmed) ||
+                saved.timezoneSource == 'city_selection')) &&
+        (note == null || saved.note == (note.trim().isEmpty ? null : note));
     if (!verified) {
       final rolledBack = await _rollbackUpdatedPartner(p);
       return ToolExecutionResult.failure(
@@ -1686,7 +1860,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
       }
     }
 
-    if (cityChanged && timezoneId?.isNotEmpty != true) {
+    if (cityChanged && !saved.timezoneConfirmed) {
       final configs = await LocalReminderService.getConfigs(p.id);
       final affectedCount = configs
           .where((config) => config.enabled && config.timezoneMode == 'partner')
@@ -1776,6 +1950,9 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   String _toolNameLabel(String name) {
     return switch (name) {
       'create_reminder' => '创建提醒',
+      'update_reminder' => '修改提醒',
+      'get_reminders' => '读取提醒',
+      'get_capabilities' => '检查可用能力',
       'delete_reminder' => '删除提醒',
       'get_partner_weather' => '查询天气',
       'get_all_partners' => '查看关心的人',
@@ -1932,8 +2109,11 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         setState(() => _activityPhase = AiActivityPhase.revealingSegments);
       }
       if (isRetry) await _appendRetrySuccessMilestone();
-    } on AiChatException {
+    } on AiChatException catch (error) {
       if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
       final idx = _messages.lastIndexWhere((m) => m.streaming);
       if (idx >= 0) _messages.removeAt(idx);
       if (fallbackAssistantText != null) {
@@ -2230,6 +2410,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     widget.draftNotifier?.removeListener(_consumeExternalDraft);
     _speech.cancel();
     _controller.dispose();
+    AiService.cancelCurrentChat();
     _inputFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -2256,6 +2437,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
 
           // ---- API Key 提示 ----
           if (!_hasApiKey) _buildApiKeyBanner(theme),
+          const ReminderHealthCard(),
 
           // ---- 消息列表 ----
           Expanded(child: _buildMessageList(theme)),
@@ -2399,22 +2581,20 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         horizontal: TaSpacing.pagePadding,
         vertical: TaSpacing.sm,
       ),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.errorContainer.withValues(alpha: 0.5),
-      ),
+      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow),
       child: Row(
         children: [
           Icon(
-            Icons.warning_amber_rounded,
+            Icons.psychology_outlined,
             size: 18,
-            color: theme.colorScheme.error,
+            color: theme.colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: TaSpacing.xs),
           Expanded(
             child: Text(
-              'AI 服务未配置，请先设置 API Key',
+              '连接模型，和小念聊聊',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.error,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),
@@ -2427,11 +2607,11 @@ class _AiHomeScreenState extends State<AiHomeScreen>
             },
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: TaSpacing.md),
-              minimumSize: const Size(0, 32),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              minimumSize: const Size(0, 44),
+              tapTargetSize: MaterialTapTargetSize.padded,
               visualDensity: VisualDensity.compact,
             ),
-            child: const Text('去配置', style: TextStyle(fontSize: 13)),
+            child: const Text('连接', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -2446,6 +2626,11 @@ class _AiHomeScreenState extends State<AiHomeScreen>
           ? null
           : _toolNameLabel(_executingTool!),
     );
+    if (_historyError != null) {
+      return Center(
+        child: TextButton(onPressed: _init, child: Text(_historyError!)),
+      );
+    }
     if (_messages.isEmpty && !activity.showLeftBubble) {
       return Center(
         child: Column(
@@ -2487,8 +2672,18 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         horizontal: TaSpacing.pagePadding,
         vertical: TaSpacing.xs,
       ),
-      itemCount: _messages.length + (activity.showLeftBubble ? 1 : 0),
-      itemBuilder: (context, index) {
+      itemCount:
+          _messages.length +
+          (activity.showLeftBubble ? 1 : 0) +
+          (_hasOlder ? 1 : 0),
+      itemBuilder: (context, itemIndex) {
+        if (_hasOlder && itemIndex == 0) {
+          return TextButton(
+            onPressed: _loadingOlder ? null : _loadOlder,
+            child: Text(_loadingOlder ? '正在读取…' : '查看更早的对话'),
+          );
+        }
+        final index = itemIndex - (_hasOlder ? 1 : 0);
         if (index == _messages.length) {
           return _buildLeftActivityBubble(theme, label: activity.label);
         }
@@ -2752,8 +2947,14 @@ class _AiHomeScreenState extends State<AiHomeScreen>
                   borderRadius: TaRadius.borderFull,
                 ),
                 child: IconButton(
-                  onPressed: _sending ? null : _sendMessage,
-                  icon: const Icon(Icons.send_rounded, color: Colors.white),
+                  tooltip: _sending ? '停止本轮回复' : '发送',
+                  onPressed: _sending
+                      ? AiService.cancelCurrentChat
+                      : _sendMessage,
+                  icon: Icon(
+                    _sending ? Icons.stop_rounded : Icons.send_rounded,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ],
@@ -3032,7 +3233,7 @@ class _WeatherCard extends StatelessWidget {
                     Text(
                       '天气关注',
                       style: theme.textTheme.titleSmall?.copyWith(
-                        color: Colors.white.withValues(alpha: 0.9),
+                        color: theme.colorScheme.onSurface,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -3042,7 +3243,7 @@ class _WeatherCard extends StatelessWidget {
                 Text(
                   message.content,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.9),
+                    color: theme.colorScheme.onSurface,
                   ),
                 ),
                 if (message.actionLabel != null) ...[
@@ -3061,7 +3262,7 @@ class _WeatherCard extends StatelessWidget {
                       child: Text(
                         message.actionLabel!,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.9),
+                          color: theme.colorScheme.onSurface,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -3111,7 +3312,7 @@ class _GreetingCard extends StatelessWidget {
                 '小念',
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w600,
-                  color: Colors.white.withValues(alpha: 0.9),
+                  color: theme.colorScheme.onSurface,
                 ),
               ),
             ],
@@ -3120,7 +3321,7 @@ class _GreetingCard extends StatelessWidget {
           Text(
             message.content,
             style: theme.textTheme.bodyMedium?.copyWith(
-              color: Colors.white.withValues(alpha: 0.9),
+              color: theme.colorScheme.onSurface,
             ),
           ),
         ],

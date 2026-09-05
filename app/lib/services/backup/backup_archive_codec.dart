@@ -15,19 +15,22 @@ class BackupInfo {
   final String appVersion;
   final DateTime createdAt;
   final Map<String, int> rowCounts;
+  final int missingAssetCount;
 
   const BackupInfo({
     required this.schemaVersion,
     required this.appVersion,
     required this.createdAt,
     required this.rowCounts,
+    this.missingAssetCount = 0,
   });
 
   /// Formats the metadata as a human-readable summary.
   String get summary {
     final dateStr = DateFormat('yyyy-MM-dd HH:mm').format(createdAt);
     final totalEntries = rowCounts.values.fold(0, (a, b) => a + b);
-    return 'v$appVersion · schema v$schemaVersion · $dateStr\n共 $totalEntries 条数据记录';
+    return 'v$appVersion · schema v$schemaVersion · $dateStr\n共 $totalEntries 条数据记录'
+        '${missingAssetCount == 0 ? '' : '\n原设备已有 $missingAssetCount 张图片缺失，备份中未包含这些图片'}';
   }
 }
 
@@ -38,12 +41,14 @@ class ValidatedBackupArchive {
   final Uint8List databaseBytes;
   final Map<String, Object?> preferences;
   final Map<String, Uint8List> attachments;
+  final Map<String, String> assetPaths;
 
   ValidatedBackupArchive({
     required this.info,
     required this.databaseBytes,
     required Map<String, Object?> preferences,
     Map<String, Uint8List> attachments = const {},
+    this.assetPaths = const {},
   }) : preferences = Map.unmodifiable(preferences),
        attachments = Map.unmodifiable({
          for (final entry in attachments.entries)
@@ -265,6 +270,24 @@ abstract final class BackupArchiveCodec {
     }
 
     final preferencesEntry = localEntries[_preferencesName];
+    final manifest = _parseJsonObject(
+      _readEntry(bytes, localEntries[_manifestName]!),
+      _manifestName,
+    );
+    final assetPaths = <String, String>{};
+    final rawPaths = manifest['asset_paths'];
+    if (rawPaths != null) {
+      if (rawPaths is! Map) throw const BackupFormatException('资源路径索引无效');
+      for (final entry in rawPaths.entries) {
+        if (entry.key is! String ||
+            entry.value is! String ||
+            !_attachmentName.hasMatch('attachments/${entry.value}') ||
+            !localEntries.containsKey('attachments/${entry.value}')) {
+          throw const BackupFormatException('资源路径索引无效');
+        }
+        assetPaths[entry.key as String] = entry.value as String;
+      }
+    }
     final preferences = preferencesEntry == null
         ? <String, Object?>{}
         : _parsePreferences(_readEntry(bytes, preferencesEntry));
@@ -280,6 +303,7 @@ abstract final class BackupArchiveCodec {
       databaseBytes: databaseBytes,
       preferences: preferences,
       attachments: attachments,
+      assetPaths: assetPaths,
     );
   }
 
@@ -687,6 +711,7 @@ abstract final class BackupArchiveCodec {
       appVersion: appVersion,
       createdAt: createdAt,
       rowCounts: rowCounts,
+      missingAssetCount: (manifest['missing_assets'] as List?)?.length ?? 0,
     );
   }
 

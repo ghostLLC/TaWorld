@@ -94,12 +94,13 @@ abstract final class ChatHistoryService {
     int limit = 50,
   }) async {
     final db = await DatabaseHelper.database;
-    return db.query(
+    final rows = await db.query(
       'chat_history',
       where: includeHidden ? null : 'hidden_at IS NULL',
-      orderBy: 'created_at ASC',
+      orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
+    return rows.reversed.toList(growable: false);
   }
 
   static Future<Map<String, Map<String, Object?>>> getAttachmentsByMessageIds(

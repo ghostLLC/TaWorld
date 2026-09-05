@@ -50,6 +50,7 @@ abstract final class TaTheme {
       colorScheme: colorScheme,
       textTheme: textTheme,
       scaffoldBackgroundColor: TaLightColors.background,
+      visualDensity: const VisualDensity(horizontal: 0, vertical: -1),
 
       // ---- AppBar ----
       appBarTheme: AppBarTheme(
@@ -68,9 +69,7 @@ abstract final class TaTheme {
       cardTheme: CardThemeData(
         color: TaLightColors.surface,
         elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderMd,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
         margin: const EdgeInsets.symmetric(vertical: TaSpacing.xs),
       ),
 
@@ -80,9 +79,7 @@ abstract final class TaTheme {
           backgroundColor: TaLightColors.primary,
           foregroundColor: TaLightColors.onPrimary,
           minimumSize: const Size(double.infinity, TaSizes.buttonHeight),
-          shape: RoundedRectangleBorder(
-            borderRadius: TaRadius.borderMd,
-          ),
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
           elevation: 0,
           textStyle: textTheme.labelLarge?.copyWith(
             fontSize: 16,
@@ -94,11 +91,9 @@ abstract final class TaTheme {
       // ---- OutlinedButton（次要按钮） ----
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: TaLightColors.primary,
+          foregroundColor: TaLightColors.onPrimaryContainer,
           minimumSize: const Size(double.infinity, TaSizes.buttonHeight),
-          shape: RoundedRectangleBorder(
-            borderRadius: TaRadius.borderMd,
-          ),
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
           side: BorderSide(color: TaLightColors.primary, width: 1.5),
           textStyle: textTheme.labelLarge?.copyWith(
             fontSize: 16,
@@ -110,7 +105,7 @@ abstract final class TaTheme {
       // ---- TextButton ----
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          foregroundColor: TaLightColors.primary,
+          foregroundColor: TaLightColors.onPrimaryContainer,
           textStyle: textTheme.labelLarge,
         ),
       ),
@@ -162,18 +157,27 @@ abstract final class TaTheme {
         backgroundColor: TaLightColors.surfaceVariant,
         selectedColor: TaLightColors.primaryContainer,
         labelStyle: textTheme.labelMedium,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderFull,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderFull),
         side: BorderSide.none,
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 68,
+        backgroundColor: TaLightColors.surface,
+        elevation: 0,
+        indicatorColor: TaLightColors.secondaryContainer.withValues(
+          alpha: 0.72,
+        ),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      ),
+      listTileTheme: const ListTileThemeData(
+        contentPadding: EdgeInsets.symmetric(horizontal: TaSpacing.md),
+        minVerticalPadding: TaSpacing.xs,
       ),
 
       // ---- Dialog ----
       dialogTheme: DialogThemeData(
         backgroundColor: TaLightColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderLg,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
         titleTextStyle: textTheme.titleLarge,
       ),
 
@@ -197,18 +201,14 @@ abstract final class TaTheme {
       // ---- SnackBar ----
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderSm,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderSm),
       ),
 
       // ---- FloatingActionButton ----
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         backgroundColor: TaLightColors.primary,
         foregroundColor: TaLightColors.onPrimary,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderMd,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
       ),
     );
   }
@@ -251,6 +251,7 @@ abstract final class TaTheme {
       colorScheme: colorScheme,
       textTheme: textTheme,
       scaffoldBackgroundColor: TaDarkColors.background,
+      visualDensity: const VisualDensity(horizontal: 0, vertical: -1),
 
       appBarTheme: AppBarTheme(
         backgroundColor: TaDarkColors.background,
@@ -279,9 +280,7 @@ abstract final class TaTheme {
           backgroundColor: TaDarkColors.primary,
           foregroundColor: TaDarkColors.onPrimary,
           minimumSize: const Size(double.infinity, TaSizes.buttonHeight),
-          shape: RoundedRectangleBorder(
-            borderRadius: TaRadius.borderMd,
-          ),
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
           elevation: 0,
           textStyle: textTheme.labelLarge?.copyWith(
             fontSize: 16,
@@ -294,17 +293,13 @@ abstract final class TaTheme {
         style: OutlinedButton.styleFrom(
           foregroundColor: TaDarkColors.primary,
           minimumSize: const Size(double.infinity, TaSizes.buttonHeight),
-          shape: RoundedRectangleBorder(
-            borderRadius: TaRadius.borderMd,
-          ),
+          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
           side: BorderSide(color: TaDarkColors.primary, width: 1.5),
         ),
       ),
 
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: TaDarkColors.primary,
-        ),
+        style: TextButton.styleFrom(foregroundColor: TaDarkColors.primary),
       ),
 
       inputDecorationTheme: InputDecorationTheme(
@@ -346,17 +341,24 @@ abstract final class TaTheme {
       chipTheme: ChipThemeData(
         backgroundColor: TaDarkColors.surfaceVariant,
         selectedColor: TaDarkColors.primaryContainer,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderFull,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderFull),
         side: BorderSide.none,
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 68,
+        backgroundColor: TaDarkColors.surface,
+        elevation: 0,
+        indicatorColor: TaDarkColors.secondaryContainer.withValues(alpha: 0.64),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      ),
+      listTileTheme: const ListTileThemeData(
+        contentPadding: EdgeInsets.symmetric(horizontal: TaSpacing.md),
+        minVerticalPadding: TaSpacing.xs,
       ),
 
       dialogTheme: DialogThemeData(
         backgroundColor: TaDarkColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderLg,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
       ),
 
       bottomSheetTheme: BottomSheetThemeData(
@@ -376,17 +378,13 @@ abstract final class TaTheme {
 
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderSm,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderSm),
       ),
 
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         backgroundColor: TaDarkColors.primary,
         foregroundColor: TaDarkColors.onPrimary,
-        shape: RoundedRectangleBorder(
-          borderRadius: TaRadius.borderMd,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: TaRadius.borderMd),
       ),
     );
   }

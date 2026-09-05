@@ -2,12 +2,55 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:taworld/data/local/database_helper.dart';
 import 'package:taworld/services/local/local_reminder_service.dart';
+import 'package:taworld/services/local/local_user_service.dart';
 
 import '../helpers/test_database.dart';
 
 void main() {
   setUp(openTestDatabase);
   tearDown(closeTestDatabase);
+
+  test(
+    'care statistics count acknowledgements, not notification deliveries',
+    () async {
+      final db = await DatabaseHelper.database;
+      final timestamp = DateTime.now().toUtc().toIso8601String();
+      await db.insert('partners', {
+        'id': 'care-person',
+        'nickname': 'Ta',
+        'created_at': timestamp,
+        'updated_at': timestamp,
+      });
+      await db.insert('reminder_configs', {
+        'id': 'care-config',
+        'partner_id': 'care-person',
+        'category': 'custom',
+        'enabled': 1,
+        'config': '{}',
+        'created_at': timestamp,
+        'updated_at': timestamp,
+      });
+      for (final status in ['sent', 'pending', 'ignored']) {
+        await db.insert('reminder_logs', {
+          'id': 'care-$status',
+          'config_id': 'care-config',
+          'status': status,
+          'message': 'Remember Ta',
+          'triggered_at': timestamp,
+        });
+      }
+      expect((await LocalReminderService.getStats())['totalCount'], 0);
+      expect((await LocalUserService.getStats())['reminderCount'], 0);
+
+      await LocalReminderService.confirmReminder('care-sent');
+      await LocalReminderService.confirmReminder('care-sent');
+      final care = await LocalReminderService.getStats();
+      expect(care['totalCount'], 1);
+      expect(care['byCategory'], {'custom': 1});
+      expect(care['streakDays'], 1);
+      expect((await LocalUserService.getStats())['reminderCount'], 1);
+    },
+  );
 
   test('all reminder configs are loaded once and grouped by partner', () async {
     final db = await DatabaseHelper.database;

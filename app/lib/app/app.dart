@@ -10,7 +10,7 @@ import 'router.dart';
 import 'theme.dart';
 import '../services/theme_service.dart';
 import '../services/notification_service.dart';
-import '../services/reminder_scheduler.dart';
+import '../services/app_runtime.dart';
 
 /// TaWorld 应用根组件
 class TaWorldApp extends StatefulWidget {
@@ -48,7 +48,7 @@ class _TaWorldAppState extends State<TaWorldApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       // App 恢复前台时，重新调度未来 7 天的通知
-      ReminderScheduler.scheduleAll();
+      AppRuntime.resume();
     }
   }
 

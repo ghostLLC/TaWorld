@@ -150,6 +150,7 @@ class BackupImporter {
         reopened,
         dependencies.attachmentsDirectory,
         createdAttachmentFiles,
+        validated.assetPaths,
       );
       await dependencies.afterStage?.call(
         BackupImportStages.attachmentsRestored,
@@ -199,6 +200,7 @@ class BackupImporter {
     Database database,
     Directory? targetDirectory,
     List<File> createdFiles,
+    Map<String, String> assetPaths,
   ) async {
     if (attachments.isEmpty) return;
     if (targetDirectory == null) {
@@ -241,7 +243,7 @@ class BackupImporter {
       for (final row in rows) {
         final path = row['local_path'] as String?;
         if (path == null || path.isEmpty) continue;
-        final fileName = path.split(RegExp(r'[\\/]')).last;
+        final fileName = assetPaths[path] ?? path.split(RegExp(r'[\\/]')).last;
         final restored = restoredPaths[fileName];
         if (restored == null) continue;
         await txn.update(
@@ -250,6 +252,26 @@ class BackupImporter {
           where: 'id = ?',
           whereArgs: [row['id']],
         );
+      }
+      for (final table in ['partners', 'users']) {
+        final columns = await txn.rawQuery('PRAGMA table_info($table)');
+        if (!columns.any((c) => c['name'] == 'avatar_path')) continue;
+        final people = await txn.query(table, columns: ['id', 'avatar_path']);
+        for (final person in people) {
+          final path = person['avatar_path'] as String?;
+          if (path == null) continue;
+          final restored =
+              restoredPaths[assetPaths[path] ??
+                  path.split(RegExp(r'[\\/]')).last];
+          if (restored != null) {
+            await txn.update(
+              table,
+              {'avatar_path': restored},
+              where: 'id = ?',
+              whereArgs: [person['id']],
+            );
+          }
+        }
       }
     });
   }

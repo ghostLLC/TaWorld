@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../data/local/database_helper.dart';
 import '../../data/models/partner.dart';
+import '../person_location_service.dart';
 
 abstract final class PartnerService {
   /// 关心的人列表变更通知器（跨 Tab 刷新用）
@@ -45,24 +46,30 @@ abstract final class PartnerService {
     double? longitude,
     String? city,
     String? district,
+    String? country,
     String? timezoneId,
     String? timezoneSource,
     bool timezoneConfirmed = false,
   }) async {
     final db = await DatabaseHelper.database;
     final now = DateTime.now();
+    final location = PersonLocationService.resolve(city, country: country);
     final partner = Partner(
       id: DatabaseHelper.newId(),
       nickname: nickname,
       type: type,
       note: note,
-      latitude: latitude,
-      longitude: longitude,
-      city: city,
-      district: district,
-      timezoneId: timezoneId,
-      timezoneSource: timezoneSource,
-      timezoneConfirmed: timezoneConfirmed,
+      latitude: location != null ? location.latitude : latitude,
+      longitude: location != null ? location.longitude : longitude,
+      city: location?.city ?? city,
+      district: district ?? location?.province,
+      country: country ?? location?.country,
+      timezoneId: timezoneId ?? location?.timezoneId,
+      timezoneSource:
+          timezoneSource ?? (location == null ? null : 'city_selection'),
+      timezoneConfirmed: timezoneId != null
+          ? timezoneConfirmed
+          : location != null,
       status: 'active',
       createdAt: now,
       updatedAt: now,
@@ -83,10 +90,15 @@ abstract final class PartnerService {
     double? longitude,
     String? city,
     String? district,
+    String? country,
     String? timezoneId,
     String? timezoneSource,
     bool? timezoneConfirmed,
     bool clearTimezone = false,
+    bool clearNote = false,
+    bool clearAvatar = false,
+    bool clearLocation = false,
+    DateTime? expectedUpdatedAt,
   }) async {
     if (clearTimezone && timezoneId != null) {
       throw ArgumentError(
@@ -112,8 +124,14 @@ abstract final class PartnerService {
     final currentTimezoneId = current?['timezone_id'] as String?;
     final timezoneChanged =
         timezoneId != null && timezoneId != currentTimezoneId;
+    final location = cityChanged && !clearLocation
+        ? PersonLocationService.resolve(city, country: country)
+        : null;
+    final resolvedTimezone = timezoneId ?? location?.timezoneId;
     final shouldInvalidateTimezone =
-        clearTimezone || (cityChanged && timezoneId == null);
+        clearLocation ||
+        clearTimezone ||
+        (cityChanged && resolvedTimezone == null);
 
     final data = <String, dynamic>{
       'updated_at': DateTime.now().toIso8601String(),
@@ -121,17 +139,42 @@ abstract final class PartnerService {
     if (nickname != null) data['nickname'] = nickname;
     if (avatarPath != null) data['avatar_path'] = avatarPath;
     if (type != null) data['type'] = type;
-    if (note != null) data['note'] = note;
+    if (clearNote || note != null) {
+      data['note'] = clearNote || note!.isEmpty ? null : note;
+    }
+    if (clearAvatar) data['avatar_path'] = null;
     if (latitude != null) data['latitude'] = latitude;
     if (longitude != null) data['longitude'] = longitude;
     if (city != null) data['city'] = city;
     if (district != null) data['district'] = district;
+    if (country != null) data['country'] = country;
+    if (cityChanged) {
+      data['latitude'] = location?.latitude ?? latitude;
+      data['longitude'] = location?.longitude ?? longitude;
+      data['district'] = district ?? location?.province;
+      data['country'] = country ?? location?.country;
+    }
+    if (clearLocation) {
+      for (final key in [
+        'city',
+        'country',
+        'district',
+        'latitude',
+        'longitude',
+      ]) {
+        data[key] = null;
+      }
+    }
     if (shouldInvalidateTimezone) {
       data['timezone_id'] = null;
       data['timezone_source'] = null;
       data['timezone_confirmed'] = 0;
-    } else if (timezoneId != null) {
-      data['timezone_id'] = timezoneId;
+    } else if (resolvedTimezone != null) {
+      data['timezone_id'] = resolvedTimezone;
+      if (location != null && timezoneId == null) {
+        data['timezone_source'] = 'city_selection';
+        data['timezone_confirmed'] = 1;
+      }
       if (timezoneSource != null) {
         data['timezone_source'] = timezoneSource;
       } else if (timezoneChanged) {
@@ -148,7 +191,16 @@ abstract final class PartnerService {
         data['timezone_confirmed'] = timezoneConfirmed ? 1 : 0;
       }
     }
-    await db.update('partners', data, where: 'id = ?', whereArgs: [id]);
+    final changed = await db.update(
+      'partners',
+      data,
+      where: expectedUpdatedAt == null ? 'id = ?' : 'id = ? AND updated_at = ?',
+      whereArgs: [
+        id,
+        if (expectedUpdatedAt != null) expectedUpdatedAt.toIso8601String(),
+      ],
+    );
+    if (changed != 1) throw StateError('资料已改变，请重新加载后再保存');
     notifyRefresh();
   }
 
@@ -203,6 +255,19 @@ abstract final class PartnerService {
   }
 
   /// 获取关系天数
+  static Future<void> restore(String id) async {
+    final db = await DatabaseHelper.database;
+    final changed = await db.update(
+      'partners',
+      {'status': 'active', 'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ? AND status != ?',
+      whereArgs: [id, 'active'],
+    );
+    if (changed != 1) throw StateError('人物状态已改变，请刷新后重试');
+    notifyRefresh();
+  }
+
+  /// 获取添加到 App 的天数，不代表相识时长。
   static int daysSince(DateTime createdAt) {
     return DateTime.now().difference(createdAt).inDays;
   }

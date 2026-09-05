@@ -13,7 +13,6 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../widgets/widgets.dart';
 import '../../widgets/background_readiness_card.dart';
-import '../../../data/local/database_helper.dart';
 import '../../../data/models/user.dart';
 import '../../../services/theme_service.dart';
 import '../../../services/notification_service.dart';
@@ -21,6 +20,7 @@ import '../../../services/ai_proactive_service.dart';
 import '../../../services/ai_memory_service.dart';
 import '../../../services/ai_memory_dreamer.dart';
 import '../../../services/ai_service.dart';
+import '../../../services/data_reset_service.dart';
 import '../../../services/data_backup_service.dart';
 import '../../../services/backup/backup_importer.dart';
 import '../../../services/background_execution_service.dart';
@@ -62,6 +62,19 @@ class SettingsScreen extends StatelessWidget {
         padding: TaSpacing.page,
         children: [
           const SizedBox(height: TaSpacing.sm),
+          const _ThemeModeCard(),
+          const SizedBox(height: TaSpacing.sm),
+          TaCard(
+            padding: EdgeInsets.zero,
+            onTap: () => context.push('/settings/reminder-health'),
+            child: const ListTile(
+              leading: Icon(Icons.fact_check_outlined),
+              title: Text('提醒检查'),
+              subtitle: Text('查看手机通知状态与历史记录'),
+              trailing: Icon(Icons.chevron_right_rounded),
+            ),
+          ),
+          const SizedBox(height: TaSpacing.sm),
           TaCard(
             padding: EdgeInsets.zero,
             onTap: () => context.push(SettingsRoutes.notifications),
@@ -92,9 +105,9 @@ class SettingsScreen extends StatelessWidget {
                 Icons.palette_rounded,
                 color: theme.colorScheme.primary,
               ),
-              title: const Text('外观'),
+              title: const Text('配色方案'),
               subtitle: Text(
-                '主题模式、配色方案',
+                '暖珊瑚等 5 套温柔配色',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -149,8 +162,69 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: TaSpacing.sm),
+          TaCard(
+            padding: EdgeInsets.zero,
+            onTap: () => context.push('/settings/archived-people'),
+            child: const ListTile(
+              leading: Icon(Icons.person_add_alt_1_rounded),
+              title: Text('已移出的人'),
+              subtitle: Text('找回人物资料和原来的提醒设置'),
+              trailing: Icon(Icons.chevron_right_rounded),
+            ),
+          ),
           const SizedBox(height: TaSpacing.xxl),
         ],
+      ),
+    );
+  }
+}
+
+class _ThemeModeCard extends StatelessWidget {
+  const _ThemeModeCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AnimatedBuilder(
+      animation: ThemeService.instance,
+      builder: (context, _) => TaCard(
+        padding: const EdgeInsets.all(TaSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '主题模式',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: TaSpacing.xxs),
+            Text(
+              '跟随系统，也可以随时切换',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: TaSpacing.sm),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<ThemeMode>(
+                key: const Key('settings-theme-mode-selector'),
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: ThemeMode.light, label: Text('浅色')),
+                  ButtonSegment(value: ThemeMode.system, label: Text('跟随系统')),
+                  ButtonSegment(value: ThemeMode.dark, label: Text('深色')),
+                ],
+                selected: {ThemeService.instance.mode},
+                onSelectionChanged: (selection) {
+                  ThemeService.instance.setThemeMode(selection.first);
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -681,12 +755,12 @@ class _AiDataSettingsState extends State<_AiDataSettings> {
       if (confirmed != true) return;
 
       // 4. 执行导入
-      await DataBackupService.importBackup(filePath);
+      final warning = await DataBackupService.importBackup(filePath);
 
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('数据导入成功，请重启 APP')));
+        ).showSnackBar(SnackBar(content: Text(warning ?? '资料已导入，人物、主题和提醒已刷新')));
         // 刷新页面状态
         _loadMemoryStats();
         _loadLastBackupTime();
@@ -1085,24 +1159,16 @@ class _AccountSettingsState extends State<_AccountSettings> {
     );
 
     if (confirmed == true && mounted) {
-      final db = await DatabaseHelper.database;
-      // 清除所有业务数据表
-      for (final table in [
-        'user_achievements',
-        'reminder_logs',
-        'reminder_configs',
-        'chat_history',
-        'ai_pending_messages',
-        'partners',
-        'users',
-        'ai_wiki_facts',
-        'ai_conversation_summaries',
-        'conversation_chunks',
-      ]) {
-        await db.delete(table);
+      try {
+        await DataResetService.reset();
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('重置未完整完成，请重试')));
+        }
+        return;
       }
-      // 重新创建默认用户
-      await LocalUserService.createUser(nickname: '');
       if (mounted) context.go(Routes.home);
     }
   }
@@ -1200,7 +1266,7 @@ class _AccountSettingsState extends State<_AccountSettings> {
                   ),
                   title: const Text('版本'),
                   trailing: Text(
-                    'v0.1.1',
+                    'v0.2.0',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -1264,7 +1330,7 @@ Ta的世界 用户服务协议
 二、服务内容
 
 1. 本应用提供以下功能：联系人管理、提醒配置与调度、AI 关怀建议（需自行配置 DeepSeek API）、天气查询（使用免费开源服务，无需配置）、成就系统、本地数据存储等。
-2. 本应用为纯本地应用，所有用户数据（包括但不限于联系人信息、提醒记录、对话历史等）均存储在您的设备本地，不会上传至任何服务器。
+2. 本应用为纯本地应用，所有用户数据（包括但不限于联系人信息、提醒记录、对话历史等）主要存储在您的设备本地。使用 AI 时，当前消息、相关人物资料与历史上下文会发送到您配置的模型服务；天气查询会发送城市或坐标到天气服务。
 3. 小念智能助手功能需要您自行申请并配置 DeepSeek API 密钥，相关服务由第三方提供，本应用不对第三方服务的可用性、准确性承担责任。天气查询功能使用开源 Open-Meteo 服务，无需额外配置。
 
 三、用户行为规范
@@ -1303,7 +1369,7 @@ Ta的世界 隐私政策
 
 一、核心承诺：数据本地化
 
-本应用是一款纯本地化应用。您在使用过程中产生的所有数据均存储在您的设备本地，不会通过网络上传至任何外部服务器。
+本应用采用本地优先设计。人物、提醒、消息、记忆和图片保存在本机；使用模型与天气功能时，会将实现该功能所需的信息直接发送到相应第三方服务。
 
 二、我们收集的信息
 
@@ -1328,10 +1394,10 @@ Ta的世界 隐私政策
 
 四、数据存储与安全
 
-1. 所有数据存储在设备本地的 SQLite 数据库中，不经过任何网络传输。
+1. 业务数据保存在本机 SQLite 和私有图片目录中。AI 请求可能包含当前对话、相关人物资料、记忆和用户选择的图片；天气请求包含城市或坐标。启用后台主动关心时，相关上下文也可能用于模型请求。
 2. 当您卸载本应用时，本地数据将随应用一并删除。
 3. 您可在"设置"中随时选择"重置所有数据"来清除全部本地信息。
-4. 请注意：第三方 API 密钥存储在 SharedPreferences 中，属于本地存储，不经过网络传输。
+4. API 密钥通过系统安全存储保存在本机，仅用于向对应模型服务认证，不进入导出备份。旧版本密钥会在安全保存并回读成功后从普通配置中移除。请勿把备份发送给不信任的人。
 
 五、未成年人保护
 

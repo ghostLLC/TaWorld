@@ -27,7 +27,23 @@ abstract final class ReminderOccurrenceService {
       limit: 1,
     );
     if (existing.isNotEmpty) {
-      return ReminderOccurrenceRecord.fromMap(existing.single);
+      final row = existing.single;
+      if (row['status'] == 'cancelled' &&
+          config.enabled &&
+          scheduledFor.isAfter(DateTime.now())) {
+        await db.update(
+          'reminder_occurrences',
+          {
+            'status': 'scheduled',
+            'message': message,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+        return (await getById(row['id'] as String))!;
+      }
+      return ReminderOccurrenceRecord.fromMap(row);
     }
 
     final now = DateTime.now().toUtc().toIso8601String();
@@ -79,6 +95,17 @@ abstract final class ReminderOccurrenceService {
       ReminderUserResponse.snooze => 'snoozed',
       ReminderUserResponse.outdated => 'dismissed',
     };
+    final current = await getById(id);
+    if (current == null) throw StateError('Reminder occurrence not found');
+    if (current.status == 'acknowledged' ||
+        current.status == 'dismissed' ||
+        current.status == 'cancelled') {
+      return current;
+    }
+    if (response == ReminderUserResponse.snooze &&
+        current.snoozedUntil?.isAfter(responseTime) == true) {
+      return current;
+    }
     final updated = await db.update(
       'reminder_occurrences',
       {
@@ -110,9 +137,12 @@ abstract final class ReminderOccurrenceService {
     final rows = await db.query(
       'reminder_occurrences',
       where:
-          "((status = 'scheduled' AND scheduled_for <= ?) OR "
+          "((status IN ('scheduled', 'posted', 'observed') AND scheduled_for <= ?) OR "
           "(status = 'snoozed' AND snoozed_until <= ?)) "
-          "AND scheduled_for >= ?",
+          "AND scheduled_for >= ? AND EXISTS (SELECT 1 FROM reminder_configs c "
+          "WHERE c.id = reminder_occurrences.config_id AND c.enabled = 1 "
+          "AND (c.subject_kind = 'user' OR EXISTS (SELECT 1 FROM partners p "
+          "WHERE p.id = c.partner_id AND p.status = 'active')))",
       whereArgs: [instant, instant, earliest],
       orderBy: 'scheduled_for ASC',
       limit: limit,

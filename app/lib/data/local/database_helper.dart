@@ -3,6 +3,9 @@
 /// SQLite 数据库单例管理，建表、种子数据、升级迁移。
 library;
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
@@ -11,11 +14,41 @@ import '../models/achievement.dart';
 
 class DatabaseHelper {
   static Database? _database;
+  static Future<Database>? _opening;
   static const _dbName = 'taworld.db';
-  static const _dbVersion = 6;
+  static const _dbVersion = 7;
   static const _uuid = Uuid();
   static DatabaseFactory? _databaseFactoryOverride;
   static String? _databasePathOverride;
+  static final _maintenanceZone = Object();
+  static bool _maintenanceActive = false;
+
+  static Future<T> withMaintenance<T>(Future<T> Function() action) async {
+    if (_maintenanceActive) throw StateError('数据维护进行中，请稍后重试');
+    final path = await getDatabasePath();
+    final marker = path == inMemoryDatabasePath
+        ? null
+        : File('$path.maintenance');
+    if (marker != null &&
+        await marker.exists() &&
+        DateTime.now().difference(await marker.lastModified()).inMinutes < 5) {
+      throw StateError('数据维护进行中，请稍后重试');
+    }
+    _maintenanceActive = true;
+    try {
+      if (marker != null) {
+        await marker.parent.create(recursive: true);
+        await marker.writeAsString(
+          DateTime.now().toUtc().toIso8601String(),
+          flush: true,
+        );
+      }
+      return await runZoned(action, zoneValues: {_maintenanceZone: true});
+    } finally {
+      _maintenanceActive = false;
+      if (marker != null && await marker.exists()) await marker.delete();
+    }
+  }
 
   /// Current local database schema version.
   static int get schemaVersion => _dbVersion;
@@ -44,11 +77,7 @@ class DatabaseHelper {
 
   /// Close the test database and restore production defaults.
   static Future<void> resetForTesting() async {
-    final db = _database;
-    if (db != null) {
-      await db.close();
-      _database = null;
-    }
+    await close();
     _databaseFactoryOverride = null;
     _databasePathOverride = null;
   }
@@ -61,9 +90,25 @@ class DatabaseHelper {
 
   /// 获取数据库实例
   static Future<Database> get database async {
+    if (Zone.current[_maintenanceZone] != true) {
+      if (_maintenanceActive) throw StateError('数据维护进行中，请稍后重试');
+      final path = await getDatabasePath();
+      if (path != inMemoryDatabasePath) {
+        final marker = File('$path.maintenance');
+        if (await marker.exists() &&
+            DateTime.now().difference(await marker.lastModified()).inMinutes <
+                5) {
+          throw StateError('数据维护进行中，请稍后重试');
+        }
+      }
+    }
     if (_database != null) return _database!;
-    _database = await _initDatabase();
-    return _database!;
+    return _opening ??= _initDatabase()
+        .then((database) {
+          _database = database;
+          return database;
+        })
+        .whenComplete(() => _opening = null);
   }
 
   static Future<Database> _initDatabase() async {
@@ -284,6 +329,8 @@ class DatabaseHelper {
       'applied_at': DateTime.now().toUtc().toIso8601String(),
     });
 
+    await _createVersionSevenTables(db);
+
     // 插入成就种子数据
     await _seedAchievements(db);
   }
@@ -390,6 +437,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 6) {
       await _upgradeToVersionSix(db);
+    }
+    if (oldVersion < 7) {
+      await _createVersionSevenTables(db);
     }
   }
 
@@ -507,6 +557,47 @@ class DatabaseHelper {
     );
   }
 
+  static Future<void> _createVersionSevenTables(Database db) async {
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS tool_operations '
+      '(id TEXT PRIMARY KEY, request_id TEXT NOT NULL, tool TEXT NOT NULL, '
+      'state TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL)',
+    );
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS runtime_locks (name TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at TEXT NOT NULL)',
+    );
+    await _addColumnIfMissing(
+      db,
+      table: 'reminder_logs',
+      column: 'occurrence_id',
+      definition: 'occurrence_id TEXT',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_logs_occurrence ON reminder_logs(occurrence_id) WHERE occurrence_id IS NOT NULL',
+    );
+    await _addColumnIfMissing(
+      db,
+      table: 'partners',
+      column: 'country',
+      definition: 'country TEXT',
+    );
+    await db.execute(
+      "CREATE TABLE IF NOT EXISTS notification_events (id TEXT PRIMARY KEY, occurrence_id TEXT, notification_id INTEGER, kind TEXT NOT NULL, occurred_at TEXT NOT NULL, detail TEXT)",
+    );
+    await db.execute(
+      "CREATE INDEX IF NOT EXISTS idx_notification_events_occurrence ON notification_events(occurrence_id, occurred_at)",
+    );
+    await db.execute(
+      "CREATE TABLE IF NOT EXISTS scheduled_notifications (notification_id INTEGER PRIMARY KEY, occurrence_id TEXT NOT NULL, scheduled_for TEXT NOT NULL, fingerprint TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'regular')",
+    );
+    await db.execute(
+      "CREATE TABLE IF NOT EXISTS background_runs (id TEXT PRIMARY KEY, task TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, outcome TEXT NOT NULL, detail TEXT)",
+    );
+    await db.execute(
+      "CREATE TABLE IF NOT EXISTS graph_positions (person_id TEXT PRIMARY KEY REFERENCES partners(id) ON DELETE CASCADE, x REAL NOT NULL, y REAL NOT NULL)",
+    );
+  }
+
   static Future<void> _createVersionSixTables(Database db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS reminder_occurrences (
@@ -610,6 +701,11 @@ class DatabaseHelper {
 
   /// 关闭数据库（测试/清理用）
   static Future<void> close() async {
+    if (_opening != null) {
+      try {
+        await _opening;
+      } catch (_) {}
+    }
     final db = _database;
     if (db == null) return;
     await db.close();

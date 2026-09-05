@@ -82,7 +82,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
-    final chatButton = find.widgetWithText(FilledButton, '聊聊 Ta');
+    final chatButton = find.widgetWithText(FilledButton, '聊聊Ta');
     await tester.ensureVisible(chatButton);
     await tester.tap(chatButton);
     await tester.pump();

@@ -24,6 +24,12 @@ const _applicationTables = {
   'reminder_occurrences',
   'chat_attachments',
   'schema_migrations',
+  'notification_events',
+  'scheduled_notifications',
+  'background_runs',
+  'graph_positions',
+  'runtime_locks',
+  'tool_operations',
 };
 
 const _applicationIndexes = {
@@ -39,6 +45,8 @@ const _applicationIndexes = {
   'idx_reminder_occurrences_config',
   'idx_reminder_occurrences_status',
   'idx_chat_attachments_message',
+  'idx_reminder_logs_occurrence',
+  'idx_notification_events_occurrence',
 };
 
 void main() {

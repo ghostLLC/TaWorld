@@ -11,6 +11,7 @@ class Partner {
   final double? longitude;
   final String? city;
   final String? district;
+  final String? country;
 
   /// IANA timezone identifier such as `Asia/Singapore`.
   final String? timezoneId;
@@ -18,7 +19,7 @@ class Partner {
   /// How [timezoneId] was obtained: `city_lookup` or `user_confirmed`.
   final String? timezoneSource;
 
-  /// Whether the user explicitly confirmed the inferred timezone.
+  /// Whether a trusted city selection or the user resolved the timezone.
   final bool timezoneConfirmed;
   final String status; // active / dissolved
   final DateTime createdAt;
@@ -34,6 +35,7 @@ class Partner {
     this.longitude,
     this.city,
     this.district,
+    this.country,
     this.timezoneId,
     this.timezoneSource,
     this.timezoneConfirmed = false,
@@ -53,6 +55,7 @@ class Partner {
       longitude: (map['longitude'] as num?)?.toDouble(),
       city: map['city'] as String?,
       district: map['district'] as String?,
+      country: map['country'] as String?,
       timezoneId: map['timezone_id'] as String?,
       timezoneSource: map['timezone_source'] as String?,
       timezoneConfirmed: (map['timezone_confirmed'] as int? ?? 0) == 1,
@@ -73,6 +76,7 @@ class Partner {
       'longitude': longitude,
       'city': city,
       'district': district,
+      'country': country,
       'timezone_id': timezoneId,
       'timezone_source': timezoneSource,
       'timezone_confirmed': timezoneConfirmed ? 1 : 0,
@@ -91,6 +95,7 @@ class Partner {
     double? longitude,
     String? city,
     String? district,
+    String? country,
     String? timezoneId,
     String? timezoneSource,
     bool? timezoneConfirmed,
@@ -107,6 +112,7 @@ class Partner {
       longitude: longitude ?? this.longitude,
       city: city ?? this.city,
       district: district ?? this.district,
+      country: country ?? this.country,
       timezoneId: timezoneId ?? this.timezoneId,
       timezoneSource: timezoneSource ?? this.timezoneSource,
       timezoneConfirmed: timezoneConfirmed ?? this.timezoneConfirmed,

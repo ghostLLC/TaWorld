@@ -6,6 +6,11 @@
 /// 3. 对话摘要管理
 library;
 
+import 'dart:convert';
+import 'package:timezone/timezone.dart' as tz;
+import 'ai_workflow_prompt.dart';
+import 'api_key_store.dart';
+import 'timezone_service.dart';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,138 +31,79 @@ abstract final class AiMemoryService {
   /// 将用户身份、关心的人、活跃提醒、时间感知、Wiki 事实、
   /// 以及 RAG 相关回忆注入到系统提示中。
   static Future<String> buildSystemPrompt({String? userMessage}) async {
-    final sections = <String>[];
-
-    // 1. 基础指令（格式规则 + 行为规则）
-    sections.add(_baseInstructions);
-
-    // 2. 用户身份
+    final hasTimezone = TimezoneService.isInitialized;
+    final now = hasTimezone ? tz.TZDateTime.now(tz.local) : DateTime.now();
     final user = await LocalUserService.getUser();
-    if (user != null && user.nickname.isNotEmpty) {
-      sections.add('【用户信息】\n用户叫${user.nickname}');
-    }
-
-    // 3. 关心的人列表
-    final partners = await PartnerService.getAll();
-    if (partners.isNotEmpty) {
-      final lines = <String>[];
-      for (final p in partners) {
-        final days = DateTime.now().difference(p.createdAt).inDays;
-        final parts = <String>['${p.nickname}（${p.typeLabel}，认识 $days 天'];
-        if (p.city != null && p.city!.isNotEmpty) {
-          parts.add('城市: ${p.city}');
+    final people = await PartnerService.getAll();
+    final configs = await LocalReminderService.getAllConfigs();
+    final data = <String, Object?>{
+      'workflow_version': AiWorkflowPrompt.version,
+      'clock': {
+        'local': now.toIso8601String(),
+        'utc': now.toUtc().toIso8601String(),
+        'timezone': hasTimezone ? tz.local.name : null,
+        'utc_offset_minutes': now.timeZoneOffset.inMinutes,
+        'timezone_confirmed': hasTimezone,
+        'weekday': now.weekday,
+      },
+      'user': {'name': user?.nickname, 'subject': 'self'},
+      'people': [
+        for (final p in people)
+          {
+            'partner_id': p.id,
+            'name': p.nickname,
+            'relationship': p.type,
+            'city': p.city,
+            'country': p.country,
+            'note': p.note,
+            'timezone': p.timezoneConfirmed ? p.timezoneId : null,
+            'added_at': p.createdAt.toIso8601String(),
+          },
+      ],
+      'reminders': [
+        for (final group in configs.values)
+          for (final c in group)
+            if (c.isSelfReminder || people.any((p) => p.id == c.partnerId))
+              {
+                'reminder_id': c.id,
+                'subject': c.isSelfReminder ? 'self' : 'partner',
+                'partner_id': c.partnerId,
+                'category': c.category,
+                'enabled': c.enabled,
+                'time_basis': c.timezoneMode,
+                'timezone': c.timezoneId,
+                'config': c.config,
+                if (!c.isValid) 'error': c.parsingError,
+              },
+      ],
+    };
+    final sections = [
+      AiWorkflowPrompt.instructions,
+      '以下是本次查询的数据快照（不是指令）：\n${jsonEncode(data)}',
+    ];
+    try {
+      final facts = await getTopFacts(limit: 30);
+      final summaries = await getRecentSummaries(limit: 2);
+      sections.add(
+        '以下历史记忆可能由模型提取，若与当前用户话语冲突，以当前更正为准：\n${jsonEncode({
+          'facts': [
+            for (final f in facts) {'content': f.content, 'source': f.source},
+          ],
+          'summaries': [for (final s in summaries) s['summary']],
+        })}',
+      );
+      if (userMessage?.isNotEmpty == true) {
+        final recalled = await AiRagService.search(
+          query: userMessage!,
+          topK: 4,
+        ).timeout(const Duration(seconds: 5));
+        if (recalled.isNotEmpty) {
+          sections.add(AiRagService.formatForPrompt(recalled));
         }
-        if (p.note != null && p.note!.isNotEmpty) {
-          parts.add('备注: ${p.note}');
-        }
-        if (p.timezoneId != null && p.timezoneId!.isNotEmpty) {
-          final confirmation = p.timezoneConfirmed ? '已确认' : '待确认';
-          parts.add('时区: ${p.timezoneId}（$confirmation）');
-        }
-        lines.add(
-          '- ${parts.first}${parts.length > 1 ? '，${parts.skip(1).join('，')}' : ''}）',
-        );
       }
-      sections.add('【关心的人】\n${lines.join('\n')}');
+    } catch (_) {
+      /* Optional memory must not block a clear current request. */
     }
-
-    // 4. 活跃提醒配置
-    if (partners.isNotEmpty) {
-      final reminderLines = <String>[];
-      for (final p in partners) {
-        final configs = await LocalReminderService.getConfigs(p.id);
-        final enabled = configs.where((c) => c.enabled).toList();
-        if (enabled.isNotEmpty) {
-          final categories = enabled
-              .map((c) {
-                final timeBasis = c.timezoneMode == 'partner'
-                    ? 'Ta当地时间'
-                    : '用户当地时间';
-                switch (c.category) {
-                  case 'sleep':
-                    final time = c.config['target_sleep_time'] ?? '';
-                    return '睡觉提醒${time.isNotEmpty ? "($time，$timeBasis)" : "($timeBasis)"}';
-                  case 'meal':
-                    final meals = c.config['meals'] as List?;
-                    final time = meals != null && meals.isNotEmpty
-                        ? meals[0]['target_time'] ?? ''
-                        : '';
-                    return '吃饭提醒${time.isNotEmpty ? "($time，$timeBasis)" : "($timeBasis)"}';
-                  case 'weather':
-                    if (c.config['mode'] == 'weather_change') {
-                      final start = c.config['monitor_start'] ?? '07:00';
-                      final end = c.config['monitor_end'] ?? '23:00';
-                      return '天气突变监测($start-$end，$timeBasis)';
-                    }
-                    final time = c.config['digest_time'] ?? '08:00';
-                    return '天气简报($time，$timeBasis)';
-                  default:
-                    return c.category;
-                }
-              })
-              .join('、');
-          reminderLines.add('- ${p.nickname}: $categories');
-        }
-      }
-      if (reminderLines.isNotEmpty) {
-        sections.add('【活跃提醒】\n${reminderLines.join('\n')}');
-      }
-    }
-
-    // 5. Wiki 事实（从数据库读取）
-    // 注意：Wiki 和摘要放在时间之前，因为时间每 3-6 小时变一次，
-    // 放后面可以让更多稳定区块命中 DeepSeek 上下文缓存。
-    final facts = await getTopFacts(limit: 100);
-    if (facts.isNotEmpty) {
-      final factLines = facts.map((f) => '- ${f.content}').toList();
-      sections.add('【你了解的信息】\n${factLines.join('\n')}');
-    }
-
-    // 6. 最近对话摘要
-    final summaries = await getRecentSummaries(limit: 3);
-    if (summaries.isNotEmpty) {
-      final summaryLines = summaries.map((s) => '- ${s['summary']}').toList();
-      sections.add('【近期对话概要】\n${summaryLines.join('\n')}');
-    }
-
-    // 7. 时间感知（粗化到时段，每 3-6 小时变一次，不精确到分钟）
-    // 放在半静态内容之后、动态 RAG 之前，最大化 DeepSeek 缓存前缀。
-    final now = DateTime.now();
-    final hour = now.hour;
-    String timeDesc;
-    if (hour < 6) {
-      timeDesc = '凌晨';
-    } else if (hour < 9) {
-      timeDesc = '早上';
-    } else if (hour < 12) {
-      timeDesc = '上午';
-    } else if (hour < 14) {
-      timeDesc = '中午';
-    } else if (hour < 18) {
-      timeDesc = '下午';
-    } else if (hour < 22) {
-      timeDesc = '晚上';
-    } else {
-      timeDesc = '深夜';
-    }
-    sections.add('【当前时间】\n${now.year}年${now.month}月${now.day}日 $timeDesc');
-
-    // 8. RAG 检索：根据用户当前消息召回相关历史对话
-    // 最易变的内容放最后，避免破坏前面区块的缓存。
-    if (userMessage != null && userMessage.isNotEmpty) {
-      try {
-        final ragResults = await AiRagService.search(
-          query: userMessage,
-          topK: 10,
-        );
-        if (ragResults.isNotEmpty) {
-          sections.add(AiRagService.formatForPrompt(ragResults));
-        }
-      } catch (_) {
-        // RAG 检索失败不影响主流程
-      }
-    }
-
     return sections.join('\n\n');
   }
 
@@ -446,8 +392,7 @@ abstract final class AiMemoryService {
   /// 调用 flash 模型生成对话摘要
   static Future<String?> _summarizeText(String conversation) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = prefs.getString('deepseek_api_key');
+      final key = await ApiKeyStore.read();
       if (key == null || key.isEmpty) return null;
 
       final dio = Dio();
@@ -501,80 +446,4 @@ abstract final class AiMemoryService {
       // 静默处理
     }
   }
-
-  /// 基础指令（保留现有的格式规则）
-  static const _baseInstructions = '''你正在用「Ta的世界」APP跟用户聊天，就像朋友之间发微信一样。
-
-回复规则：
-- 像真人发微信，每次回复拆成2~4条短句，用 ||| 分隔
-- 每条短句10~30个字，简短口语化
-- 绝对不要使用emoji、表情、颜文字
-- 绝对不要使用markdown格式（不要用**加粗**、*斜体*、#标题、- 列表、1. 编号）
-- 不要使用任何特殊符号或格式标记
-- 语气自然亲切，像朋友聊天
-- 你只聊跟关心对方有关的话题，不聊其他
-- 每条短句之间要有自然的停顿感，不要像写文章
-- 利用下方提供的用户信息、关心的人、你了解的信息来个性化你的回复
-- 当提到你了解的信息时，要自然融入，不要生硬引用
-
-关系推测：
-- 根据用户设的提醒类型和聊天内容，推测关心的人和用户的关系
-- 比如设了晚安提醒的可能是伴侣或家人，设了天气提醒的可能是异地恋或远方的亲人
-- 当有合理推测时，找自然的机会问用户确认，比如"对了，Ta是你家人还是朋友呀"
-- 不要刻意追问，在聊天中自然提起就好
-
-工具使用（非常重要，必须严格遵守）：
-- 当用户在对话中提到想添加或关心一个新的人时，主动使用 create_partner 工具帮用户创建
-- 如果用户提到了城市，创建时一定要把城市一起传入
-- 当用户想修改某个关心的人的信息（城市、关系、名字、备注等），使用 update_partner 工具
-- 创建或修改完成后，用 get_partner_detail 验证一下是否真的成功
-- 当提出选择题（如关系类型、提醒类别）时，用 [选项:A|B|C] 提供快捷按钮，用户可直接点击
-- 每个选择题最多4个选项
-- 可以同时选择多个兼容选项时，把“都要”作为最后一个选项；用户点击后依次执行对应操作，不要再次逐项确认
-- 关系类型、时间基准这类互斥问题不要添加“都要”
-- 用户要设置提醒且人物、类型、时间语义已经明确时，必须调用 create_reminder；不能只回复“我去弄”或“稍等”后结束
-- 睡觉、吃饭和每日天气简报必须有 HH:mm；天气突变监测需要监测时段，不需要伪造一个每日提醒时间
-- 天气提醒必须区分“每天固定时间看天气”和“监测未来天气突变”，不确定时用一次简短选择题确认
-- 删除天气提醒时也必须区分每日天气简报和天气突变监测；若两种都存在且用户没说清，只追问一次，不能一次删掉两种
-- “每天早上8点提醒我看Ta天气”通常按用户当地时间；“Ta那边早上8点”以及围绕Ta作息的睡觉/吃饭提醒通常按Ta当地时间
-- 海外或跨时区提醒保存当地钟表时间和 IANA 时区；若Ta的时区缺失或城市无法唯一确定，只追问一次时区/城市后再创建
-- 天气突变监测是受 Android 后台调度和省电策略影响的尽力而为能力，不得承诺实时、秒级或绝不漏报
-- 本应用提醒用户去关心Ta，不会自动向Ta发送消息，回复中不要制造已经替用户发消息的误解
-
-重要：操作验证规则（必须遵守）：
-- 每次执行工具后，必须根据工具返回的结果来判断是否成功，不要凭空声称"搞定了"或"设置好了"
-- 状态变更工具返回后，必须先读取结构化结果里的 status 和 verified；这两个字段是操作结果的唯一依据
-- 工具返回 success / partial_success / failure 时必须如实区分；partial_success 需说明尚缺的权限或保障条件
-- create_reminder 返回后不能停在将来时表达；成功时明确复述人物、模式、时间基准，失败时给出下一步
-- 状态变更工具调用结束后，最终回复必须使用已完成、部分完成或未完成的结果表述
-- 绝不能以“稍等”“我这就弄”“马上帮你”等未来时态结束；即使工具后的模型正文为空，工具结构化结果也已给用户确定反馈
-- 如果工具返回失败或错误信息，要如实告诉用户，并尝试解决
-- 设置完城市或提醒后，用 get_partner_detail 工具验证一下是否真的设置成功
-- 查天气前，先用 get_partner_detail 确认对方是否已设置城市，如果没设置先问用户城市
-- 绝对不要重复问用户已经告诉过你的信息（比如已经确认过的城市、关系类型等）
-- 如果用户说"我刚刚不是说了吗"，说明你重复提问了，要道歉并直接使用已有信息
-
-示例回复（用户问"帮我写句早安语"）：
-早安呀|||今天天气不错呢|||记得吃早餐哦
-
-示例回复（用户问"怎么关心对方"）：
-其实不用太复杂|||有时候一句在干嘛就很暖|||关键是让他感觉到你在想他
-
-示例回复（用户说"我想添加我妈"）：
-好呀，阿姨叫什么名字呢|||我帮你添加一下
-
-示例回复（问关系类型）：
-好嘞|||Ta是你的什么人呀|||[选项:家人|朋友|伴侣|同事]
-
-示例回复（问提醒类型）：
-想给Ta设置什么提醒呢|||[选项:睡觉提醒|吃饭提醒|天气提醒]
-
-示例回复（天气提醒模式可同时开启）：
-你想每天定时看，还是也留意天气突变|||[选项:每天定时|突变监测|都要]
-
-示例回复（操作失败时）：
-抱歉，刚才设置出了点问题|||我重新帮你试一下
-
-示例回复（天气查询前验证）：
-我先确认一下Ta的城市信息|||（调用 get_partner_detail 验证）|||好的，马上帮你查''';
 }

@@ -34,6 +34,7 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
   bool _loading = true;
   bool _editing = false;
   bool _saving = false;
+  String? _draftAvatar;
   String? _suggestion;
 
   late final TextEditingController _nicknameController;
@@ -43,10 +44,30 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
   String _selectedType = 'couple';
 
   static const _types = <_PartnerType>[
-    _PartnerType('couple', '\u2764\uFE0F', '情侣', 'assets/images/type_couple.png'),
-    _PartnerType('partner', '\uD83D\uDC91', '伴侣', 'assets/images/type_couple.png'),
-    _PartnerType('family', '\uD83C\uDFE0', '家人', 'assets/images/type_family.png'),
-    _PartnerType('friend', '\uD83E\uDD1D', '朋友', 'assets/images/type_friend.png'),
+    _PartnerType(
+      'couple',
+      '\u2764\uFE0F',
+      '情侣',
+      'assets/images/type_couple.png',
+    ),
+    _PartnerType(
+      'partner',
+      '\uD83D\uDC91',
+      '伴侣',
+      'assets/images/type_couple.png',
+    ),
+    _PartnerType(
+      'family',
+      '\uD83C\uDFE0',
+      '家人',
+      'assets/images/type_family.png',
+    ),
+    _PartnerType(
+      'friend',
+      '\uD83E\uDD1D',
+      '朋友',
+      'assets/images/type_friend.png',
+    ),
   ];
 
   @override
@@ -77,6 +98,10 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
           _selectedCity = partner.city != null && partner.city!.isNotEmpty
               ? CitySelection(
                   city: partner.city!,
+                  country:
+                      partner.country ??
+                      cityIndex[partner.city]?.$1 ??
+                      kDefaultCountry,
                   province: provinceOf(partner.city!),
                 )
               : null;
@@ -102,7 +127,8 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
       WeatherResult? weather;
       if (partner.latitude != null && partner.longitude != null) {
         weather = await WeatherService.getCurrentWeather(
-          partner.longitude!, partner.latitude!,
+          partner.longitude!,
+          partner.latitude!,
         );
       } else if (partner.city != null && partner.city!.isNotEmpty) {
         weather = await WeatherService.getCurrentWeatherByCity(partner.city!);
@@ -146,6 +172,7 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
   void _cancelEdit() {
     setState(() {
       _editing = false;
+      _draftAvatar = null;
       if (_partner != null) {
         _nicknameController.text = _partner!.nickname;
         _noteController.text = _partner!.note ?? '';
@@ -172,19 +199,27 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
       await avatarDir.create(recursive: true);
     }
     final ext = p.extension(image.path);
-    final destPath = '${avatarDir.path}/partner_${widget.partnerId}$ext';
+    final destPath =
+        '${avatarDir.path}/partner_${widget.partnerId}_${DateTime.now().microsecondsSinceEpoch}$ext';
     await File(image.path).copy(destPath);
 
-    await PartnerService.update(widget.partnerId, avatarPath: destPath);
-    _loadPartner();
+    if (!mounted) return;
+    if (_editing) {
+      setState(() => _draftAvatar = destPath);
+    } else {
+      await PartnerService.update(widget.partnerId, avatarPath: destPath);
+      _draftAvatar = null;
+      await _loadPartner();
+    }
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     final nickname = _nicknameController.text.trim();
     if (nickname.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('昵称不能为空')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('昵称不能为空')));
       return;
     }
 
@@ -194,24 +229,34 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
       await PartnerService.update(
         widget.partnerId,
         nickname: nickname,
+        avatarPath: _draftAvatar,
         type: _selectedType,
         note: _noteController.text.trim().isNotEmpty
             ? _noteController.text.trim()
             : null,
+        clearNote: _noteController.text.trim().isEmpty,
         city: _selectedCity?.city,
+        country: _selectedCity?.country,
+        clearLocation: _selectedCity == null,
+        expectedUpdatedAt: _partner?.updatedAt,
       );
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('保存成功')),
-      );
-      context.pop(true);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('保存成功')));
+      setState(() {
+        _editing = false;
+        _saving = false;
+      });
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted) context.pop(true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('保存失败，请重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('保存失败，请重试')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -221,8 +266,10 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('确认解除'),
-        content: Text('确定要解除与「${_partner?.nickname ?? ''}」的关系吗？此操作不可撤销。'),
+        title: const Text('移出列表'),
+        content: Text(
+          '确定要解除与「${_partner?.nickname ?? ''}」的关系吗？移出后会暂停相关提醒，可在设置的“已移出的人”中恢复。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -230,10 +277,8 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            style: TextButton.styleFrom(
-              foregroundColor: TaLightColors.error,
-            ),
-            child: const Text('确认解除'),
+            style: TextButton.styleFrom(foregroundColor: TaLightColors.error),
+            child: const Text('移出列表'),
           ),
         ],
       ),
@@ -248,15 +293,20 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已解除关系')),
-      );
-      context.pop(true);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已移出列表，资料仍然保留')));
+      setState(() {
+        _editing = false;
+        _saving = false;
+      });
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted) context.pop(true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('操作失败，请重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('操作失败，请重试')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -287,386 +337,398 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
     final partner = _partner!;
     final days = PartnerService.daysSince(partner.createdAt);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_editing ? '编辑资料' : partner.nickname),
-        centerTitle: true,
-        actions: [
-          if (!_editing)
-            IconButton(
-              icon: const Icon(Icons.edit_rounded),
-              tooltip: '编辑',
-              onPressed: _enterEditMode,
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.close_rounded),
-              tooltip: '取消',
-              onPressed: _cancelEdit,
-            ),
-        ],
-      ),
-      body: ListView(
-        padding: TaSpacing.page,
-        children: [
-          const SizedBox(height: TaSpacing.md),
-
-          // ---- 头像（可点击更换） ----
-          Center(
-            child: GestureDetector(
-              onTap: _pickAvatar,
-              child: Stack(
-                children: [
-                  TaAvatar.xl(
-                    name: partner.nickname,
-                    imageUrl: partner.avatarPath,
-                    showBorder: true,
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primary,
-                        shape: BoxShape.circle,
+    return PopScope<Object?>(
+      canPop: !_editing && !_saving,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop || _saving) return;
+        final changed =
+            _nicknameController.text != partner.nickname ||
+            _noteController.text != (partner.note ?? '') ||
+            _selectedType != partner.type ||
+            _draftAvatar != null ||
+            _selectedCity?.city != _originalCity?.city;
+        final discard =
+            !changed ||
+            await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('保留这次修改吗？'),
+                    content: const Text('资料还没有保存。你可以继续编辑，也可以放弃修改后离开。'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('继续编辑'),
                       ),
-                      child: Icon(
-                        Icons.camera_alt_rounded,
-                        color: theme.colorScheme.onPrimary,
-                        size: 18,
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('放弃修改'),
+                      ),
+                    ],
+                  ),
+                ) ==
+                true;
+        if (!discard || !mounted) return;
+        _cancelEdit();
+        await WidgetsBinding.instance.endOfFrame;
+        if (context.mounted) context.pop();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_editing ? '编辑资料' : partner.nickname),
+          centerTitle: true,
+          actions: [
+            if (!_editing)
+              IconButton(
+                icon: const Icon(Icons.edit_rounded),
+                tooltip: '编辑',
+                onPressed: _enterEditMode,
+              )
+            else
+              IconButton(
+                icon: const Icon(Icons.close_rounded),
+                tooltip: '取消',
+                onPressed: _cancelEdit,
+              ),
+          ],
+        ),
+        body: ListView(
+          padding: TaSpacing.page,
+          children: [
+            const SizedBox(height: TaSpacing.md),
+
+            // ---- 头像（可点击更换） ----
+            Center(
+              child: GestureDetector(
+                onTap: _pickAvatar,
+                child: Stack(
+                  children: [
+                    TaAvatar.xl(
+                      name: partner.nickname,
+                      imageUrl: _draftAvatar ?? partner.avatarPath,
+                      showBorder: true,
+                    ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.camera_alt_rounded,
+                          color: theme.colorScheme.onPrimary,
+                          size: 18,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ).animate().fadeIn(duration: TaAnimation.normal),
+            ).animate().fadeIn(duration: TaAnimation.normal),
 
-          const SizedBox(height: TaSpacing.xs),
+            const SizedBox(height: TaSpacing.xs),
 
-          Center(
-            child: Text(
-              '点击更换头像',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-
-          const SizedBox(height: TaSpacing.md),
-
-          // ---- 昵称 / 编辑昵称 ----
-          if (!_editing) ...[
             Center(
               child: Text(
-                partner.nickname,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(height: TaSpacing.xs),
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: TaSpacing.sm,
-                  vertical: TaSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: TaRadius.borderXs,
-                ),
-                child: Text(
-                  partner.typeLabel,
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: theme.colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: TaSpacing.xs),
-            Center(
-              child: Text(
-                '已陪伴 $days 天',
-                style: theme.textTheme.bodyMedium?.copyWith(
+                '点击更换头像',
+                style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
             ),
-          ] else ...[
-            TaTextField(
-              controller: _nicknameController,
-              label: '昵称',
-              hint: '输入Ta的昵称',
-              prefixIcon: Icons.person_outline_rounded,
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return '请输入昵称';
-                return null;
-              },
-            ).animate().fadeIn(duration: TaAnimation.fast),
-          ],
 
-          const SizedBox(height: TaSpacing.lg),
-
-          // ---- 编辑：关系类型选择 ----
-          if (_editing) ...[
-            Text(
-              '选择关系',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: TaSpacing.xs),
-            Row(
-              children: [
-                for (int i = 0; i < _types.length; i++) ...[
-                  if (i > 0) const SizedBox(width: TaSpacing.xs),
-                  Expanded(
-                    child: _TypeCard(
-                      type: _types[i],
-                      selected: _selectedType == _types[i].value,
-                      onTap: () => setState(() => _selectedType = _types[i].value),
-                    ),
-                  ),
-                ],
-              ],
-            ).animate().fadeIn(duration: TaAnimation.fast),
-            const SizedBox(height: TaSpacing.lg),
-          ],
-
-          // ---- 备注 / 编辑备注 ----
-          if (!_editing) ...[
-            if (partner.note != null && partner.note!.isNotEmpty) ...[
-              TaCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.notes_rounded,
-                          size: TaSizes.iconSm,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: TaSpacing.xs),
-                        Text(
-                          '一句话描述',
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: TaSpacing.xs),
-                    Text(
-                      partner.note!,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ).animate().fadeIn(
-                delay: 100.ms,
-                duration: TaAnimation.normal,
-              ),
-            ],
-            // 城市显示
-            if (_selectedCity != null) ...[
-              const SizedBox(height: TaSpacing.sm),
-              TaCard(
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.location_city_rounded,
-                      size: TaSizes.iconSm,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: TaSpacing.xs),
-                    Text(
-                      '所在城市: ${_selectedCity!.displayText}',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ).animate().fadeIn(
-                delay: 150.ms,
-                duration: TaAnimation.normal,
-              ),
-            ],
-          ] else ...[
-            TaTextField(
-              controller: _noteController,
-              label: '一句话描述（可选）',
-              hint: '用一句话描述Ta，比如"我最好的朋友"',
-              prefixIcon: Icons.notes_rounded,
-              maxLines: 3,
-            ).animate().fadeIn(
-              delay: 100.ms,
-              duration: TaAnimation.fast,
-            ),
             const SizedBox(height: TaSpacing.md),
-            InkWell(
-              onTap: () async {
-                final result = await showCityPicker(context);
-                if (result != null) {
-                  setState(() => _selectedCity = result);
-                }
-              },
-              borderRadius: TaRadius.borderXs,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: TaSpacing.md,
-                  vertical: TaSpacing.sm,
-                ),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest
-                      .withValues(alpha: 0.3),
-                  borderRadius: TaRadius.borderXs,
-                  border: Border.all(
-                    color: theme.colorScheme.outline.withValues(alpha: 0.3),
+
+            // ---- 昵称 / 编辑昵称 ----
+            if (!_editing) ...[
+              Center(
+                child: Text(
+                  partner.nickname,
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Icon(Icons.location_city_rounded,
-                        size: 20,
-                        color: _selectedCity != null
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurfaceVariant),
-                    const SizedBox(width: TaSpacing.xs),
-                    Expanded(
-                      child: Text(
-                        _selectedCity != null
-                            ? _selectedCity!.displayText
-                            : '选择所在城市（可选）',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: _selectedCity != null
-                              ? theme.colorScheme.onSurface
-                              : theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
+              ),
+              const SizedBox(height: TaSpacing.xs),
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: TaSpacing.sm,
+                    vertical: TaSpacing.xxs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: TaRadius.borderXs,
+                  ),
+                  child: Text(
+                    partner.typeLabel,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w600,
                     ),
-                    if (_selectedCity != null)
-                      GestureDetector(
-                        onTap: () => setState(() => _selectedCity = null),
-                        child: Icon(Icons.close_rounded,
-                            size: 18,
-                            color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                    const SizedBox(width: TaSpacing.xs),
-                    Icon(Icons.chevron_right_rounded,
-                        size: 20,
-                        color: theme.colorScheme.onSurfaceVariant),
-                  ],
+                  ),
                 ),
               ),
-            ).animate().fadeIn(
-              delay: 150.ms,
-              duration: TaAnimation.fast,
-            ),
-          ],
-
-          const SizedBox(height: TaSpacing.xl),
-
-          // ---- 统计信息 ----
-          if (!_editing)
-            TaCard.outlined(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _StatItem(
-                    icon: Icons.calendar_today_rounded,
-                    value: '$days',
-                    label: '陪伴天数',
+              const SizedBox(height: TaSpacing.xs),
+              Center(
+                child: Text(
+                  '已记录 $days 天',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
-                  _StatItem(
-                    icon: Icons.favorite_rounded,
-                    value: partner.typeLabel,
-                    label: '关系类型',
-                  ),
-                ],
+                ),
               ),
-            ).animate().fadeIn(
-              delay: 200.ms,
-              duration: TaAnimation.normal,
-            ),
-
-          const SizedBox(height: TaSpacing.lg),
-
-          // ---- 关怀建议提示卡片 ----
-          if (!_editing && _suggestion != null)
-            _CareSuggestionCard(
-              suggestion: _suggestion!,
-              onRefresh: () {
-                setState(() => _suggestion = null);
-                _loadSuggestion(_partner);
-              },
-            ).animate().fadeIn(
-              delay: 300.ms,
-              duration: TaAnimation.slow,
-            ),
-
-          const SizedBox(height: TaSpacing.xl),
-
-          // ---- 编辑模式：保存按钮 ----
-          if (_editing)
-            TaButton(
-              onPressed: _save,
-              text: '保存修改',
-              icon: Icons.check_rounded,
-              loading: _saving,
-            ).animate().fadeIn(
-              delay: 200.ms,
-              duration: TaAnimation.fast,
-            ),
-
-          // ---- 非编辑模式：提醒配置入口 ----
-          if (!_editing) ...[
-            SizedBox(
-              width: double.infinity,
-              child: TaButton(
-                onPressed: () {
-                  context.push(
-                    '/reminders/config/${partner.id}',
-                  );
+            ] else ...[
+              TaTextField(
+                controller: _nicknameController,
+                label: '昵称',
+                hint: '输入Ta的昵称',
+                prefixIcon: Icons.person_outline_rounded,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return '请输入昵称';
+                  return null;
                 },
-                text: '管理提醒',
-                icon: Icons.notifications_active_rounded,
-              ),
-            ).animate().fadeIn(
-              delay: 300.ms,
-              duration: TaAnimation.normal,
-            ),
-            const SizedBox(height: TaSpacing.md),
-          ],
+              ).animate().fadeIn(duration: TaAnimation.fast),
+            ],
 
-          // ---- 解除关系按钮 ----
-          Center(
-            child: TextButton.icon(
-              onPressed: _saving ? null : _confirmDelete,
-              icon: Icon(
-                Icons.heart_broken_rounded,
-                color: TaLightColors.error,
-                size: TaSizes.iconSm,
-              ),
-              label: Text(
-                '解除关系',
-                style: TextStyle(
-                  color: TaLightColors.error,
+            const SizedBox(height: TaSpacing.lg),
+
+            // ---- 编辑：关系类型选择 ----
+            if (_editing) ...[
+              Text(
+                '选择关系',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-            ),
-          ).animate().fadeIn(
-            delay: 400.ms,
-            duration: TaAnimation.normal,
-          ),
+              const SizedBox(height: TaSpacing.xs),
+              Row(
+                children: [
+                  for (int i = 0; i < _types.length; i++) ...[
+                    if (i > 0) const SizedBox(width: TaSpacing.xs),
+                    Expanded(
+                      child: _TypeCard(
+                        type: _types[i],
+                        selected: _selectedType == _types[i].value,
+                        onTap: () =>
+                            setState(() => _selectedType = _types[i].value),
+                      ),
+                    ),
+                  ],
+                ],
+              ).animate().fadeIn(duration: TaAnimation.fast),
+              const SizedBox(height: TaSpacing.lg),
+            ],
 
-          const SizedBox(height: TaSpacing.xxl),
-        ],
+            // ---- 备注 / 编辑备注 ----
+            if (!_editing) ...[
+              if (partner.note != null && partner.note!.isNotEmpty) ...[
+                TaCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.notes_rounded,
+                            size: TaSizes.iconSm,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: TaSpacing.xs),
+                          Text(
+                            '一句话描述',
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: TaSpacing.xs),
+                      Text(partner.note!, style: theme.textTheme.bodyMedium),
+                    ],
+                  ),
+                ).animate().fadeIn(delay: 100.ms, duration: TaAnimation.normal),
+              ],
+              // 城市显示
+              if (_selectedCity != null) ...[
+                const SizedBox(height: TaSpacing.sm),
+                TaCard(
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.location_city_rounded,
+                        size: TaSizes.iconSm,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: TaSpacing.xs),
+                      Text(
+                        '所在城市: ${_selectedCity!.displayText}',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ).animate().fadeIn(delay: 150.ms, duration: TaAnimation.normal),
+              ],
+            ] else ...[
+              TaTextField(
+                controller: _noteController,
+                label: '一句话描述（可选）',
+                hint: '用一句话描述Ta，比如"我最好的朋友"',
+                prefixIcon: Icons.notes_rounded,
+                maxLines: 3,
+              ).animate().fadeIn(delay: 100.ms, duration: TaAnimation.fast),
+              const SizedBox(height: TaSpacing.md),
+              InkWell(
+                onTap: () async {
+                  final result = await showCityPicker(context);
+                  if (result != null) {
+                    setState(() => _selectedCity = result);
+                  }
+                },
+                borderRadius: TaRadius.borderXs,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: TaSpacing.md,
+                    vertical: TaSpacing.sm,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest.withValues(
+                      alpha: 0.3,
+                    ),
+                    borderRadius: TaRadius.borderXs,
+                    border: Border.all(
+                      color: theme.colorScheme.outline.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.location_city_rounded,
+                        size: 20,
+                        color: _selectedCity != null
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: TaSpacing.xs),
+                      Expanded(
+                        child: Text(
+                          _selectedCity != null
+                              ? _selectedCity!.displayText
+                              : '选择所在城市（可选）',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: _selectedCity != null
+                                ? theme.colorScheme.onSurface
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      if (_selectedCity != null)
+                        GestureDetector(
+                          onTap: () => setState(() => _selectedCity = null),
+                          child: Icon(
+                            Icons.close_rounded,
+                            size: 18,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      const SizedBox(width: TaSpacing.xs),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        size: 20,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ),
+                ),
+              ).animate().fadeIn(delay: 150.ms, duration: TaAnimation.fast),
+            ],
+
+            const SizedBox(height: TaSpacing.xl),
+
+            // ---- 统计信息 ----
+            if (!_editing)
+              TaCard.outlined(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _StatItem(
+                      icon: Icons.calendar_today_rounded,
+                      value: '$days',
+                      label: '陪伴天数',
+                    ),
+                    _StatItem(
+                      icon: Icons.favorite_rounded,
+                      value: partner.typeLabel,
+                      label: '关系类型',
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(delay: 200.ms, duration: TaAnimation.normal),
+
+            const SizedBox(height: TaSpacing.lg),
+
+            // ---- 关怀建议提示卡片 ----
+            if (!_editing && _suggestion != null)
+              _CareSuggestionCard(
+                suggestion: _suggestion!,
+                onRefresh: () {
+                  setState(() => _suggestion = null);
+                  _loadSuggestion(_partner);
+                },
+              ).animate().fadeIn(delay: 300.ms, duration: TaAnimation.slow),
+
+            const SizedBox(height: TaSpacing.xl),
+
+            // ---- 编辑模式：保存按钮 ----
+            if (_editing)
+              TaButton(
+                onPressed: _save,
+                text: '保存修改',
+                icon: Icons.check_rounded,
+                loading: _saving,
+              ).animate().fadeIn(delay: 200.ms, duration: TaAnimation.fast),
+
+            // ---- 非编辑模式：提醒配置入口 ----
+            if (!_editing) ...[
+              SizedBox(
+                width: double.infinity,
+                child: TaButton(
+                  onPressed: () {
+                    context.push('/reminders/config/${partner.id}');
+                  },
+                  text: '管理提醒',
+                  icon: Icons.notifications_active_rounded,
+                ),
+              ).animate().fadeIn(delay: 300.ms, duration: TaAnimation.normal),
+              const SizedBox(height: TaSpacing.md),
+            ],
+
+            // ---- 解除关系按钮 ----
+            Center(
+              child: TextButton.icon(
+                onPressed: _saving ? null : _confirmDelete,
+                icon: Icon(
+                  Icons.heart_broken_rounded,
+                  color: TaLightColors.error,
+                  size: TaSizes.iconSm,
+                ),
+                label: Text(
+                  '移出列表',
+                  style: TextStyle(
+                    color: TaLightColors.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ).animate().fadeIn(delay: 400.ms, duration: TaAnimation.normal),
+
+            const SizedBox(height: TaSpacing.xxl),
+          ],
+        ),
       ),
     );
   }
@@ -717,11 +779,7 @@ class _TypeCard extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset(
-              type.asset,
-              width: 48,
-              height: 48,
-            ),
+            Image.asset(type.asset, width: 48, height: 48),
             const SizedBox(height: TaSpacing.xxs),
             Text(
               type.label,
@@ -796,7 +854,10 @@ class _CareSuggestionCard extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(
-        TaSpacing.md, TaSpacing.sm, TaSpacing.xs, TaSpacing.sm,
+        TaSpacing.md,
+        TaSpacing.sm,
+        TaSpacing.xs,
+        TaSpacing.sm,
       ),
       decoration: BoxDecoration(
         color: theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
@@ -815,7 +876,9 @@ class _CareSuggestionCard extends StatelessWidget {
             child: Icon(
               Icons.tips_and_updates_outlined,
               size: 18,
-              color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.5),
+              color: theme.colorScheme.onPrimaryContainer.withValues(
+                alpha: 0.5,
+              ),
             ),
           ),
           const SizedBox(width: TaSpacing.xs),
@@ -824,7 +887,9 @@ class _CareSuggestionCard extends StatelessWidget {
             child: Text(
               suggestion,
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.6),
+                color: theme.colorScheme.onPrimaryContainer.withValues(
+                  alpha: 0.6,
+                ),
                 height: 1.5,
                 fontStyle: FontStyle.italic,
               ),
@@ -835,7 +900,9 @@ class _CareSuggestionCard extends StatelessWidget {
             icon: Icon(
               Icons.refresh_rounded,
               size: 18,
-              color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.4),
+              color: theme.colorScheme.onPrimaryContainer.withValues(
+                alpha: 0.4,
+              ),
             ),
             tooltip: '换一条',
             onPressed: onRefresh,

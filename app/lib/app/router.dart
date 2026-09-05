@@ -15,7 +15,9 @@ import '../presentation/screens/reminder_config/reminder_config_screen.dart';
 import '../presentation/screens/partner_detail/partner_detail_screen.dart';
 import '../presentation/screens/reminder_history/reminder_history_screen.dart';
 import '../presentation/screens/settings/settings_screen.dart';
+import '../presentation/screens/settings/archived_people_screen.dart';
 import '../services/local/local_user_service.dart';
+import '../presentation/screens/reminder_health/reminder_health_screen.dart';
 
 /// 路由路径常量
 abstract final class Routes {
@@ -47,6 +49,10 @@ GoRouter createRouter() {
       return null;
     },
     routes: [
+      GoRoute(
+        path: '/settings/reminder-health',
+        builder: (context, state) => const ReminderHealthScreen(),
+      ),
       // 首次引导页
       GoRoute(
         path: Routes.onboarding,
@@ -54,10 +60,7 @@ GoRouter createRouter() {
       ),
 
       // 首页（含底部导航）
-      GoRoute(
-        path: Routes.home,
-        builder: (context, _) => const HomeScreen(),
-      ),
+      GoRoute(path: Routes.home, builder: (context, _) => const HomeScreen()),
 
       // 添加关心的人
       GoRoute(
@@ -68,25 +71,22 @@ GoRouter createRouter() {
       // 关心的人详情/编辑
       GoRoute(
         path: Routes.partnerDetail,
-        builder: (context, state) => PartnerDetailScreen(
-          partnerId: state.pathParameters['id']!,
-        ),
+        builder: (context, state) =>
+            PartnerDetailScreen(partnerId: state.pathParameters['id']!),
       ),
 
       // 提醒配置
       GoRoute(
         path: Routes.reminderConfig,
-        builder: (context, state) => ReminderConfigScreen(
-          partnerId: state.pathParameters['partnerId']!,
-        ),
+        builder: (context, state) =>
+            ReminderConfigScreen(partnerId: state.pathParameters['partnerId']!),
       ),
 
       // 提醒历史
       GoRoute(
         path: Routes.reminderHistory,
-        builder: (context, state) => ReminderHistoryScreen(
-          configId: state.pathParameters['id']!,
-        ),
+        builder: (context, state) =>
+            ReminderHistoryScreen(configId: state.pathParameters['id']!),
       ),
 
       // 成就
@@ -108,6 +108,10 @@ GoRouter createRouter() {
       ),
 
       // 设置子页面
+      GoRoute(
+        path: '/settings/archived-people',
+        builder: (context, _) => const ArchivedPeopleScreen(),
+      ),
       GoRoute(
         path: '/settings/notifications',
         builder: (context, _) => SettingsScreen.buildNotificationsPage(),

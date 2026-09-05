@@ -5,10 +5,12 @@ library;
 
 import 'dart:convert';
 import '../../data/local/database_helper.dart';
+import '../care_activity_service.dart';
 import '../../data/models/reminder_config.dart';
 import '../../data/models/reminder_log.dart';
 import '../weather_service.dart';
 import '../notification_service.dart';
+import 'partner_service.dart';
 
 abstract final class LocalReminderService {
   // ==================== 提醒配置 ====================
@@ -107,6 +109,7 @@ abstract final class LocalReminderService {
       updatedAt: now,
     );
     await db.insert('reminder_configs', rc.toMap());
+    PartnerService.notifyRefresh();
     return rc;
   }
 
@@ -132,12 +135,28 @@ abstract final class LocalReminderService {
       data['timezone_id'] = timezoneId;
     }
     await db.update('reminder_configs', data, where: 'id = ?', whereArgs: [id]);
+    if (enabled == false) {
+      await NotificationService.cancelForConfig(id);
+      await db.update(
+        'reminder_occurrences',
+        {
+          'status': 'cancelled',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        where:
+            "config_id = ? AND status IN ('scheduled', 'snoozed', 'posted', 'observed')",
+        whereArgs: [id],
+      );
+    }
+    PartnerService.notifyRefresh();
   }
 
   /// 删除提醒配置
   static Future<void> deleteConfig(String id) async {
     final db = await DatabaseHelper.database;
+    await NotificationService.cancelForConfig(id);
     await db.delete('reminder_configs', where: 'id = ?', whereArgs: [id]);
+    PartnerService.notifyRefresh();
   }
 
   // ==================== 提醒日志 ====================
@@ -151,30 +170,30 @@ abstract final class LocalReminderService {
     String? partnerId,
     required String message,
     required DateTime scheduledTime,
+    String? occurrenceId,
   }) async {
     final db = await DatabaseHelper.database;
 
-    // 检查是否已有同日同配置的日志
-    final dayStart = DateTime(
-      scheduledTime.year,
-      scheduledTime.month,
-      scheduledTime.day,
+    final instant = scheduledTime.toUtc().toIso8601String();
+    final existing = await db.query(
+      'reminder_logs',
+      columns: ['id'],
+      where: occurrenceId == null
+          ? 'config_id = ? AND triggered_at = ?'
+          : 'occurrence_id = ?',
+      whereArgs: occurrenceId == null ? [configId, instant] : [occurrenceId],
+      limit: 1,
     );
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final existing = await db.rawQuery(
-      'SELECT COUNT(*) as cnt FROM reminder_logs '
-      'WHERE config_id = ? AND triggered_at >= ? AND triggered_at < ?',
-      [configId, dayStart.toIso8601String(), dayEnd.toIso8601String()],
-    );
-    if ((existing.first['cnt'] as int? ?? 0) > 0) return;
+    if (existing.isNotEmpty) return;
 
     await db.insert('reminder_logs', {
       'id': DatabaseHelper.newId(),
+      'occurrence_id': occurrenceId,
       'config_id': configId,
       'partner_id': partnerId?.isEmpty == true ? null : partnerId,
       'message': message,
       'status': 'scheduled',
-      'triggered_at': scheduledTime.toIso8601String(),
+      'triggered_at': instant,
       'sent_at': null,
       'confirmed_at': null,
     });
@@ -186,23 +205,22 @@ abstract final class LocalReminderService {
   /// 如果不存在则返回 false。
   static Future<bool> markScheduledAsSent(String configId) async {
     final db = await DatabaseHelper.database;
-    final now = DateTime.now();
-    final dayStart = DateTime(now.year, now.month, now.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-
-    final result = await db.update(
+    final row = await db.query(
       'reminder_logs',
-      {'status': 'sent', 'sent_at': now.toIso8601String()},
-      where:
-          'config_id = ? AND status = ? AND triggered_at >= ? AND triggered_at < ?',
-      whereArgs: [
-        configId,
-        'scheduled',
-        dayStart.toIso8601String(),
-        dayEnd.toIso8601String(),
-      ],
+      columns: ['id'],
+      where: "config_id = ? AND status = 'scheduled' AND triggered_at <= ?",
+      whereArgs: [configId, DateTime.now().toUtc().toIso8601String()],
+      orderBy: 'triggered_at DESC',
+      limit: 1,
     );
-    return result > 0;
+    if (row.isEmpty) return false;
+    await db.update(
+      'reminder_logs',
+      {'status': 'sent', 'sent_at': DateTime.now().toUtc().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [row.single['id']],
+    );
+    return true;
   }
 
   /// 一键提醒：创建日志 + 返回消息
@@ -292,9 +310,6 @@ abstract final class LocalReminderService {
       payload: 'configId:$configId',
     );
 
-    // 更新成就进度
-    await _updateAchievementOnSend(config);
-
     return log;
   }
 
@@ -303,7 +318,10 @@ abstract final class LocalReminderService {
     final db = await DatabaseHelper.database;
     await db.update(
       'reminder_logs',
-      {'status': 'confirmed', 'confirmed_at': DateTime.now().toIso8601String()},
+      {
+        'status': 'confirmed',
+        'confirmed_at': DateTime.now().toUtc().toIso8601String(),
+      },
       where: 'id = ?',
       whereArgs: [logId],
     );
@@ -337,7 +355,7 @@ abstract final class LocalReminderService {
     final db = await DatabaseHelper.database;
 
     final totalResult = await db.rawQuery(
-      "SELECT COUNT(*) as cnt FROM reminder_logs WHERE status IN ('sent', 'confirmed')",
+      "SELECT COUNT(*) as cnt FROM reminder_logs WHERE status = 'confirmed'",
     );
     final totalCount = totalResult.first['cnt'] as int? ?? 0;
 
@@ -346,7 +364,7 @@ abstract final class LocalReminderService {
       SELECT rc.category, COUNT(*) as cnt
       FROM reminder_logs rl
       JOIN reminder_configs rc ON rl.config_id = rc.id
-      WHERE rl.status IN ('sent', 'confirmed')
+      WHERE rl.status = 'confirmed'
       GROUP BY rc.category
     ''');
 
@@ -356,24 +374,7 @@ abstract final class LocalReminderService {
     }
 
     // 连续天数
-    int streakDays = 0;
-    final now = DateTime.now();
-    for (int i = 0; i < 30; i++) {
-      final day = now.subtract(Duration(days: i));
-      final dayStart = DateTime(day.year, day.month, day.day);
-      final dayEnd = dayStart.add(const Duration(days: 1));
-      final result = await db.rawQuery(
-        'SELECT COUNT(*) as cnt FROM reminder_logs '
-        'WHERE triggered_at >= ? AND triggered_at < ?',
-        [dayStart.toIso8601String(), dayEnd.toIso8601String()],
-      );
-      final count = result.first['cnt'] as int? ?? 0;
-      if (count > 0) {
-        streakDays++;
-      } else {
-        break;
-      }
-    }
+    final streakDays = await CareActivityService.streakDays();
 
     return {
       'totalCount': totalCount,
@@ -431,181 +432,5 @@ abstract final class LocalReminderService {
       'custom' => '想Ta了就告诉Ta吧 💝',
       _ => '记得关心一下Ta 💝',
     };
-  }
-
-  /// 发送提醒后更新成就
-  static Future<void> _updateAchievementOnSend(ReminderConfig config) async {
-    final db = await DatabaseHelper.database;
-    final achievements = await db.query('achievements');
-
-    for (final a in achievements) {
-      final condition =
-          jsonDecode(a['unlock_condition'] as String) as Map<String, dynamic>;
-      final type = condition['type'] as String? ?? '';
-      final target = condition['target'] as int? ?? 1;
-
-      bool shouldUpdate = false;
-
-      // 天气提醒首次完成
-      if (type == 'reminder_complete' && config.category == 'weather') {
-        shouldUpdate = true;
-      }
-      // 睡觉提醒计数
-      if (type == 'sleep_reminder_count' && config.category == 'sleep') {
-        shouldUpdate = true;
-      }
-      // 吃饭提醒计数
-      if (type == 'meal_reminder_count' && config.category == 'meal') {
-        shouldUpdate = true;
-      }
-      // 自定义提醒计数
-      if (type == 'custom_reminder_count' && config.category == 'custom') {
-        shouldUpdate = true;
-      }
-
-      if (shouldUpdate) {
-        // 查找或创建 user_achievement
-        var uaRows = await db.query(
-          'user_achievements',
-          where: 'achievement_id = ?',
-          whereArgs: [a['id']],
-        );
-
-        if (uaRows.isEmpty) {
-          await db.insert('user_achievements', {
-            'id': DatabaseHelper.newId(),
-            'achievement_id': a['id'],
-            'progress': 1,
-            'unlocked': 1 >= target ? 1 : 0,
-            'unlocked_at': 1 >= target
-                ? DateTime.now().toIso8601String()
-                : null,
-          });
-        } else {
-          final ua = uaRows.first;
-          final unlocked = (ua['unlocked'] as int) == 1;
-          if (unlocked) continue;
-
-          final newProgress = (ua['progress'] as int) + 1;
-          await db.update(
-            'user_achievements',
-            {
-              'progress': newProgress,
-              'unlocked': newProgress >= target ? 1 : 0,
-              'unlocked_at': newProgress >= target
-                  ? DateTime.now().toIso8601String()
-                  : null,
-            },
-            where: 'id = ?',
-            whereArgs: [ua['id']],
-          );
-        }
-      }
-    }
-
-    // 检查 streak_days 和 relationship_days 类型
-    await _checkStreakAndRelationshipAchievements();
-  }
-
-  /// 检查连续天数和关系天数成就
-  static Future<void> _checkStreakAndRelationshipAchievements() async {
-    final db = await DatabaseHelper.database;
-
-    // streak_days
-    int streakDays = 0;
-    final now = DateTime.now();
-    for (int i = 0; i < 30; i++) {
-      final day = now.subtract(Duration(days: i));
-      final dayStart = DateTime(day.year, day.month, day.day);
-      final dayEnd = dayStart.add(const Duration(days: 1));
-      final result = await db.rawQuery(
-        'SELECT COUNT(*) as cnt FROM reminder_logs '
-        'WHERE triggered_at >= ? AND triggered_at < ?',
-        [dayStart.toIso8601String(), dayEnd.toIso8601String()],
-      );
-      final count = result.first['cnt'] as int? ?? 0;
-      if (count > 0) {
-        streakDays++;
-      } else {
-        break;
-      }
-    }
-
-    final streakAchievements = await db.rawQuery(
-      "SELECT * FROM achievements WHERE json_extract(unlock_condition, '\$.type') = 'streak_days'",
-    );
-    for (final a in streakAchievements) {
-      final condition =
-          jsonDecode(a['unlock_condition'] as String) as Map<String, dynamic>;
-      final target = condition['target'] as int? ?? 7;
-      await _updateAbsoluteAchievement(a['id'] as String, streakDays, target);
-    }
-
-    // relationship_days
-    final partners = await db.query('partners', where: "status = 'active'");
-    int maxDays = 0;
-    for (final p in partners) {
-      final days = DateTime.now()
-          .difference(DateTime.parse(p['created_at'] as String))
-          .inDays;
-      if (days > maxDays) maxDays = days;
-    }
-
-    final relAchievements = await db.rawQuery(
-      "SELECT * FROM achievements WHERE json_extract(unlock_condition, '\$.type') = 'relationship_days'",
-    );
-    for (final a in relAchievements) {
-      final condition =
-          jsonDecode(a['unlock_condition'] as String) as Map<String, dynamic>;
-      final target = condition['target'] as int? ?? 100;
-      await _updateAbsoluteAchievement(a['id'] as String, maxDays, target);
-    }
-  }
-
-  /// 更新绝对进度型成就
-  static Future<void> _updateAbsoluteAchievement(
-    String achievementId,
-    int progress,
-    int target,
-  ) async {
-    final db = await DatabaseHelper.database;
-    var uaRows = await db.query(
-      'user_achievements',
-      where: 'achievement_id = ?',
-      whereArgs: [achievementId],
-    );
-
-    if (uaRows.isEmpty) {
-      await db.insert('user_achievements', {
-        'id': DatabaseHelper.newId(),
-        'achievement_id': achievementId,
-        'progress': progress,
-        'unlocked': progress >= target ? 1 : 0,
-        'unlocked_at': progress >= target
-            ? DateTime.now().toIso8601String()
-            : null,
-      });
-    } else {
-      final ua = uaRows.first;
-      final unlocked = (ua['unlocked'] as int) == 1;
-      if (unlocked) return;
-
-      final currentProgress = ua['progress'] as int;
-      final newProgress = currentProgress > progress
-          ? currentProgress
-          : progress;
-      await db.update(
-        'user_achievements',
-        {
-          'progress': newProgress,
-          'unlocked': newProgress >= target ? 1 : 0,
-          'unlocked_at': newProgress >= target
-              ? DateTime.now().toIso8601String()
-              : null,
-        },
-        where: 'id = ?',
-        whereArgs: [ua['id']],
-      );
-    }
   }
 }

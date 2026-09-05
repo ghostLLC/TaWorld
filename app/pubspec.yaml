@@ -1,7 +1,7 @@
 name: taworld
 description: "Ta的世界 — 以关怀为核心的情感连接APP"
 publish_to: 'none'
-version: 0.1.1+2
+version: 0.2.0+4
 
 environment:
   sdk: ^3.11.5
@@ -20,6 +20,7 @@ dependencies:
 
   # 本地存储
   shared_preferences: ^2.5.3
+  flutter_secure_storage: ^10.0.0
   sqflite: ^2.4.2
   path: ^1.9.0
   path_provider: ^2.1.5
@@ -40,6 +41,8 @@ dependencies:
 
   # 本地通知 & 定时
   flutter_local_notifications: ^18.0.0
+  taworld_notifications:
+    path: packages/taworld_notifications
   timezone: ^0.10.0
   workmanager: ^0.9.0+3
 
@@ -52,6 +55,7 @@ dependencies:
   flutter_timezone: ^5.1.0
 
 dev_dependencies:
+  flutter_local_notifications_platform_interface: ^8.0.0
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0

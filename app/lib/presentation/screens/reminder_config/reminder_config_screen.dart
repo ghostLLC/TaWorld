@@ -1,6 +1,8 @@
 /// TaWorld 提醒配置页面
 library;
 
+import '../../widgets/custom_reminder_editor.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
@@ -687,93 +689,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
   /// 自定义提醒编辑
   Future<Map<String, dynamic>?> _showCustomEditDialog(
     Map<String, dynamic> current,
-  ) async {
-    final messageCtrl = TextEditingController(
-      text: current['message'] as String? ?? '',
-    );
-    final timeParts = (current['target_time'] as String? ?? '09:00').split(':');
-    var selectedHour = int.tryParse(timeParts[0]) ?? 9;
-    var selectedMinute = int.tryParse(timeParts[1]) ?? 0;
-    var repeatDaily = current['repeat_daily'] as bool? ?? true;
-
-    return showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: TaRadius.borderLg),
-          title: const Text('编辑自定义提醒'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: messageCtrl,
-                decoration: const InputDecoration(
-                  labelText: '提醒消息',
-                  hintText: '写一句想对Ta说的话',
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 3,
-                maxLength: 100,
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                leading: const Icon(Icons.access_time_rounded),
-                title: const Text('提醒时间'),
-                subtitle: Text(
-                  '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
-                ),
-                onTap: () async {
-                  final time = await showTimePicker(
-                    context: ctx,
-                    initialTime: TimeOfDay(
-                      hour: selectedHour,
-                      minute: selectedMinute,
-                    ),
-                  );
-                  if (time != null) {
-                    setDialogState(() {
-                      selectedHour = time.hour;
-                      selectedMinute = time.minute;
-                    });
-                  }
-                },
-                contentPadding: EdgeInsets.zero,
-              ),
-              SwitchListTile(
-                value: repeatDaily,
-                onChanged: (v) => setDialogState(() => repeatDaily = v),
-                title: const Text('每天重复'),
-                contentPadding: EdgeInsets.zero,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(null),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (messageCtrl.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(
-                    ctx,
-                  ).showSnackBar(const SnackBar(content: Text('请填写提醒消息')));
-                  return;
-                }
-                Navigator.of(ctx).pop({
-                  'message': messageCtrl.text.trim(),
-                  'target_time':
-                      '${selectedHour.toString().padLeft(2, '0')}:${selectedMinute.toString().padLeft(2, '0')}',
-                  'repeat_daily': repeatDaily,
-                });
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  ) => showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (_) => CustomReminderEditor(initial: current),
+  );
 
   // ==================== 创建 ====================
 
@@ -821,6 +740,14 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
     Map<String, dynamic> config = ReminderConfig.defaultConfigFor(category);
     var timezoneMode = 'user';
 
+    if (category == 'sleep' || category == 'meal') {
+      final result = category == 'sleep'
+          ? await _showSleepEditDialog(config, initialTimezoneMode: 'user')
+          : await _showMealEditDialog(config, initialTimezoneMode: 'user');
+      if (result == null) return;
+      config = result.config;
+      timezoneMode = result.timezoneMode;
+    }
     if (category == 'weather') {
       final weatherValue = await _showWeatherEditDialog(
         WeatherReminderFormValue.fromConfig(config, timezoneMode: timezoneMode),
