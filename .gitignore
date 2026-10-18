@@ -87,6 +87,18 @@ docker-compose.override.yml
 # ==================== Competition ====================
 competition/
 
+# ==================== Build artifacts ====================
+# Release and debug APKs stay outside the repository; the archives live in
+# D:\TaWorld-archive\apk and the build output under app/build.
+*.apk
+
+# ==================== AI tool state ====================
+# Codex screenshots and Mimosa finding-ledger/hook state are local run data.
+.codex/
+.mimosa/
+server/.mimosa/
+website/.mimosa/
+
 # ==================== OS ====================
 Thumbs.db
 .DS_Store
