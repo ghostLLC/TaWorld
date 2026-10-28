@@ -12,7 +12,7 @@ class ReminderHealthCard extends StatelessWidget {
   Widget build(BuildContext context) => ValueListenableBuilder<ReminderHealth?>(
     valueListenable: ReminderHealthService.current,
     builder: (context, value, _) {
-      if (value == null || (value.configCount == 0 && value.error == null)) {
+      if (value == null || (!value.hasIssue && value.unknownCount == 0)) {
         return const SizedBox.shrink();
       }
       final colors = Theme.of(context).colorScheme;

@@ -567,7 +567,7 @@ class _TypeCard extends StatelessWidget {
         ),
         onTap: onTap,
         color: selected
-            ? TaLightColors.primaryContainer
+            ? theme.colorScheme.primaryContainer
             : theme.colorScheme.surface,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -578,7 +578,7 @@ class _TypeCard extends StatelessWidget {
               type.label,
               style: theme.textTheme.labelMedium?.copyWith(
                 color: selected
-                    ? TaLightColors.onPrimaryContainer
+                    ? theme.colorScheme.onPrimaryContainer
                     : theme.colorScheme.onSurfaceVariant,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),

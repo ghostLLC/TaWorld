@@ -63,15 +63,15 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
       await LocalReminderService.sendReminder(widget.configId);
       await _loadLogs();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('提醒已发送')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('提醒已发送')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('发送失败，请重试')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('发送失败，请重试')));
       }
     } finally {
       if (mounted) {
@@ -83,10 +83,7 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('提醒历史'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('提醒历史'), centerTitle: true),
       body: _buildBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _sending ? null : _sendReminder,
@@ -121,12 +118,13 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
       child: ListView.separated(
         padding: TaSpacing.page,
         itemCount: _logs.length,
-        separatorBuilder: (context, index) => const SizedBox(height: TaSpacing.xs),
+        separatorBuilder: (context, index) =>
+            const SizedBox(height: TaSpacing.xs),
         itemBuilder: (context, index) {
           final log = _logs[index];
           final statusInfo = _statusInfo(log.status, theme);
 
-          return TaCard(
+          final card = TaCard(
             padding: TaSpacing.cardInner,
             child: Row(
               children: [
@@ -185,15 +183,23 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
                   Padding(
                     padding: const EdgeInsets.only(left: TaSpacing.xs),
                     child: IconButton(
-                      icon: Icon(Icons.check_circle_outline_rounded,
-                          color: TaLightColors.success, size: 20),
+                      icon: Icon(
+                        Icons.check_circle_outline_rounded,
+                        color: taColorsFor(theme.brightness).success,
+                        size: 20,
+                      ),
                       tooltip: '确认已提醒',
                       onPressed: () => _confirmLog(log.id),
                     ),
                   ),
               ],
             ),
-          ).animate().fadeIn(delay: (index * 50).ms);
+          );
+          if (TaAnimation.reduceMotion(context)) return card;
+          return card.animate().fadeIn(
+            delay: TaAnimation.stagger(index),
+            duration: TaAnimation.normal,
+          );
         },
       ),
     );
@@ -202,42 +208,49 @@ class _ReminderHistoryScreenState extends State<ReminderHistoryScreen> {
   _StatusInfo _statusInfo(String status, ThemeData theme) {
     return switch (status) {
       'scheduled' => _StatusInfo(
-          Icons.schedule_rounded,
-          theme.colorScheme.onSurfaceVariant,
-          '待触发',
-        ),
+        Icons.schedule_rounded,
+        theme.colorScheme.onSurfaceVariant,
+        '待触发',
+      ),
       'triggered' => _StatusInfo(
-          Icons.notifications_active_rounded,
-          TaLightColors.warning,
-          '已触发',
-        ),
+        Icons.notifications_active_rounded,
+        taColorsFor(theme.brightness).warning,
+        '已触发',
+      ),
       'sent' => _StatusInfo(
-          Icons.send_rounded,
-          TaLightColors.tertiary,
-          '已发送',
-        ),
+        Icons.send_rounded,
+        theme.colorScheme.tertiary,
+        '已发送',
+      ),
       'confirmed' => _StatusInfo(
-          Icons.check_circle_rounded,
-          TaLightColors.success,
-          '已确认',
-        ),
+        Icons.check_circle_rounded,
+        taColorsFor(theme.brightness).success,
+        '已确认',
+      ),
       _ => _StatusInfo(
-          Icons.circle_outlined,
-          theme.colorScheme.onSurfaceVariant,
-          status,
-        ),
+        Icons.circle_outlined,
+        theme.colorScheme.onSurfaceVariant,
+        status,
+      ),
     };
   }
 
-  String _formatTime(DateTime time) {
-    final now = DateTime.now();
-    final diff = now.difference(time);
-    if (diff.inMinutes < 1) return '刚刚';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}分钟前';
-    if (diff.inHours < 24) return '${diff.inHours}小时前';
-    if (diff.inDays < 7) return '${diff.inDays}天前';
-    return '${time.month}/${time.day} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  String _formatTime(DateTime time) => formatReminderTimestamp(time);
+}
+
+String formatReminderTimestamp(DateTime time, {DateTime? now}) {
+  final current = now ?? DateTime.now();
+  if (time.isAfter(current)) {
+    final local = time.toLocal();
+    return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
+  final diff = current.difference(time);
+  if (diff.inMinutes < 1) return '刚刚';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}分钟前';
+  if (diff.inHours < 24) return '${diff.inHours}小时前';
+  if (diff.inDays < 7) return '${diff.inDays}天前';
+  final local = time.toLocal();
+  return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
 }
 
 class _StatusInfo {

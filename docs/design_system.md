@@ -13,7 +13,7 @@
 | 用途 | 色值 | 变量名 | 示例 |
 |------|------|--------|------|
 | 主色（AppBar/主按钮） | `#E8998D` 柔珊瑚 | `TaLightColors.primary` | 🟧 |
-| 主色上文字 | `#FFFFFF` | `TaLightColors.onPrimary` | ⬜ |
+| 主色上文字 | `#101C28` 深海军蓝 | `TaLightColors.onPrimary` | ⬛ |
 | 次要色（成就/徽章） | `#D4A855` 暖金 | `TaLightColors.secondary` | 🟨 |
 | 第三色（天气模块） | `#7EB8CC` 天空蓝 | `TaLightColors.tertiary` | 🔵 |
 | 全局背景 | `#FFF8F5` 暖奶油白 | `TaLightColors.background` | ⬜ |
@@ -126,13 +126,17 @@ TaSpacing.cardInnerLarge // 24px 的大卡片内边距
 
 ## 七、动画
 
-| 令牌 | 值 | 用途 |
+| 令牌/接口 | 值或规则 | 用途 |
 |------|----|------|
 | `TaAnimation.fast` | 200ms | 微交互（按下反馈） |
 | `TaAnimation.normal` | 300ms | **标准过渡** |
 | `TaAnimation.slow` | 500ms | 复杂动画 |
 | `TaAnimation.curve` | easeInOutCubic | **标准缓动** |
 | `TaAnimation.bounce` | elasticOut | 弹性效果（Logo 出场） |
+| `TaAnimation.stagger` | 默认最多 300ms 延迟 | 限制长列表逐项入场等待 |
+| `TaAnimation.reduceMotion` | 读取 `MediaQuery.disableAnimations` | 对修改范围内的加载、思考、庆祝、列表和按钮反馈静态降级 |
+
+成就只在后续新解锁时庆祝，首次进入页面不重复播放旧成就动画。减少动态效果时不得继续运行无意义的控制器。
 
 ---
 
@@ -162,6 +166,8 @@ TaSpacing.cardInnerLarge // 24px 的大卡片内边距
 3. **呼吸感** — 充足的间距，不拥挤
 4. **一致性** — 所有颜色/间距/圆角从设计令牌取值，禁止硬编码
 5. **响应性** — 微动画让界面有生命力（入场淡入、按下缩放）
+6. **可读与可操作** — 浅色 primary/secondary/tertiary 前景对比度至少 4.5:1，常用触控目标至少 48px
+7. **动效克制** — 长列表限制 stagger 延迟，尊重减少动态效果，只庆祝真正的新解锁
 
 ---
 

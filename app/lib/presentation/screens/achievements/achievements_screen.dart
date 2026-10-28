@@ -25,6 +25,8 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
 
   /// 正在播放庆祝动画的徽章索引集合
   final Set<int> _celebrating = {};
+  final Set<String> _knownUnlocked = {};
+  bool _hasUnlockBaseline = false;
 
   static const _achievementTargets = <String, int>{
     '初次守护': 1,
@@ -68,10 +70,23 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
         _stats = results[1] as Map<String, dynamic>;
         _loading = false;
 
-        // 为所有已解锁的成就触发庆祝动画（依次播放）
-        for (var i = 0; i < _achievements.length; i++) {
-          if (_achievements[i].unlocked == true) {
-            _celebrating.add(i);
+        final unlockedNow = _achievements
+            .where((achievement) => achievement.unlocked)
+            .map((achievement) => achievement.achievementId)
+            .toSet();
+        final newUnlocks = _hasUnlockBaseline
+            ? unlockedNow.difference(_knownUnlocked)
+            : <String>{};
+        _knownUnlocked
+          ..clear()
+          ..addAll(unlockedNow);
+        _hasUnlockBaseline = true;
+
+        if (!TaAnimation.reduceMotion(context)) {
+          for (var i = 0; i < _achievements.length; i++) {
+            if (newUnlocks.contains(_achievements[i].achievementId)) {
+              _celebrating.add(i);
+            }
           }
         }
       });
@@ -92,10 +107,7 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('成就'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('成就'), centerTitle: true),
       body: _buildBody(theme),
     );
   }
@@ -159,7 +171,8 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
                 final ua = _achievements[index];
 
                 // Use known target from seed data; fall back to 1 for unknown achievements.
-                final target = _achievementTargets[ua.achievementName ?? ''] ?? 1;
+                final target =
+                    _achievementTargets[ua.achievementName ?? ''] ?? 1;
                 final asset = _achievementAssets[ua.achievementName ?? ''];
 
                 final badge = TaAchievementBadge(
@@ -175,10 +188,13 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
                   alignment: Alignment.center,
                   clipBehavior: Clip.none,
                   children: [
-                    badge.animate().fadeIn(
-                          delay: (index * 80).ms,
-                          duration: TaAnimation.normal,
-                        ),
+                    if (TaAnimation.reduceMotion(context))
+                      badge
+                    else
+                      badge.animate().fadeIn(
+                        delay: TaAnimation.stagger(index, stepMilliseconds: 80),
+                        duration: TaAnimation.normal,
+                      ),
                     if (_celebrating.contains(index))
                       TaCelebrateAnimation(size: 80),
                   ],
@@ -187,9 +203,7 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
             ),
           ),
 
-          const SliverToBoxAdapter(
-            child: SizedBox(height: TaSpacing.xxl),
-          ),
+          const SliverToBoxAdapter(child: SizedBox(height: TaSpacing.xxl)),
         ],
       ),
     );

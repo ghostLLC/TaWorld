@@ -84,7 +84,9 @@ abstract final class CareSuggestionService {
 
     // 没有匹配的已配置类别时，按时段选
     if (hour >= 21) return 'sleep';
-    if ((hour >= 6 && hour < 10) || (hour >= 10 && hour < 14) || (hour >= 17 && hour < 20)) {
+    if ((hour >= 6 && hour < 10) ||
+        (hour >= 10 && hour < 14) ||
+        (hour >= 17 && hour < 20)) {
       return 'meal';
     }
     return 'custom';
@@ -115,32 +117,29 @@ abstract final class CareSuggestionService {
     if (weather != null) {
       if (weather.temp <= 0) {
         pool.addAll([
-          '$name那边只有${weather.temp}°C，问问她有没有穿够衣服 🧣',
+          '$name那边只有${weather.temp}°C，问问Ta有没有穿够衣服 🧣',
           '今天好冷，提醒$name多穿点别着凉了',
         ]);
       } else if (weather.temp >= 35) {
         pool.addAll([
-          '$name那边${weather.temp}°C，提醒她注意防暑降暑 🧊',
+          '$name那边${weather.temp}°C，提醒Ta注意防暑降暑 🧊',
           '这么热的天，问问$name有没有多喝水 💧',
         ]);
       }
       if (_isRainy(weather.text)) {
         pool.addAll([
-          '试试问她：今天带伞了吗？🌂',
-          '$name那边在下雨，提醒她带伞出门',
+          '试试问Ta：今天带伞了吗？🌂',
+          '$name那边在下雨，提醒Ta带伞出门',
           '下雨天容易堵车，提醒$name早点出门',
         ]);
       }
       if (_isSnowy(weather.text)) {
-        pool.addAll([
-          '$name那边下雪了，提醒她注意保暖 ❄️',
-          '下雪天路滑，提醒$name注意安全',
-        ]);
+        pool.addAll(['$name那边下雪了，提醒Ta注意保暖 ❄️', '下雪天路滑，提醒$name注意安全']);
       }
       // 天气正常也可以关心
       if (pool.isEmpty) {
         pool.addAll([
-          '$name那边今天${weather.text}，${weather.temp}°C，告诉她天气不错适合出门 ☀️',
+          '$name那边今天${weather.text}，${weather.temp}°C，告诉Ta天气不错适合出门 ☀️',
           '今天$name那边天气挺好的，可以关心一下',
         ]);
       }
@@ -157,7 +156,7 @@ abstract final class CareSuggestionService {
       pool.addAll([
         '快到午饭时间了，提醒$name按时吃饭 🍚',
         '问问$name中午想吃什么',
-        '午休时间快到了，关心一下她上午累不累',
+        '午休时间快到了，关心一下Ta上午累不累',
       ]);
     } else if (hour >= 14 && hour < 17) {
       pool.addAll([
@@ -189,20 +188,11 @@ abstract final class CareSuggestionService {
 
     // ---- 关系类型相关 ----
     if (partner.type == 'couple') {
-      pool.addAll([
-        '给$name分享一首你最近听的歌 🎵',
-        '问问$name周末想做什么，一起安排',
-      ]);
+      pool.addAll(['给$name分享一首你最近听的歌 🎵', '问问$name周末想做什么，一起安排']);
     } else if (partner.type == 'family') {
-      pool.addAll([
-        '好久没打电话了，问问$name最近身体怎么样',
-        '给$name分享一下你最近的生活吧',
-      ]);
+      pool.addAll(['好久没打电话了，问问$name最近身体怎么样', '给$name分享一下你最近的生活吧']);
     } else if (partner.type == 'friend') {
-      pool.addAll([
-        '最近有没有什么好玩的事？分享给$name吧',
-        '问问$name周末有没有空，一起出去玩',
-      ]);
+      pool.addAll(['最近有没有什么好玩的事？分享给$name吧', '问问$name周末有没有空，一起出去玩']);
     }
 
     // 随机选一条返回

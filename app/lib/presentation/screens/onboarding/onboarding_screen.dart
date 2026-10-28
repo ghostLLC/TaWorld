@@ -79,7 +79,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         await AiService.setApiKey(deepseekKey);
       }
     } catch (_) {
-      // 保存失败不影响进入主页
+      if (!mounted) return;
+      setState(() => _savingKeys = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('密钥未能安全保存，请重试或稍后在设置中配置')));
+      return;
     }
 
     if (!mounted) return;
@@ -134,13 +139,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const SizedBox(height: TaSpacing.xl),
 
                 Text(
-                  'Ta的世界',
-                  style: theme.textTheme.displaySmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: theme.colorScheme.onSurface,
-                    letterSpacing: 1.2,
-                  ),
-                )
+                      'Ta的世界',
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: theme.colorScheme.onSurface,
+                        letterSpacing: 1.2,
+                      ),
+                    )
                     .animate()
                     .fadeIn(
                       duration: TaAnimation.normal,
@@ -158,12 +163,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const SizedBox(height: TaSpacing.xs),
 
                 Text(
-                  '记录你的每一份关心',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w400,
-                  ),
-                )
+                      '记录你的每一份关心',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    )
                     .animate()
                     .fadeIn(
                       duration: TaAnimation.normal,
@@ -181,15 +186,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const SizedBox(height: TaSpacing.xxl),
 
                 SizedBox(
-                  width: double.infinity,
-                  child: TaTextField(
-                    controller: _nicknameController,
-                    label: '你的昵称',
-                    hint: '输入一个你喜欢的名字',
-                    prefixIcon: Icons.person_outline_rounded,
-                    onChanged: _onNicknameChanged,
-                  ),
-                )
+                      width: double.infinity,
+                      child: TaTextField(
+                        controller: _nicknameController,
+                        label: '你的昵称',
+                        hint: '输入一个你喜欢的名字',
+                        prefixIcon: Icons.person_outline_rounded,
+                        onChanged: _onNicknameChanged,
+                      ),
+                    )
                     .animate()
                     .fadeIn(
                       duration: TaAnimation.normal,
@@ -207,16 +212,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const SizedBox(height: TaSpacing.xl),
 
                 SizedBox(
-                  width: double.infinity,
-                  child: TaButton(
-                    onPressed: _loading ? null : _onNicknameNext,
-                    text: '下一步',
-                    icon: Icons.arrow_forward_rounded,
-                    loading: _loading,
-                    enabled: _canSubmit && !_loading,
-                    gradient: TaGradients.primary(Theme.of(context).brightness),
-                  ),
-                )
+                      width: double.infinity,
+                      child: TaButton(
+                        onPressed: _loading ? null : _onNicknameNext,
+                        text: '下一步',
+                        icon: Icons.arrow_forward_rounded,
+                        loading: _loading,
+                        enabled: _canSubmit && !_loading,
+                        gradient: TaGradients.primary(
+                          Theme.of(context).brightness,
+                        ),
+                      ),
+                    )
                     .animate()
                     .fadeIn(
                       duration: TaAnimation.normal,
@@ -322,6 +329,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         controller: _deepseekKeyController,
                         hint: 'sk-...',
                         prefixIcon: Icons.key_rounded,
+                        obscureText: true,
                       ),
                       const SizedBox(height: TaSpacing.xs),
                       Align(

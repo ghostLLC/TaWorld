@@ -6,39 +6,40 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.2.0_candidate-E89186" alt="v0.2.0 candidate">
+  <img src="https://img.shields.io/badge/version-v0.2.0-E89186" alt="v0.2.0">
   <img src="https://img.shields.io/badge/Flutter-3.41.9-02569B?logo=flutter&logoColor=white" alt="Flutter 3.41.9">
-  <img src="https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white" alt="Android">
+  <img src="https://img.shields.io/badge/platform-Android-3DDC84?logo=android" alt="Android">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
 </p>
 
-[产品官网](https://taworld-cloud1-8grf0qgi8c6c0603.webapps.tcloudbase.com) · [GitHub Pages 镜像](https://ghostllc.github.io/TaWorld/) · [历史发布 v0.1.1](https://github.com/ghostLLC/TaWorld/releases/tag/v0.1.1)
+[产品官网](https://taworld-cloud1-8grf0qgi8c6c0603.webapps.tcloudbase.com) · [GitHub Pages 镜像](https://ghostllc.github.io/TaWorld/) · [下载 v0.2.0](https://github.com/ghostLLC/TaWorld/releases/tag/v0.2.0) · [文档索引](docs/README.md)
 
 TaWorld 帮你记住人物资料，在合适的时间提醒你关心 Ta。人物、提醒、对话、记忆与附件保存在设备本地；AI 和天气请求由设备直接访问对应服务。应用不会代替用户联系关心对象。
 
-当前代码版本为 **v0.2.0（0.2.0+4）候选版**。本轮完成数据可靠性、提醒反馈、关心图谱和模型执行流程改造；已做 Android 模拟器验证，小米 / HyperOS 真机与真实模型体验仍待验收。
-
-## v0.2.0 解决什么问题
-
-| 体验问题 | 本轮改动 |
-| --- | --- |
-| 人物、备注或近期聊天看起来丢失 | 人物独立加载；损坏提醒逐条隔离并保留原数据；明确区分不修改与清空字段；聊天优先读取最新 50 条，可继续加载历史；移出人物后可恢复 |
-| 改城市后天气与提醒不一致 | 已知城市使用同源坐标和时区；改城市时清除旧坐标；不自动把手机位置当作好友位置；未知地点和时区明确提示 |
-| 图谱难找人、难操作 | 稳定位置与颜色、关系筛选、搜索定位、点选操作卡、双指缩放、长按拖动并保存位置、全屏画布；海报每页最多 6 人，支持多页导出 |
-| 模型重复确认或操作不完整 | 结构化工作流与当前人物 / 提醒 ID；有依据的信息直接执行；最多 6 轮依赖工具调用；同一请求重试去重、取消与超时处理；一次性 / 每日 / 工作日提醒与已有提醒编辑 |
-| 通知动作无响应、回到 App 后提醒消失 | Android 原生定时发布与通知按钮；稳定通知 ID；差量排程保留已显示通知和稍后提醒；恢复重启后的未来计划；回收异常结束进程留下的排程锁 |
-| 不知道提醒是否成功 | 启动和回到前台时自检；展示权限、未来提醒、历史显示证据和用户确认；缺少历史证据时显示“无法确认”；主动关心保留未发送原因 |
-| 统计、备份与隐私不清楚 | 关心次数只计算明确确认；成就从实际记录核对；头像与聊天附件统一备份、恢复后刷新页面；密钥存入平台安全存储并排除在备份外 |
+当前发布版本为 **v0.2.0（0.2.0+4）**。本版完成数据可靠性、提醒反馈、关心图谱、模型执行流程、单一多模态路由、主题与可访问性改造。2026-10-28，用户确认已验收最新版并反馈无异常。
 
 ## 主要能力
 
-- **小念对话**：自然语言管理人物与提醒，结合 Wiki 事实、对话摘要和关键词检索。文字模型配置为 `deepseek-v4-flash`，图片模型配置为 `deepseek-v4-flash-vision-exp`；实际可用性取决于账户，设置时会做能力检查。
+- **小念对话**：自然语言管理人物与提醒，结合 Wiki 事实、对话摘要和关键词检索。文字与图片理解统一使用多模态模型 `deepseek-flash`；实际可用性取决于账户，设置时会做能力检查。
 - **人物档案**：关系、地点、备注与头像；编辑保护未保存草稿，支持恢复已移出的人。
 - **提醒**：睡觉、三餐、天气与自定义提醒。自定义支持指定日期单次执行、每天或指定星期重复；按用户或人物已确认的时区计算。
 - **通知回应**：在通知栏选择“关心过了”“5分钟后”“过时了”。用户确认与系统发布分别记录。
 - **主动关心**：结合已知事实评估，遵守总开关、静默时段、冷却时间和每日上限。没有模型、条件不满足或检查失败时保留可解释状态。
-- **输入与主题**：语音转文字、相机 / 相册输入，五套配色及浅色 / 跟随系统 / 深色模式。
+- **输入与主题**：语音转文字、相机 / 相册输入，五套配色及浅色 / 跟随系统 / 深色模式；语义前景对比度、触控尺寸与减少动态效果有回归覆盖。
 - **本地备份**：数据库、人物头像与聊天图片；导入前校验结构、路径和附件限制，导入失败可回滚。密钥需要在新设备重新配置。
+
+## v0.2.0 解决的体验问题
+
+| 范围 | 改动 |
+| --- | --- |
+| 数据可靠性 | 人物独立加载；损坏提醒逐条隔离；字段清空与不修改分离；最新聊天优先并可翻页；人物移出后可恢复；重置数据回到首次引导 |
+| 地点与时间 | 已知城市使用同源坐标和时区；改城市清除旧坐标；列表与图谱共用可靠时区，未知状态不估算 |
+| 关心图谱 | 稳定位置与颜色、关系筛选、搜索定位、点选操作、缩放、长按拖动、全屏及多页海报 |
+| AI 工作流 | 单一 `deepseek-flash` 多模态入口；最多 6 轮依赖工具调用；写后验证、重试去重、取消与超时处理 |
+| 提醒闭环 | Android 原生发布与通知按钮；稳定 ID、差量排程、重启恢复；系统证据与用户确认分别记录 |
+| 前端体验 | 五套主题高对比前景、暗色语义统一、48px 常用触控目标、精简首屏、提醒配置分层及减少动态效果 |
+| 隐私与备份 | 密钥存入平台安全存储并排除在备份外；头像与聊天附件统一备份、校验和回滚 |
+| 可维护性 | 统一 AGENTS 与现行文档索引，历史后端和研究资料集中归档，MIT LICENSE 与 v0.2.0 发布说明齐备 |
 
 ## 怎样核对提醒
 
@@ -74,52 +75,50 @@ Flutter UI
 
 | 范围 | 技术与约束 |
 | --- | --- |
-| 客户端 | Flutter 3.41.9、Dart 3.11、Material 3 |
-| 数据 | sqflite，schema v7；人物、提醒、对话、记忆、通知事件、图谱位置与工具操作日志 |
-| 原生通知 | 本地插件 `app/packages/taworld_notifications`；原生 Receiver 发布、稍后操作与重启恢复；flutter_local_notifications 提供初始化、权限与兼容能力 |
-| 调度 | 稳定 ID、增量核对、进程租约与废弃锁恢复；精确定时未授权时使用非精确调度 |
-| 后台 | WorkManager，天气检查、主动关心评估与维护 |
+| 客户端 | Flutter 3.41.9、Dart 3.11、Material 3、StatefulWidget/setState |
+| 数据 | sqflite，schema v7，20 张应用表 |
+| 模型 | 文字与图片统一 `deepseek-flash`，设备直连 |
+| 原生通知 | `app/packages/taworld_notifications`；原生 Receiver 发布、稍后操作与重启恢复 |
+| 调度 | 稳定 ID、增量核对、进程租约；精确定时未授权时使用非精确调度 |
+| 后台 | WorkManager，天气检查、主动关心评估与记忆维护 |
 | 密钥 | flutter_secure_storage；验证迁移成功后移除旧偏好中的明文密钥 |
-| 网络 | Dio；设备直连 AI 和天气服务 |
+| 天气 | Open-Meteo；发送必要城市或坐标 |
 | 输入 / 备份 | speech_to_text、相机与相册；带资产映射的备份归档 |
 
-`app/` 是当前单机产品。运行本应用不需要启动仓库中的 `server/`。
+`app/` 是当前单机产品。运行本应用不需要启动仓库中的 `server/`；该目录仅为废弃参考实现。
 
 ## 本地开发
 
-需要 Flutter 3.41.9 或兼容版本、Android SDK、JDK 21、Android 模拟器或手机。
+需要 Flutter 3.41.9、Android SDK、JDK 21、Android 模拟器或手机。优先使用统一入口：
 
 ```bash
-cd app
-flutter pub get
-flutter analyze --no-pub
-flutter test --no-pub
-flutter run
-flutter build apk --release --no-pub --split-per-abi
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/taworld.ps1 pub get
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/taworld.ps1 analyze --no-pub
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/taworld.ps1 test --no-pub
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/taworld.ps1 run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/taworld.ps1 build apk --release --no-pub --split-per-abi
 ```
 
-Windows 可使用 Android Studio 自带 JDK。本机验证环境示例：
+统一脚本会选择项目要求的 Flutter/JDK 和本地 Pub 缓存，并恢复调用者环境。项目已关闭 Kotlin 增量编译及 classpath snapshot，以规避跨盘缓存路径问题。详细说明见 `docs/development_environment.md`。
 
-```powershell
-$env:JAVA_HOME = 'D:\AndroidStudio\jbr'
-# 仅在本轮构建中清除失效的 Gradle 代理，不修改用户全局配置。
-$env:GRADLE_OPTS = '-Dhttp.proxyHost= -Dhttps.proxyHost= -DsocksProxyHost='
-C:\flutter\bin\flutter.bat build apk --release --no-pub --split-per-abi
-```
+## 验证状态（2026-10-28）
 
-项目已关闭 Kotlin 增量编译及 classpath snapshot，以规避 Flutter、项目与 Gradle 缓存跨盘的路径问题。
-
-## 验证状态（2026-09-05）
-
-- 静态分析：0 项问题；自动测试：204 项通过。
+- 静态分析：0 项问题；自动测试：**225 项通过**。
 - Android release：`armeabi-v7a`、`arm64-v8a`、`x86_64` 分 ABI 构建通过。
-- 隔离 Android 16 / API 36 模拟器：v6 → v7 覆盖升级保留 8 位合成人物及资料；已排程提醒在 Flutter 进程结束后触发；通知栏回应回写；5 分钟稍后提醒在设备重启后按原时间再次出现；进入 App 保留活动通知；暂停开关生效。
-- 图谱：点选与操作卡、全屏、拖动位置重启后保留、深色和 200% 字体检查；布局测试覆盖 1–64 人不重叠，多页海报覆盖 8 人。
-- 回归覆盖：损坏配置、字段清空、城市变更、最新历史、同名对象、工具重试与取消、多轮依赖、提醒锁恢复、备份资产与回滚、确认统计与成就进度。
+- 覆盖：数据库迁移、损坏配置、城市与时区、同名对象、工具重试与取消、多轮依赖、提醒锁恢复、备份资产与回滚、确认统计与成就进度。
+- 前端回归：五套浅色主题语义前景对比度、48px 图标按钮、暗色组件、390px 与 200% 字体、健康卡显隐、提醒配置、减少动态效果和成就首次静默。
+- 既有 Android 16 / API 36 模拟器已验证覆盖升级、Flutter 进程结束后的提醒、通知栏回应、稍后提醒重启恢复和暂停开关。
 
-上述 AI 测试使用受控协议响应，不能替代真实模型效果评估。尚未完成小米 / HyperOS 连续 72 小时、真实模型固定任务集、跨实体设备恢复和目标手机的 Release 性能验收。
+AI 协议测试使用受控响应，不能替代真实模型效果评估；自动测试也不等于覆盖所有厂商后台策略或连续 72 小时通知表现。用户验收是产品使用结论，不表示上述自动化项目新增了真实模型或长时间后台覆盖。
 
-当前候选 APK 沿用项目既有调试签名。正式公开分发前需要独立发布密钥及稳定的签名升级流程；这里的 release 构建成功不代表已经正式发布。
+本发布明确沿用项目既有调试签名，这是用户确认保留的决定。覆盖升级必须保持同一证书并递增 versionCode，因此需保护现有调试密钥。GitHub tag 与 Release 是本版本的正式发布记录。
+
+## 文档与发布
+
+- [文档索引](docs/README.md)：现行架构、前端、设计、环境、测试和发布资料。
+- [v0.2.0 发布说明](docs/releases/v0.2.0.md)：版本改动、资产和证据边界。
+- [前端审查记录](docs/design-audit/2026-10-28-frontend-review.md)：问题、修复和暂缓事项。
+- [历史归档](docs/archive/README.md)：旧后端与研究资料，不是现行规格。
 
 ## 隐私与恢复
 
@@ -128,4 +127,4 @@ C:\flutter\bin\flutter.bat build apk --release --no-pub --split-per-abi
 - 天气查询会发送所需坐标或城市；地点功能不会主动联系任何人。
 - API Key 使用平台安全存储，不写入备份；本地备份含私人资料，应由用户妥善保存。
 - 人物“移出列表”可恢复；“重置所有数据”会清除本机资料、密钥、受管附件及提醒，应先按需要导出备份。
-- 升级保留数据库并执行迁移。安装新候选版本前，建议导出一份可用备份；不要通过清空数据来排查人物显示问题。
+- 升级保留数据库并执行迁移。安装新版本前，建议导出一份可用备份；不要通过清空数据来排查人物显示问题。

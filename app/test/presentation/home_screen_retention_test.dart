@@ -58,6 +58,23 @@ void main() {
     );
   });
 
+  testWidgets('partner list does not estimate an unknown timezone', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+
+    await tester.tap(find.text('关心的人').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await _pumpUntilFound(tester, find.text('小乐'));
+
+    expect(find.textContaining('时间待确认'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets('care graph hands selected partner to XiaoNian composer', (
     tester,
   ) async {

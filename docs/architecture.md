@@ -1,556 +1,132 @@
-# Ta的世界（TaWorld）— 技术架构方案
+# TaWorld 当前技术架构
 
-> **版本:** v1.0 | **日期:** 2026-05-09 | **状态:** 待确认
+> 状态：现行文档，对应 v0.2.0（0.2.0+4）与 SQLite schema v7。
 
----
+## 1. 产品形态与边界
 
-## 一、项目定位
+TaWorld 是本地优先的 Flutter Android 关怀助手。它记录人物、地点、提醒、对话和记忆，在用户自己的手机上提示关心时机；实际联系由用户亲自完成。
 
-一款以「关怀」为核心的情感连接APP。用户通过建立一对一关系，在天气变化、作息时间等场景下，**由APP提醒用户A去主动关心用户B**，保留人与人之间的温度。
+当前没有云账户、云同步、双人实时关系链或业务服务器。`server/` 是废弃参考实现，不参与构建、运行或当前数据流。
 
-### 核心设计原则
+核心业务闭环：
 
-| 原则 | 说明 |
-|------|------|
-| 🫶 人是桥梁 | APP不直接提醒B，而是提醒A去关心B |
-| 🔒 隐私优先 | 不暴露对方位置，仅用于天气查询 |
-| 🎯 简洁温暖 | 交互极简，体验温暖 |
-| 📈 可扩展 | 模块化设计，支持自定义提醒和AI扩展 |
-
----
-
-## 二、技术栈选型
-
-### 2.1 前端（移动端）
-
-| 层面 | 选型 | 理由 |
-|------|------|------|
-| **框架** | Flutter 3.x + Dart | 单代码库跨平台（先Android后iOS）；UI表现力强；AI代码生成友好 |
-| **状态管理** | Riverpod | 类型安全、可测试、Flutter官方推荐的下一代方案 |
-| **路由** | GoRouter | 声明式路由，深度链接支持 |
-| **网络请求** | Dio | 拦截器、缓存、重试机制完善 |
-| **本地存储** | Hive + SharedPreferences | Hive用于结构化数据缓存，SP用于轻量配置 |
-| **推送** | Firebase Cloud Messaging (FCM) | Android推送标准方案 |
-| **定位** | Geolocator | 跨平台GPS定位 |
-| **UI组件** | Material 3 + 自定义主题 | Material Design 3 温暖风格定制 |
-
-### 2.2 后端
-
-| 层面 | 选型 | 理由 |
-|------|------|------|
-| **语言/框架** | Python 3.12 + FastAPI | 异步高性能；AI生态原生支持；开发效率高 |
-| **ORM** | SQLAlchemy 2.0 + Alembic | 成熟稳定，Alembic管理数据库迁移 |
-| **任务调度** | APScheduler + Celery | APScheduler处理定时提醒；Celery处理异步重任务 |
-| **认证** | JWT (access + refresh token) | 无状态认证，移动端友好 |
-| **API文档** | FastAPI内置Swagger/ReDoc | 自动生成，开发调试方便 |
-
-### 2.3 数据与基础设施
-
-| 层面 | 选型 | 理由 |
-|------|------|------|
-| **主数据库** | PostgreSQL 16 | 关系型数据，JSONB支持灵活配置存储 |
-| **缓存/队列** | Redis 7 | 缓存天气数据、会话管理、Celery消息队列 |
-| **对象存储** | MinIO（自部署）/ 阿里云OSS | 头像等文件存储 |
-| **天气API** | 和风天气 (QWeather) | 中国区域覆盖好，免费额度够用 |
-| **AI服务** | OpenAI API / 通义千问 | 智能建议、行为分析、对话交互 |
-| **部署** | Docker + Docker Compose | 单机部署，一键启动全部服务 |
-| **监控** | Prometheus + Grafana（后期） | 后期加入，初期可用日志 |
-
----
-
-## 三、系统架构
-
-### 3.1 整体架构图
-
-```mermaid
-graph TB
-    subgraph Client["📱 Flutter APP (Android)"]
-        UI[UI Layer]
-        BL[Business Logic - Riverpod]
-        DL[Data Layer - Dio/Hive]
-    end
-
-    subgraph Backend["🖥️ Backend Services"]
-        API[FastAPI Gateway]
-        AUTH[Auth Module]
-        REMIND[Reminder Engine]
-        WEATHER[Weather Service]
-        AI_MOD[AI Agent Module]
-        SCHED[Task Scheduler]
-    end
-
-    subgraph Data["💾 Data Layer"]
-        PG[(PostgreSQL)]
-        RD[(Redis)]
-        MINIO[(MinIO/OSS)]
-    end
-
-    subgraph External["🌐 External Services"]
-        FCM[Firebase Cloud Messaging]
-        WEATHER_API[和风天气 API]
-        LLM[LLM API]
-    end
-
-    UI --> BL --> DL
-    DL -->|HTTPS/REST| API
-    API --> AUTH
-    API --> REMIND
-    API --> WEATHER
-    API --> AI_MOD
-    SCHED -->|定时触发| REMIND
-    REMIND --> FCM
-    WEATHER --> WEATHER_API
-    AI_MOD --> LLM
-    API --> PG
-    API --> RD
-    API --> MINIO
+```text
+人物与事实 → 地点/天气/时区/记忆 → 本机提醒或建议
+  → 用户亲自关心 → 用户明确确认 → 统计、成就与后续上下文
 ```
 
-### 3.2 架构模式
+## 2. 总体结构
 
-采用 **模块化单体（Modular Monolith）** 架构：
-
-- 初期所有模块在一个FastAPI应用内，通过清晰的模块边界分离
-- 每个模块有独立的 routes / services / models
-- 未来可按需拆分为微服务
-
----
-
-## 四、项目目录结构
-
-```
-TaWorld/
-├── app/                          # Flutter 移动端
-│   ├── lib/
-│   │   ├── main.dart
-│   │   ├── app/                  # App入口、路由、主题配置
-│   │   │   ├── router.dart
-│   │   │   ├── theme.dart
-│   │   │   └── app.dart
-│   │   ├── core/                 # 核心工具层
-│   │   │   ├── constants/
-│   │   │   ├── utils/
-│   │   │   ├── network/          # Dio配置、拦截器
-│   │   │   └── extensions/
-│   │   ├── data/                 # 数据层
-│   │   │   ├── models/           # 数据模型 (JSON序列化)
-│   │   │   ├── repositories/     # 数据仓库实现
-│   │   │   └── datasources/      # API / 本地数据源
-│   │   ├── domain/               # 业务逻辑层
-│   │   │   ├── entities/
-│   │   │   ├── repositories/     # 仓库接口
-│   │   │   └── usecases/
-│   │   ├── presentation/         # UI层
-│   │   │   ├── screens/          # 页面
-│   │   │   ├── widgets/          # 公共组件
-│   │   │   └── providers/        # Riverpod Providers
-│   │   └── services/             # 平台服务
-│   │       ├── location_service.dart
-│   │       ├── notification_service.dart
-│   │       └── ai_service.dart
-│   ├── android/
-│   ├── ios/
-│   ├── test/
-│   └── pubspec.yaml
-│
-├── server/                       # Python 后端
-│   ├── app/
-│   │   ├── main.py               # FastAPI入口
-│   │   ├── core/                 # 核心配置
-│   │   │   ├── config.py         # 环境变量/配置
-│   │   │   ├── security.py       # JWT/密码加密
-│   │   │   ├── database.py       # DB连接
-│   │   │   └── dependencies.py   # FastAPI依赖注入
-│   │   ├── modules/              # 业务模块（模块化单体）
-│   │   │   ├── auth/             # 认证模块
-│   │   │   │   ├── router.py
-│   │   │   │   ├── service.py
-│   │   │   │   ├── schemas.py
-│   │   │   │   └── models.py
-│   │   │   ├── users/            # 用户模块
-│   │   │   ├── relationships/    # 关系模块
-│   │   │   ├── reminders/        # 提醒模块
-│   │   │   ├── achievements/     # 成就模块
-│   │   │   ├── weather/          # 天气模块
-│   │   │   └── ai/               # AI Agent模块
-│   │   ├── tasks/                # 定时任务
-│   │   │   ├── scheduler.py
-│   │   │   ├── weather_check.py
-│   │   │   └── reminder_trigger.py
-│   │   └── common/               # 公共工具
-│   │       ├── exceptions.py
-│   │       ├── pagination.py
-│   │       └── response.py
-│   ├── alembic/                  # 数据库迁移
-│   ├── tests/
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── .env.example
-│
-├── docker-compose.yml            # 一键部署
-├── docs/                         # 项目文档
-│   ├── api.md
-│   ├── database.md
-│   └── deployment.md
-├── .gitignore
-└── README.md
+```text
+Flutter UI（StatefulWidget + setState + GoRouter）
+  ├─ 小念、人物列表/图谱、提醒、成就、设置
+  ├─ AI 工作流与工具操作日志
+  ├─ 提醒计算、差量调度、后台评估
+  └─ 备份校验、附件映射、导入回滚
+        │
+        ├─ SQLite / SharedPreferences / 本地图片
+        ├─ flutter_secure_storage（仅 API Key）
+        ├─ DeepSeek（设备直连，deepseek-flash）
+        ├─ Open-Meteo（设备直连）
+        └─ taworld_notifications 原生插件
+              AlarmManager → 通知栏 → 动作/系统事件 → 本地账本
 ```
 
----
+主要目录：
 
-## 五、数据库设计
+- `app/lib/app/`：应用入口、路由、主题、字体、设计令牌。
+- `app/lib/data/`：模型、城市坐标和 SQLite 初始化/迁移。
+- `app/lib/services/`：AI、记忆、天气、提醒、通知、备份和本地业务服务。
+- `app/lib/presentation/`：页面与通用组件。
+- `app/packages/taworld_notifications/`：Android 原生发布、动作和重启恢复。
+- `app/test/`：数据库、服务、协议和 widget 回归测试。
 
-### 5.1 ER关系图
+## 3. 模型与 AI 工作流
 
-```mermaid
-erDiagram
-    users ||--o{ relationships : "参与"
-    users ||--o{ user_locations : "拥有"
-    users ||--o{ user_achievements : "解锁"
-    users ||--o{ devices : "注册"
-    relationships ||--o{ reminder_configs : "配置"
-    reminder_configs ||--o{ reminder_logs : "产生"
-    achievements ||--o{ user_achievements : "被解锁"
+唯一生产模型目录是 `app/lib/services/ai_model_catalog.dart`：
 
-    users {
-        uuid id PK
-        string phone UK
-        string nickname
-        string avatar_url
-        string password_hash
-        timestamp created_at
-        timestamp updated_at
-    }
+| 入口 | 模型 | 用途 |
+| --- | --- | --- |
+| `AiModelCatalog.primary` | `deepseek-flash` | 对话、工具调用、主动关心、图片理解、建议、摘要与记忆处理 |
 
-    relationships {
-        uuid id PK
-        uuid user_a_id FK
-        uuid user_b_id FK
-        enum type "couple|family|friend"
-        enum status "pending|active|dissolved"
-        string invite_code UK
-        string nickname_a_for_b
-        string nickname_b_for_a
-        timestamp created_at
-    }
+不再配置独立视觉模型或 Pro 模型。`callPrimaryModel()` 处理后台文本任务，图片请求也使用同一 `primary`。
 
-    reminder_configs {
-        uuid id PK
-        uuid relationship_id FK
-        enum category "weather|sleep|meal|custom"
-        boolean enabled
-        jsonb config "灵活配置项"
-        uuid created_by FK
-        timestamp created_at
-        timestamp updated_at
-    }
+主工具对话具备：
 
-    reminder_logs {
-        uuid id PK
-        uuid config_id FK
-        uuid sender_id FK
-        uuid receiver_id FK
-        string message
-        enum status "triggered|sent|confirmed"
-        timestamp triggered_at
-        timestamp sent_at
-        timestamp confirmed_at
-    }
+- 当前人物/提醒 ID 和结构化时钟；
+- 最多 6 轮工具调用后生成最终回答；
+- 写操作回读验证、部分成功状态和操作里程碑；
+- 相同请求的变更去重、取消、超时和安全重试；
+- 重名消歧、单次/每日/指定星期提醒和可靠时区约束。
 
-    user_locations {
-        uuid user_id PK_FK
-        float latitude
-        float longitude
-        string city
-        string district
-        timestamp updated_at
-    }
+AI 不是本地功能的必要条件。无 API Key 时，人物、提醒、图谱、历史、备份和本地建议仍可用。
 
-    achievements {
-        uuid id PK
-        string name
-        string description
-        string icon
-        string category
-        jsonb unlock_condition
-        int points
-    }
+## 4. AI 记忆
 
-    user_achievements {
-        uuid id PK
-        uuid user_id FK
-        uuid achievement_id FK
-        int progress
-        boolean unlocked
-        timestamp unlocked_at
-    }
+- **Wiki**：长期事实，当前最多注入 30 条，按重要性和强度排序。
+- **RAG**：本地字符片段检索，默认回溯 90 天、扫描最近 500 条，当前对话最多注入 4 条。
+- **摘要**：压缩长对话；清理历史时同步重置 cutoff 与轮次状态。
+- **Dreaming**：后台衰减、归档、去重、合并和摘要，不能阻塞前台。
+- **图片**：用户主动选择后保存受管副本，使用同一多模态模型提取可确认事实。
 
-    devices {
-        uuid id PK
-        uuid user_id FK
-        string fcm_token
-        string device_info
-        timestamp created_at
-    }
-```
+模型记忆是辅助数据，不是绝对事实。当前用户更正优先于旧摘要和模型提取结果。
 
-### 5.2 关键字段说明
+## 5. 提醒与通知可靠性
 
-**reminder_configs.config (JSONB)** — 用灵活的JSON存储不同类型提醒的配置：
+提醒类别为睡觉、吃饭、天气、自定义，可针对人物或用户自己。天气分为每日简报和突变监测，自定义支持单次、相对分钟、每日及指定星期。
 
-```json
-// 天气提醒配置示例
-{
-  "notify_conditions": ["rain", "snow", "extreme_cold", "extreme_heat"],
-  "custom_messages": {
-    "rain": "外面要下雨了，提醒Ta带伞 🌂",
-    "snow": "要下雪啦，提醒Ta注意保暖 ❄️"
-  },
-  "check_interval_minutes": 60
-}
+时间可以跟随设备或人物的可靠 IANA 时区。按人物时间执行时，不得静默回退到设备时区；界面中的时间显示与调度共用相同语义。
 
-// 睡觉提醒配置示例
-{
-  "user_a_sleep_time": "23:00",
-  "user_b_sleep_time": "22:30",
-  "advance_minutes": 30
-}
+关键数据职责：
 
-// 吃饭提醒配置示例
-{
-  "meals": [
-    {"name": "午餐", "user_a_time": "12:00", "user_b_time": "12:30", "advance_minutes": 15},
-    {"name": "晚餐", "user_a_time": "18:30", "user_b_time": "19:00", "advance_minutes": 15}
-  ]
-}
-```
+- `reminder_configs`：长期提醒规则。
+- `reminder_occurrences`：某一次具体提醒实例。
+- `notification_events`：系统提交、通知栏观测、权限失败和用户动作证据。
+- `reminder_logs`：面向历史、统计和成就的确认记录。
+- `scheduled_notifications`：稳定通知 ID 与排程指纹。
 
----
+状态不得混淆：已安排、已提交系统、通知栏检测到、用户确认、需要处理、无法确认分别代表不同证据。通知栏出现不等于用户已读；用户确认也不代表应用掌握真实联系记录。
 
-## 六、核心业务流程
+固定提醒由 Android AlarmManager 发布，不依赖 Flutter 进程或模型后台运行。无精确定时权限时允许非精确降级并明确提示。
 
-### 6.1 天气提醒流程（核心功能）
+## 6. SQLite 与本地文件
 
-```mermaid
-sequenceDiagram
-    participant SCH as ⏰ 定时调度器
-    participant WS as 🌦️ 天气服务
-    participant API as 🔌 和风天气API
-    participant RD as 💾 Redis缓存
-    participant RE as 🔔 提醒引擎
-    participant FCM as 📲 FCM推送
-    participant A as 👤 用户A
-    participant B as 👤 用户B
+当前 schema 为 **v7，共 20 张应用表**：
 
-    SCH->>WS: 每小时触发天气检查
-    WS->>RD: 查询缓存
-    alt 缓存命中且未过期
-        RD-->>WS: 返回缓存天气数据
-    else 缓存未命中
-        WS->>API: 根据B的位置查询天气
-        API-->>WS: 返回天气数据
-        WS->>RD: 写入缓存(TTL=30min)
-    end
-    WS->>WS: 判断是否满足提醒条件
-    alt 满足条件（如：将下雨）
-        WS->>RE: 触发提醒
-        RE->>RE: 生成提醒消息（可调用AI润色）
-        RE->>FCM: 推送通知给A
-        FCM->>A: "Ta那边要下雨了，提醒Ta带伞吧 🌂"
-        A->>A: 通过微信/电话提醒B
-        A->>RE: [可选] 点击"已提醒"按钮
-        RE->>FCM: 推送通知给B
-        FCM->>B: "A提醒你带伞啦 🌂"
-        B->>RE: 点击"已收到" ✅
-        RE->>RE: 记录日志，更新成就进度
-    end
-```
+- 用户人物：`users`、`partners`。
+- 提醒证据：`reminder_configs`、`reminder_logs`、`reminder_occurrences`、`notification_events`、`scheduled_notifications`。
+- 对话记忆：`chat_history`、`chat_attachments`、`ai_pending_messages`、`ai_wiki_facts`、`ai_conversation_summaries`、`conversation_chunks`。
+- 成就：`achievements`、`user_achievements`。
+- 运行维护：`schema_migrations`、`tool_operations`、`runtime_locks`、`background_runs`、`graph_positions`。
 
-### 6.2 定时提醒流程（睡觉/吃饭）
+迁移必须保留数据、支持重复执行，并覆盖旧版本升级和备份导入。损坏的单条提醒配置需要隔离，不能拖垮人物列表。
 
-```mermaid
-sequenceDiagram
-    participant SCH as ⏰ 定时调度器
-    participant RE as 🔔 提醒引擎
-    participant AI as 🤖 AI模块
-    participant FCM as 📲 FCM推送
-    participant A as 👤 用户A
-    participant B as 👤 用户B
+人物“移出”是可恢复软删除；聊天“清空屏幕”只隐藏展示；清除记忆、清除对话和重置全部数据具有不同范围。
 
-    SCH->>RE: 到达提前提醒时间
-    RE->>AI: 请求生成关怀语
-    AI-->>RE: "夜深了，提醒Ta早点休息吧 🌙"
-    RE->>FCM: 推送给A
-    FCM->>A: 收到提醒通知
-    A->>RE: 点击"提醒Ta"
-    RE->>FCM: 推送给B
-    FCM->>B: "A提醒你该睡觉啦 💤"
-    B->>RE: 点击"已收到，晚安 🌙"
-    RE->>RE: 更新成就进度
-```
+## 7. 后台任务
 
----
+WorkManager 任务均为系统尽力调度：
 
-## 七、API设计概览
+| 任务 | 频率意图 | 说明 |
+| --- | --- | --- |
+| 天气突变检查 | 约 30 分钟 | 需要网络，受 Doze/厂商策略影响 |
+| 通知续期 | 约 12 小时 | 补充未来提醒窗口 |
+| AI 主动关心 | 约 2 小时 | 受开关、静默、冷却、每日上限和候选证据约束 |
+| AI Dreaming | 约 24 小时 | 记忆衰减、合并和摘要 |
 
-### 基础路径: `/api/v1`
+主动关心遵守 22:00–08:00 静默、3 小时冷却和每日最多 2 条，不制造内疚或虚构关系状态。
 
-| 模块 | 方法 | 路径 | 说明 |
-|------|------|------|------|
-| **认证** | POST | `/auth/register` | 手机号注册 |
-| | POST | `/auth/login` | 登录获取Token |
-| | POST | `/auth/refresh` | 刷新Token |
-| **用户** | GET | `/users/me` | 获取当前用户信息 |
-| | PUT | `/users/me` | 更新用户信息 |
-| | PUT | `/users/me/location` | 上报位置 |
-| **关系** | POST | `/relationships/invite` | 生成邀请码 |
-| | POST | `/relationships/join` | 通过邀请码加入 |
-| | GET | `/relationships` | 获取我的所有关系 |
-| | GET | `/relationships/{id}` | 获取关系详情 |
-| | PUT | `/relationships/{id}` | 更新关系（昵称等） |
-| | DELETE | `/relationships/{id}` | 解除关系 |
-| **提醒** | GET | `/relationships/{id}/reminders` | 获取关系的提醒配置 |
-| | POST | `/relationships/{id}/reminders` | 创建提醒配置 |
-| | PUT | `/reminders/{id}` | 更新提醒配置 |
-| | DELETE | `/reminders/{id}` | 删除提醒配置 |
-| | POST | `/reminders/{id}/send` | 一键提醒（A→B） |
-| | POST | `/reminders/{id}/confirm` | 确认收到（B确认） |
-| **日志** | GET | `/reminders/{id}/logs` | 提醒历史记录 |
-| **成就** | GET | `/achievements` | 所有成就列表 |
-| | GET | `/users/me/achievements` | 我的成就 |
-| **AI** | POST | `/ai/suggest` | AI生成关怀建议 |
-| | POST | `/ai/chat` | AI对话交互 |
-| **天气** | GET | `/weather/current` | 查询天气（内部调试用） |
+## 8. 安全、隐私与备份
 
----
+- 业务数据保存在 SQLite 和本地私有目录。
+- API Key 由 `flutter_secure_storage` 保存，不进入备份。
+- AI 请求会发送必要对话、人物、记忆或用户选择的图片。
+- 天气请求会发送必要城市或坐标，不进行持续后台定位。
+- 备份包含数据库、白名单偏好、人物头像与聊天图片；导入执行结构、路径、大小和附件校验，并可回滚。
+- 恢复后重新核对通知，不照搬旧设备发布证据。
 
-## 八、AI Agent 设计
+## 9. UI 与发布
 
-### 8.1 三层AI能力
+UI 使用 `StatefulWidget + setState`，不引入 Bloc/Riverpod。五套主题具有浅色和深色变体；primary、secondary、tertiary 的浅色前景对比度要求至少 4.5:1。列表动画延迟有上限，修改过的加载、思考、庆祝和按钮动画支持减少动态效果。
 
-```mermaid
-graph LR
-    subgraph L1["层1: 智能建议"]
-        S1[关怀语生成]
-        S2[天气穿搭建议]
-        S3[个性化消息模板]
-    end
-    subgraph L2["层2: 行为分析"]
-        S4[用户习惯学习]
-        S5[最佳提醒时间推荐]
-        S6[提醒频率优化]
-    end
-    subgraph L3["层3: 对话交互"]
-        S7[自然语言配置提醒]
-        S8[AI关怀助手对话]
-        S9[智能问答]
-    end
-    L1 --> L2 --> L3
-```
-
-| 层级 | 功能 | 实现方式 | 优先级 |
-|------|------|---------|--------|
-| **层1** | 智能建议 | LLM API + Prompt模板 | 🔴 P0 首期 |
-| **层2** | 行为分析 | 日志统计 + LLM分析 | 🟡 P1 二期 |
-| **层3** | 对话交互 | LangChain Agent + 工具调用 | 🟢 P2 三期 |
-
----
-
-## 九、成就系统设计
-
-### 预设成就示例
-
-| 成就名称 | 解锁条件 | 积分 |
-|----------|---------|------|
-| 🌂 初次守护 | 首次成功完成天气提醒闭环 | 10 |
-| 🔥 连续守护7天 | 连续7天完成至少1次提醒 | 50 |
-| 🌙 晚安大使 | 累计完成30次睡觉提醒 | 100 |
-| 🍚 干饭督导 | 累计完成30次吃饭提醒 | 100 |
-| 💯 百日陪伴 | 关系建立满100天且活跃 | 200 |
-| 🎨 创意达人 | 创建5个自定义提醒 | 50 |
-| ❤️ 双向奔赴 | A和B互相完成提醒各10次 | 150 |
-
----
-
-## 十、部署方案
-
-### 10.1 初期部署（Docker Compose 单机）
-
-```yaml
-# docker-compose.yml 核心结构
-services:
-  api:          # FastAPI 后端
-  postgres:     # PostgreSQL 数据库
-  redis:        # Redis 缓存/队列
-  celery:       # Celery Worker
-  scheduler:    # APScheduler 定时任务
-  minio:        # 对象存储（可选）
-```
-
-### 10.2 部署要求
-
-| 资源 | 最低配置 | 推荐配置 |
-|------|---------|---------|
-| CPU | 2核 | 4核 |
-| 内存 | 4GB | 8GB |
-| 存储 | 40GB SSD | 100GB SSD |
-| 带宽 | 5Mbps | 10Mbps |
-
----
-
-## 十一、开发阶段规划
-
-### Phase 1 — MVP（4-6周）
-- [x] 项目架构搭建
-- [ ] 用户注册/登录
-- [ ] 关系建立（邀请码机制）
-- [ ] 天气提醒（核心功能）
-- [ ] 一键提醒 + 确认机制
-- [ ] FCM推送集成
-- [ ] 基础UI
-
-### Phase 2 — 完善（3-4周）
-- [ ] 睡觉/吃饭提醒
-- [ ] 成就系统
-- [ ] AI智能建议（层1）
-- [ ] 提醒历史/统计
-- [ ] UI打磨
-
-### Phase 3 — 增强（3-4周）
-- [ ] 自定义提醒
-- [ ] AI行为分析（层2）
-- [ ] AI对话交互（层3）
-- [ ] 用户反馈机制
-- [ ] 性能优化
-
-### Phase 4 — 扩展（待定）
-- [ ] iOS版本
-- [ ] 商业化模块
-- [ ] 应用商店上架
-- [ ] 更多社交功能
-
----
-
-## 十二、给AI开发者的指引
-
-> 本项目将由多个AI模型协作开发。以下是确保代码一致性的关键约定：
-
-### 代码规范
-- **Python**: 遵循PEP 8，使用type hints，所有函数写docstring
-- **Dart/Flutter**: 遵循Effective Dart，使用lint规则
-- **命名**: snake_case (Python), camelCase (Dart), UPPER_SNAKE (常量)
-- **注释**: 中文注释，英文代码
-
-### Git规范
-- **分支**: `main` / `develop` / `feature/xxx` / `bugfix/xxx`
-- **Commit**: `feat:` / `fix:` / `docs:` / `refactor:` / `chore:`
-
-### API规范
-- RESTful风格
-- 统一响应格式: `{"code": 0, "message": "success", "data": {}}`
-- 错误码体系: 1xxx认证, 2xxx用户, 3xxx关系, 4xxx提醒, 5xxx系统
-
----
-
-> [!IMPORTANT]
-> 此文档为架构方案初版，请确认后再进入开发阶段。如有任何调整需求请随时提出。
+Release 明确沿用现有调试签名，覆盖升级必须保持同证书并递增 versionCode。详细验证见 `testing.md`，发布说明见 `releases/v0.2.0.md`。

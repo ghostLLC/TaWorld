@@ -171,7 +171,14 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
         timezoneMode = result.timezoneMode;
         clearTimezoneId = true;
       case 'custom':
-        newConfig = await _showCustomEditDialog(config.config);
+        final result = await _showCustomEditDialog(
+          config.config,
+          initialTimezoneMode: config.timezoneMode,
+        );
+        if (result == null) return;
+        newConfig = result.config;
+        timezoneMode = result.timezoneMode;
+        clearTimezoneId = true;
     }
 
     if (newConfig == null || !mounted) return;
@@ -687,11 +694,16 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
   }
 
   /// 自定义提醒编辑
-  Future<Map<String, dynamic>?> _showCustomEditDialog(
-    Map<String, dynamic> current,
-  ) => showDialog<Map<String, dynamic>>(
+  Future<CustomReminderEditResult?> _showCustomEditDialog(
+    Map<String, dynamic> current, {
+    String initialTimezoneMode = 'user',
+  }) => showDialog<CustomReminderEditResult>(
     context: context,
-    builder: (_) => CustomReminderEditor(initial: current),
+    builder: (_) => CustomReminderEditor(
+      initial: current,
+      partner: _partner,
+      initialTimezoneMode: initialTimezoneMode,
+    ),
   );
 
   // ==================== 创建 ====================
@@ -759,9 +771,10 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
 
     // 自定义提醒需要用户配置具体内容
     if (category == 'custom') {
-      final customConfig = await _showCustomEditDialog(config);
-      if (customConfig == null) return;
-      config = customConfig;
+      final result = await _showCustomEditDialog(config);
+      if (result == null) return;
+      config = result.config;
+      timezoneMode = result.timezoneMode;
     }
 
     try {
@@ -794,13 +807,6 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
       appBar: AppBar(
         title: Text(_partner != null ? '${_partner!.nickname} - 提醒' : '提醒配置'),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_rounded),
-            tooltip: '新建提醒',
-            onPressed: _createConfig,
-          ),
-        ],
       ),
       body: _buildBody(),
       floatingActionButton: _configs.isNotEmpty
@@ -824,7 +830,7 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
       return TaEmptyState(
         imageAsset: 'assets/images/empty_reminder_config.png',
         title: '还没有提醒',
-        subtitle: '点击右上角 + 创建第一个提醒',
+        subtitle: '创建第一个提醒，在合适的时刻关心Ta',
         actionText: '新建提醒',
         onAction: _createConfig,
       );
@@ -837,9 +843,9 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
         itemCount: _configs.length,
         itemBuilder: (context, index) {
           final config = _configs[index];
-          final info = _categoryInfo(config.category);
+          final info = _categoryInfo(config.category, theme);
 
-          return Padding(
+          final card = Padding(
             padding: const EdgeInsets.only(bottom: TaSpacing.sm),
             child: Dismissible(
               key: ValueKey(config.id),
@@ -862,89 +868,92 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
               },
               child: TaCard(
                 padding: TaSpacing.cardInner,
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 类型图标
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: info.color.withValues(alpha: 0.15),
-                        borderRadius: TaRadius.borderSm,
-                      ),
-                      child: Center(
-                        child: Image.asset(
-                          info.iconAsset,
-                          width: 24,
-                          height: 24,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: TaSpacing.sm),
-                    // 内容
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            config.categoryLabel,
-                            style: theme.textTheme.titleMedium,
+                    Row(
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: info.color.withValues(alpha: 0.15),
+                            borderRadius: TaRadius.borderSm,
                           ),
-                          const SizedBox(height: TaSpacing.xxs),
-                          Text(
-                            _configSummary(config),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
+                          child: Center(
+                            child: Image.asset(
+                              info.iconAsset,
+                              width: 24,
+                              height: 24,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(width: TaSpacing.sm),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                config.categoryLabel,
+                                style: theme.textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: TaSpacing.xxs),
+                              Text(
+                                _configSummary(config),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Switch(
+                          value: config.enabled,
+                          activeTrackColor: theme.colorScheme.primary,
+                          onChanged: (_) => _toggleEnabled(index),
+                        ),
+                      ],
                     ),
-                    // 编辑按钮
-                    IconButton(
-                      icon: Icon(
-                        Icons.edit_rounded,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        size: 20,
-                      ),
-                      tooltip: '编辑',
-                      onPressed: () => _editConfig(index),
-                    ),
-                    // 开关
-                    Switch(
-                      value: config.enabled,
-                      activeTrackColor: theme.colorScheme.primary,
-                      onChanged: (_) => _toggleEnabled(index),
-                    ),
-                    // 历史按钮
-                    IconButton(
-                      icon: Icon(
-                        Icons.history_rounded,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                      tooltip: '提醒历史',
-                      onPressed: () => context.push(
-                        Routes.reminderHistory.replaceAll(':id', config.id),
-                      ),
+                    OverflowBar(
+                      alignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => _editConfig(index),
+                          icon: const Icon(Icons.edit_rounded, size: 20),
+                          label: const Text('编辑'),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => context.push(
+                            Routes.reminderHistory.replaceAll(':id', config.id),
+                          ),
+                          icon: const Icon(Icons.history_rounded, size: 20),
+                          label: const Text('历史'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
             ),
-          ).animate().fadeIn(delay: (index * 80).ms);
+          );
+          if (TaAnimation.reduceMotion(context)) return card;
+          return card.animate().fadeIn(
+            delay: TaAnimation.stagger(index, stepMilliseconds: 80),
+            duration: TaAnimation.normal,
+          );
         },
       ),
     );
   }
 
-  _CategoryInfo _categoryInfo(String category) {
+  _CategoryInfo _categoryInfo(String category, ThemeData theme) {
     return switch (category) {
       'weather' => _CategoryInfo(
         '🌦️',
         '天气提醒',
-        TaLightColors.tertiary,
+        theme.colorScheme.tertiary,
         'assets/images/icon_weather_category.png',
       ),
       'sleep' => const _CategoryInfo(
@@ -956,13 +965,13 @@ class _ReminderConfigScreenState extends State<ReminderConfigScreen> {
       'meal' => _CategoryInfo(
         '🍚',
         '吃饭提醒',
-        TaLightColors.secondary,
+        theme.colorScheme.secondary,
         'assets/images/icon_meal_category.png',
       ),
       _ => _CategoryInfo(
         '💝',
         '自定义提醒',
-        TaLightColors.primary,
+        theme.colorScheme.primary,
         'assets/images/icon_custom_category.png',
       ),
     };

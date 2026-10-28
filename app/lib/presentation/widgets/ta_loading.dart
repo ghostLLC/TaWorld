@@ -63,7 +63,17 @@ class _TaLoadingState extends State<TaLoading>
     _c = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
-    )..repeat();
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (TaAnimation.reduceMotion(context)) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
   }
 
   @override
@@ -94,53 +104,64 @@ class _TaLoadingState extends State<TaLoading>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final heartColor = theme.colorScheme.primary;
+    final reduceMotion = TaAnimation.reduceMotion(context);
 
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AnimatedBuilder(
-            animation: _c,
-            builder: (context, _) {
-              final t = _c.value;
-              final sc = _scale(t);
-              final gl = _glow(t);
+          if (reduceMotion)
+            SizedBox(
+              width: widget.size * 2.5,
+              height: widget.size * 2.5,
+              child: CustomPaint(
+                size: Size(widget.size, widget.size * 0.85),
+                painter: _HeartPainter(heartColor.withValues(alpha: 0.85)),
+              ),
+            )
+          else
+            AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) {
+                final t = _c.value;
+                final sc = _scale(t);
+                final gl = _glow(t);
 
-              return SizedBox(
-                width: widget.size * 2.5,
-                height: widget.size * 2.5,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // ── 光晕圆 ──
-                    Transform.scale(
-                      scale: 0.6 + sc * 0.4,
-                      child: Container(
-                        width: widget.size * 1.6,
-                        height: widget.size * 1.6,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: heartColor.withValues(alpha: gl),
+                return SizedBox(
+                  width: widget.size * 2.5,
+                  height: widget.size * 2.5,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // ── 光晕圆 ──
+                      Transform.scale(
+                        scale: 0.6 + sc * 0.4,
+                        child: Container(
+                          width: widget.size * 1.6,
+                          height: widget.size * 1.6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: heartColor.withValues(alpha: gl),
+                          ),
                         ),
                       ),
-                    ),
-                    // ── 粒子 ──
-                    ..._buildParticles(t, theme),
-                    // ── 心形 ──
-                    Transform.scale(
-                      scale: sc,
-                      child: CustomPaint(
-                        size: Size(widget.size, widget.size * 0.85),
-                        painter: _HeartPainter(
-                          heartColor.withValues(alpha: 0.85),
+                      // ── 粒子 ──
+                      ..._buildParticles(t, theme),
+                      // ── 心形 ──
+                      Transform.scale(
+                        scale: sc,
+                        child: CustomPaint(
+                          size: Size(widget.size, widget.size * 0.85),
+                          painter: _HeartPainter(
+                            heartColor.withValues(alpha: 0.85),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+                    ],
+                  ),
+                );
+              },
+            ),
           if (widget.message != null) ...[
             const SizedBox(height: TaSpacing.md),
             Text(
@@ -159,12 +180,12 @@ class _TaLoadingState extends State<TaLoading>
   List<Widget> _buildParticles(double t, ThemeData theme) {
     const n = 6;
     final colors = [
-      TaLightColors.primary,
-      TaLightColors.secondary,
-      TaLightColors.primary,
-      TaLightColors.secondary,
-      TaLightColors.primary,
-      TaLightColors.secondary,
+      theme.colorScheme.primary,
+      theme.colorScheme.secondary,
+      theme.colorScheme.primary,
+      theme.colorScheme.secondary,
+      theme.colorScheme.primary,
+      theme.colorScheme.secondary,
     ];
 
     return List.generate(n, (i) {
@@ -228,7 +249,17 @@ class _TaThinkingDotsState extends State<TaThinkingDots>
     _c = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
-    )..repeat();
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (TaAnimation.reduceMotion(context)) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
   }
 
   @override
@@ -239,7 +270,8 @@ class _TaThinkingDotsState extends State<TaThinkingDots>
 
   @override
   Widget build(BuildContext context) {
-    final dotColor = TaLightColors.primary;
+    final theme = Theme.of(context);
+    final dotColor = theme.colorScheme.primary;
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
 
@@ -275,11 +307,13 @@ class _TaThinkingDotsState extends State<TaThinkingDots>
 
             double dy;
             if (localT < 0.52) {
-              dy = -4 *
-                  Curves.easeOut
-                      .transform(localT < 0.26
-                          ? localT / 0.26
-                          : 1.0 - (localT - 0.26) / 0.26);
+              dy =
+                  -4 *
+                  Curves.easeOut.transform(
+                    localT < 0.26
+                        ? localT / 0.26
+                        : 1.0 - (localT - 0.26) / 0.26,
+                  );
             } else {
               dy = 0;
             }
@@ -325,10 +359,10 @@ class TaCelebrateAnimation extends StatefulWidget {
 class _TaCelebrateAnimState extends State<TaCelebrateAnimation>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c;
+  bool _started = false;
 
   /// 预计算的粒子角度和距离
-  static final _angles =
-      List.generate(10, (i) => (i / 10) * 2 * math.pi + 0.3);
+  static final _angles = List.generate(10, (i) => (i / 10) * 2 * math.pi + 0.3);
 
   @override
   void initState() {
@@ -337,7 +371,19 @@ class _TaCelebrateAnimState extends State<TaCelebrateAnimation>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-    _c.forward();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (TaAnimation.reduceMotion(context)) {
+      _c.stop();
+      return;
+    }
+    if (!_started) {
+      _started = true;
+      _c.forward();
+    }
   }
 
   @override
@@ -348,17 +394,19 @@ class _TaCelebrateAnimState extends State<TaCelebrateAnimation>
 
   @override
   Widget build(BuildContext context) {
+    if (TaAnimation.reduceMotion(context)) return const SizedBox.shrink();
+    final theme = Theme.of(context);
     final colors = [
-      TaLightColors.secondary,
-      TaLightColors.primary,
-      TaLightColors.secondary,
-      TaLightColors.primary,
-      TaLightColors.warning,
-      TaLightColors.secondary,
-      TaLightColors.primary,
-      TaLightColors.secondary,
-      TaLightColors.primary,
-      TaLightColors.warning,
+      theme.colorScheme.secondary,
+      theme.colorScheme.primary,
+      theme.colorScheme.secondary,
+      theme.colorScheme.primary,
+      taColorsFor(theme.brightness).warning,
+      theme.colorScheme.secondary,
+      theme.colorScheme.primary,
+      theme.colorScheme.secondary,
+      theme.colorScheme.primary,
+      taColorsFor(theme.brightness).warning,
     ];
 
     return AnimatedBuilder(
@@ -378,8 +426,9 @@ class _TaCelebrateAnimState extends State<TaCelebrateAnimation>
                 height: widget.size * 0.6 * (1 - t),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: TaLightColors.secondary
-                      .withValues(alpha: (1 - t) * 0.5),
+                  color: theme.colorScheme.secondary.withValues(
+                    alpha: (1 - t) * 0.5,
+                  ),
                 ),
               ),
               // ── 粒子爆发 ──
@@ -425,8 +474,7 @@ class TaEmptyState extends StatelessWidget {
     this.subtitle,
     this.actionText,
     this.onAction,
-  }) : assert(icon != null || imageAsset != null,
-            'icon 和 imageAsset 至少提供一个');
+  }) : assert(icon != null || imageAsset != null, 'icon 和 imageAsset 至少提供一个');
 
   final IconData? icon;
   final String? imageAsset;
@@ -456,15 +504,12 @@ class TaEmptyState extends StatelessWidget {
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color:
-                      theme.colorScheme.primaryContainer.withValues(alpha: 0.5),
+                  color: theme.colorScheme.primaryContainer.withValues(
+                    alpha: 0.5,
+                  ),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  icon!,
-                  size: 40,
-                  color: theme.colorScheme.primary,
-                ),
+                child: Icon(icon!, size: 40, color: theme.colorScheme.primary),
               ),
             const SizedBox(height: TaSpacing.lg),
             Text(
@@ -484,10 +529,7 @@ class TaEmptyState extends StatelessWidget {
             ],
             if (actionText != null && onAction != null) ...[
               const SizedBox(height: TaSpacing.lg),
-              OutlinedButton(
-                onPressed: onAction,
-                child: Text(actionText!),
-              ),
+              OutlinedButton(onPressed: onAction, child: Text(actionText!)),
             ],
           ],
         ),
@@ -498,11 +540,7 @@ class TaEmptyState extends StatelessWidget {
 
 /// 错误状态
 class TaErrorState extends StatelessWidget {
-  const TaErrorState({
-    super.key,
-    required this.message,
-    this.onRetry,
-  });
+  const TaErrorState({super.key, required this.message, this.onRetry});
 
   final String message;
   final VoidCallback? onRetry;

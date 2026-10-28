@@ -1,6 +1,6 @@
 /// TaWorld AI 记忆提取器
 ///
-/// 对话结束后异步调用，使用 DeepSeek V4 Pro 从对话中提取
+/// 对话结束后异步调用，使用主多模态 Flash 模型从对话中提取
 /// 有价值的事实，写入 Wiki 层（ai_wiki_facts 表）。
 library;
 
@@ -68,7 +68,7 @@ $existingFacts
 用户: $userMessage
 AI: $assistantReply''';
 
-      final response = await AiService.callProModel(
+      final response = await AiService.callPrimaryModel(
         systemPrompt: systemPrompt,
         prompt: userPrompt,
         temperature: 0.2,
@@ -136,7 +136,7 @@ ${existingFacts.isEmpty ? '（暂无）' : existingFacts}
 --- 对话历史 ---
 $conversationBuffer''';
 
-      final response = await AiService.callProModel(
+      final response = await AiService.callPrimaryModel(
         systemPrompt: systemPrompt,
         prompt: userPrompt,
         temperature: 0.2,

@@ -45,9 +45,10 @@ class _TaButtonState extends State<TaButton>
       vsync: this,
       duration: const Duration(milliseconds: 100),
     );
-    _scaleAnim = Tween(begin: 1.0, end: 0.96).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _scaleAnim = Tween(
+      begin: 1.0,
+      end: 0.96,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override
@@ -56,7 +57,10 @@ class _TaButtonState extends State<TaButton>
     super.dispose();
   }
 
-  void _onTapDown(TapDownDetails _) => _controller.forward();
+  void _onTapDown(TapDownDetails _) {
+    if (!TaAnimation.reduceMotion(context)) _controller.forward();
+  }
+
   void _onTapUp(TapUpDetails _) => _controller.reverse();
   void _onTapCancel() => _controller.reverse();
 
@@ -76,7 +80,9 @@ class _TaButtonState extends State<TaButton>
           child: Container(
             height: TaSizes.buttonHeight,
             decoration: BoxDecoration(
-              gradient: widget.gradient ?? TaGradients.primary(Theme.of(context).brightness),
+              gradient:
+                  widget.gradient ??
+                  TaGradients.primary(Theme.of(context).brightness),
               borderRadius: TaRadius.borderMd,
               boxShadow: isActive ? TaShadows.sm : null,
             ),
@@ -136,7 +142,7 @@ class TaIconButton extends StatelessWidget {
     super.key,
     required this.icon,
     required this.onPressed,
-    this.size = 40,
+    this.size = 48,
     this.backgroundColor,
     this.iconColor,
     this.tooltip,

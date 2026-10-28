@@ -61,7 +61,9 @@ abstract final class AiMemoryDreamer {
       // 记录最后 dreaming 时间
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(
-          'last_dream_time', DateTime.now().millisecondsSinceEpoch);
+        'last_dream_time',
+        DateTime.now().millisecondsSinceEpoch,
+      );
 
       dev.log(
         'Dreaming 完成: 衰减=${result.decayed}, 归档=${result.archived}, '
@@ -89,23 +91,29 @@ abstract final class AiMemoryDreamer {
     final db = await DatabaseHelper.database;
 
     final factCount = await db.rawQuery(
-        'SELECT COUNT(*) as cnt FROM ai_wiki_facts WHERE strength > ?',
-        [_DecayConfig.archiveThreshold]);
+      'SELECT COUNT(*) as cnt FROM ai_wiki_facts WHERE strength > ?',
+      [_DecayConfig.archiveThreshold],
+    );
     final totalFacts = factCount.first['cnt'] as int? ?? 0;
 
-    final categoryStats = await db.rawQuery('''
+    final categoryStats = await db.rawQuery(
+      '''
       SELECT category, COUNT(*) as cnt, AVG(importance) as avg_importance
       FROM ai_wiki_facts
       WHERE strength > ?
       GROUP BY category
-    ''', [_DecayConfig.archiveThreshold]);
+    ''',
+      [_DecayConfig.archiveThreshold],
+    );
 
     final summaryCount = await db.rawQuery(
-        'SELECT COUNT(*) as cnt FROM ai_conversation_summaries');
+      'SELECT COUNT(*) as cnt FROM ai_conversation_summaries',
+    );
     final totalSummaries = summaryCount.first['cnt'] as int? ?? 0;
 
-    final chunkCount = await db
-        .rawQuery('SELECT COUNT(*) as cnt FROM conversation_chunks');
+    final chunkCount = await db.rawQuery(
+      'SELECT COUNT(*) as cnt FROM conversation_chunks',
+    );
     final totalChunks = chunkCount.first['cnt'] as int? ?? 0;
 
     return MemoryStats(
@@ -117,9 +125,9 @@ abstract final class AiMemoryDreamer {
       averageImportance: categoryStats.isEmpty
           ? 0
           : categoryStats
-                  .map((r) => (r['avg_importance'] as num?)?.toDouble() ?? 0)
-                  .reduce((a, b) => a + b) /
-              categoryStats.length,
+                    .map((r) => (r['avg_importance'] as num?)?.toDouble() ?? 0)
+                    .reduce((a, b) => a + b) /
+                categoryStats.length,
       totalSummaries: totalSummaries,
       totalChunks: totalChunks,
     );
@@ -160,8 +168,9 @@ abstract final class AiMemoryDreamer {
       final accessBoost = math.min(1.0, math.log(1 + accessCount) / 5);
       final effectiveHalfLife = halfLife * (1 + accessBoost);
 
-      final newStrength =
-          math.exp(-0.693 * daysSinceAccess / effectiveHalfLife);
+      final newStrength = math.exp(
+        -0.693 * daysSinceAccess / effectiveHalfLife,
+      );
       final clampedStrength = math.max(0.0, math.min(1.0, newStrength));
 
       if ((currentStrength - clampedStrength).abs() > 0.01) {
@@ -245,13 +254,14 @@ abstract final class AiMemoryDreamer {
       final categoryFacts = entry.value;
       if (categoryFacts.length < 3) continue; // 太少，跳过
 
-      final factList =
-          categoryFacts.map((f) => '[${f.id}] ${f.content}').join('\n');
+      final factList = categoryFacts
+          .map((f) => '[${f.id}] ${f.content}')
+          .join('\n');
 
       // 可变数据（类别 + 事实列表）作为 user message
       final userPrompt = '类别: $category\n记忆列表:\n$factList';
 
-      final response = await AiService.callProModel(
+      final response = await AiService.callPrimaryModel(
         systemPrompt: consolidationSystemPrompt,
         prompt: userPrompt,
         temperature: 0.1,
@@ -314,10 +324,7 @@ abstract final class AiMemoryDreamer {
           for (int i = 1; i < sourceIds.length; i++) {
             await db.update(
               'ai_wiki_facts',
-              {
-                'strength': 0.0,
-                'updated_at': DateTime.now().toIso8601String(),
-              },
+              {'strength': 0.0, 'updated_at': DateTime.now().toIso8601String()},
               where: 'id = ?',
               whereArgs: [sourceIds[i]],
             );
@@ -356,10 +363,12 @@ abstract final class AiMemoryDreamer {
     if (messages.length < 10) return 0; // 不够多，暂不摘要
 
     // 格式化对话
-    final conversationText = messages.map((m) {
-      final role = m['role'] == 'user' ? '用户' : 'AI';
-      return '$role: ${m['content']}';
-    }).join('\n');
+    final conversationText = messages
+        .map((m) {
+          final role = m['role'] == 'user' ? '用户' : 'AI';
+          return '$role: ${m['content']}';
+        })
+        .join('\n');
 
     // 指令部分作为 system message（可被 DeepSeek 缓存）
     const summarizeSystemPrompt =
@@ -374,7 +383,7 @@ abstract final class AiMemoryDreamer {
     // 可变数据（对话内容）作为 user message
     final userPrompt = '对话内容：\n$conversationText';
 
-    final response = await AiService.callProModel(
+    final response = await AiService.callPrimaryModel(
       systemPrompt: summarizeSystemPrompt,
       prompt: userPrompt,
       temperature: 0.3,
@@ -420,8 +429,9 @@ abstract final class AiMemoryDreamer {
 
   /// 清理 30 天前的对话 chunks
   static Future<int> _cleanOldChunks(Database db) async {
-    final cutoff =
-        DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
+    final cutoff = DateTime.now()
+        .subtract(const Duration(days: 30))
+        .toIso8601String();
     return db.delete(
       'conversation_chunks',
       where: 'created_at < ?',

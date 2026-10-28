@@ -1,450 +1,132 @@
-# TaWorld Flutter 前端开发指南
+# TaWorld 当前前端开发指南
 
-> **目标读者**: 负责实现具体页面的 AI 模型或开发者
->
-> **前提**: 设计系统已建好。TaWorld 是离线优先的独立 Flutter 应用，数据存储在本地 SQLite，不依赖后端服务器。
+> 适用于 `app/lib/`。业务边界和架构分别见根 `AGENTS.md` 与 `architecture.md`。
 
----
+## 1. 页面与导航
 
-## 一、项目结构
+首页是三栏 `PageView`：小念、关心的人、我的。需要保活的 Tab 使用 `AutomaticKeepAliveClientMixin`，并在 `build` 中调用 `super.build(context)`。
 
-```
-app/lib/
-├── main.dart
-├── app/
-│   ├── app.dart              # MaterialApp 根组件
-│   ├── router.dart           # GoRouter 路由表（全部已实现）
-│   ├── theme.dart            # 主题配置（亮色+暗色）
-│   ├── design_tokens.dart    # 设计令牌
-│   └── typography.dart       # 字体配置
-├── data/
-│   ├── models/               # 数据模型
-│   │   ├── user.dart         # LocalUser
-│   │   ├── partner.dart      # Partner（关心的人）
-│   │   ├── reminder_config.dart # ReminderConfig
-│   │   ├── reminder_log.dart # ReminderLog
-│   │   └── achievement.dart  # Achievement + UserAchievement
-│   ├── city_data.dart        # 世界城市数据（24国300+城）
-│   └── local/database_helper.dart # SQLite 数据库
-├── services/
-│   ├── ai_service.dart       # DeepSeek AI
-│   ├── weather_service.dart  # wttr.in 天气
-│   ├── notification_service.dart # 本地通知
-│   ├── reminder_scheduler.dart # 提醒调度
-│   ├── background_tasks.dart # WorkManager
-│   ├── care_suggestion_service.dart
-│   ├── theme_service.dart
-│   └── local/                # 本地数据服务
-│       ├── local_user_service.dart
-│       ├── partner_service.dart
-│       ├── local_reminder_service.dart
-│       └── local_achievement_service.dart
-└── presentation/
-    ├── screens/
-    │   ├── ai_home/           # AI 主屏（Tab 1）
-    │   ├── home/              # 首页 + 关心的人（Tab 2）+ 我的（Tab 3）
-    │   ├── add_partner/       # 添加关心的人
-    │   ├── partner_detail/    # 关心的人详情/编辑
-    │   ├── reminder_config/   # 提醒配置
-    │   ├── reminder_history/  # 提醒历史
-    │   ├── achievements/      # 成就列表
-    │   ├── ai_chat/           # AI 对话（旧版独立页面）
-    │   ├── api_key_setup/     # API Key 管理
-    │   ├── onboarding/        # 引导页
-    │   └── settings/          # 设置
-    └── widgets/
-        ├── widgets.dart       # 统一导出
-        ├── city_picker_sheet.dart # 城市选择器
-        ├── ta_card.dart / ta_button.dart / ta_text_field.dart
-        ├── ta_avatar.dart / ta_loading.dart
-        └── ta_achievement_badge.dart
-```
+主要路由：
 
----
+| 页面 | 路径 |
+| --- | --- |
+| 首次引导 | `/onboarding` |
+| 首页 | `/` |
+| 添加人物 | `/partners/add` |
+| 人物详情 | `/partners/:id` |
+| 提醒配置 | `/reminders/config/:partnerId` |
+| 提醒历史 | `/reminders/:id/logs` |
+| 成就 | `/achievements` |
+| 提醒检查 | `/settings/reminder-health` |
+| 设置与子页面 | `/settings`、`/settings/notifications`、`/settings/appearance`、`/settings/ai-data`、`/settings/account` |
+| 已移出的人 | `/settings/archived-people` |
+| API Key | `/settings/api-keys` |
 
-## 二、新建页面的标准流程
+`/ai/chat` 是保留的旧独立对话入口；主产品流程使用首页小念，新增功能不要绕开主对话工作流。
 
-> **注意**: 当前所有路由均已连接到真实页面，不再需要替换 `_Placeholder`。如需新增页面，按以下流程操作。
+## 2. 状态与异步数据
 
-### 步骤 1: 创建页面文件
+保持 `StatefulWidget + setState`，不引入新的状态管理框架或 repository 层。页面应分别处理加载、错误、空数据和正常数据，不能用空列表掩盖读取失败。
 
 ```dart
-// lib/presentation/screens/my_feature/my_feature_screen.dart
-
-import 'package:flutter/material.dart';
-import '../../../app/design_tokens.dart';
-import '../../widgets/widgets.dart';
-
-class MyFeatureScreen extends StatefulWidget {
-  const MyFeatureScreen({super.key});
-
-  @override
-  State<MyFeatureScreen> createState() => _MyFeatureScreenState();
-}
-
-class _MyFeatureScreenState extends State<MyFeatureScreen> {
-  bool _loading = true;
-  String? _error;
-  List<SomeModel> _data = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAll();
-  }
-
-  Future<void> _loadAll() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      // 从本地 SQLite 加载数据（参见第五节）
-      final items = await SomeLocalService.getAll();
-      setState(() { _data = items; _loading = false; });
-    } catch (e) {
-      setState(() { _error = '加载失败'; _loading = false; });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // ... 使用 theme 获取颜色和字体
-    // ... 使用 TaSpacing / TaRadius 获取间距和圆角
-    // ... 使用 TaCard / TaButton 等组件
+Future<void> _loadAll() async {
+  setState(() => _loading = true);
+  try {
+    final items = await SomeLocalService.getAll();
+    if (!mounted) return;
+    setState(() {
+      _items = items;
+      _error = null;
+      _loading = false;
+    });
+  } catch (_) {
+    if (!mounted) return;
+    setState(() {
+      _error = '读取失败，请重试';
+      _loading = false;
+    });
   }
 }
 ```
 
-### 步骤 2: 注册路由
+异步任务需要考虑 `mounted`、重复请求、旧请求覆盖新结果和部分数据可用的情况。可选服务可以独立降级，但不能用空 `catch` 隐藏失败。
 
-在 `lib/app/router.dart` 中添加新路由：
+## 3. 主题与设计令牌
 
-```dart
-GoRoute(
-  path: '/my-feature',
-  builder: (_, __) => const MyFeatureScreen(),
-),
-```
+颜色、间距、圆角、阴影和尺寸优先使用：
 
-### 步骤 3: 测试
+- `Theme.of(context).colorScheme`；
+- `TaSpacing`、`TaRadius`、`TaSizes`、`TaGradients`；
+- 需要 success/warning/info 等扩展语义色时，使用 `taColorsFor(brightness)`。
 
-```bash
-flutter run -d chrome    # 或连接安卓模拟器
-```
+五套浅色主题的 primary、secondary、tertiary 前景对比度必须至少为 4.5:1。不要在组件中写死 `TaLightColors`、`Colors.white` 或另一套亮度的颜色。
 
----
+当前关键令牌：
 
-## 三、组件使用指南
+- 普通卡片内边距 16px，大卡片 24px。
+- 标准圆角 16px，大型对话框/弹层 24px。
+- 通用图标按钮默认至少 48×48px。
+- 暗色模式优先边框，不使用浅色阴影。
 
-### TaCard — 统一卡片
+修改主题后至少检查当前 palette、暗色模式和其他 palette，不能只检查默认珊瑚色。
 
-```dart
-// 默认卡片
-TaCard(
-  child: Text('内容'),
-  onTap: () {},              // 可选点击
-)
+## 4. 组件与布局
 
-// 渐变头部卡片
-TaCard.gradient(
-  child: Text('温暖渐变背景'),
-)
+通用组件位于 `app/lib/presentation/widgets/`：
 
-// 描边卡片
-TaCard.outlined(
-  child: Text('带边框'),
-)
-```
+- `TaCard`：默认、渐变、描边卡片。
+- `TaButton` / `TaIconButton`：主操作与图标操作，包含加载/禁用状态。
+- `TaTextField`：统一输入，密钥字段设置 `obscureText: true`。
+- `TaAvatar`：本地头像与占位符。
+- `TaLoading` / `TaEmptyState` / `TaErrorState`：加载、空和错误状态。
+- `TaAchievementBadge`：成就进度与新解锁展示。
 
-### TaButton — 主按钮
+布局约定：
 
-```dart
-TaButton(
-  text: '保存',
-  icon: Icons.check_rounded,   // 可选图标
-  loading: isLoading,          // 加载态
-  onPressed: () {},
-)
-```
+- 使用 `Expanded`、`Wrap`、`OverflowBar` 和受控滚动处理不同宽度与字体。
+- 小念健康卡只在异常或证据未知时出现，正常状态不占首屏。
+- 次要操作进入有 tooltip/语义的菜单，不把破坏性操作藏在长按中。
+- 提醒配置的内容与开关为第一层，编辑/历史为第二层，摘要最多两行。
+- 大字体或窄屏不能只靠一行省略号隐藏关键操作和状态。
 
-### TaTextField — 输入框
+## 5. 动效与可访问性
+
+列表动画使用有上限的 stagger：
 
 ```dart
-TaTextField(
-  label: '姓名',
-  hint: '请输入姓名',
-  prefixIcon: Icons.person_rounded,
-  obscureText: false,
-  controller: _controller,
-  validator: (v) => v!.isEmpty ? '必填' : null,
-)
+final card = buildCard();
+if (TaAnimation.reduceMotion(context)) return card;
+return card.animate().fadeIn(
+  delay: TaAnimation.stagger(index, stepMilliseconds: 80),
+  duration: TaAnimation.normal,
+);
 ```
 
-### TaAvatar — 头像
+`TaAnimation.stagger` 默认最多延迟 300ms。此次修改过的加载、思考、庆祝、列表和按钮反馈需要静态降级，不得让控制器在减少动态效果时继续无意义播放。
 
-```dart
-TaAvatar(url: user.avatarUrl, name: user.nickname)
-TaAvatar.small(url: url)
-TaAvatar.large(name: '张三')
-TaAvatar.xl(url: url, showBorder: true)
-```
+成就只在后续新解锁时庆祝，首次加载已有成就只建立基线。不能把进入页面或下拉刷新当成新解锁。
 
-### TaAchievementBadge — 成就徽章
+可访问性检查包括：
 
-```dart
-TaAchievementBadge(
-  icon: '🌂',
-  name: '初次守护',
-  progress: 1,
-  target: 1,
-  unlocked: true,
-  // 已解锁时自动显示"已解锁"标签，无需传入 points
-)
-```
+- 原生按钮/链接、可见文本和语义标签；
+- 至少 48px 的常用触控目标；
+- 不只依赖颜色表达成功/失败；
+- `MediaQuery.disableAnimations`；
+- 390px、深色和 200% 字体场景。
 
-### CityPickerSheet — 城市选择器
+## 6. 人物、时间和状态文案
 
-```dart
-import '../../widgets/city_picker_sheet.dart';
+人物列表与图谱统一调用 `CareGraphPartnerMeta.localTime`，不得另写经度估算。时区未知时显示待确认，不显示误导性的具体时间。
 
-// 弹出城市选择底部弹窗
-final selection = await showCityPicker(context);
-if (selection != null) {
-  // selection.city, selection.province, selection.country
-  // selection.displayText — "广东 · 深圳" or "日本 · 东京"
-  setState(() { _selectedCity = selection; });
-}
-```
+提醒历史与检查必须区分已安排、已提交、通知栏检测到、用户确认和无法确认。不要把“发送成功”写成对方已读或实际联系成功。
 
-### TaLoading / TaEmptyState / TaErrorState
+## 7. 新增或修改页面
 
-```dart
-// 加载中
-TaLoading(message: '加载中...')
+1. 先确认业务状态和数据来源，再设计页面层级。
+2. 使用现有路由、服务、设计令牌和通用组件。
+3. 处理加载、错误、空数据、长文本、深色和大字体。
+4. 为行为变化先写能失败的测试，再实现。
+5. 运行 `tool/taworld.ps1 analyze --no-pub` 和完整 `test --no-pub`。
+6. 涉及发布时再通过三 ABI 构建，不把构建成功当作真机视觉验收。
 
-// 空状态
-TaEmptyState(
-  icon: Icons.people_outline_rounded,
-  title: '还没有关心的人',
-  subtitle: '添加你关心的人，开始守护吧',
-  actionText: '添加',
-  onAction: () {},
-)
-
-// 错误状态
-TaErrorState(
-  message: '加载失败',
-  onRetry: () {},
-)
-```
-
----
-
-## 四、样式规范
-
-### ❌ 禁止做的事
-
-```dart
-// ❌ 硬编码颜色
-color: Color(0xFFE8998D)
-
-// ❌ 硬编码间距
-padding: EdgeInsets.all(16)
-
-// ❌ 硬编码圆角
-borderRadius: BorderRadius.circular(16)
-```
-
-### ✅ 正确做法
-
-```dart
-// ✅ 从主题获取颜色
-color: Theme.of(context).colorScheme.primary
-
-// ✅ 使用设计令牌
-padding: EdgeInsets.all(TaSpacing.md)
-
-// ✅ 使用圆角常量
-borderRadius: TaRadius.borderMd
-```
-
-### 常用设计令牌
-
-| 令牌 | 值 | 用途 |
-|------|-----|------|
-| `TaSpacing.xs` | 8px | 元素内最小间距 |
-| `TaSpacing.sm` | 12px | 紧凑间距 |
-| `TaSpacing.md` | 16px | 标准间距 |
-| `TaSpacing.lg` | 24px | 大间距 |
-| `TaSpacing.pagePadding` | 20px | 页面水平边距 |
-| `TaRadius.sm` | 12px | 小组件圆角 |
-| `TaRadius.md` | 16px | 标准圆角（卡片/按钮） |
-| `TaRadius.lg` | 24px | 大圆角（对话框） |
-
----
-
-## 五、本地服务调用规范
-
-> **架构说明**: TaWorld 是离线优先的独立应用，数据存储在本地 SQLite 数据库中，不依赖后端服务器。外部服务（AI、天气）通过 HTTP 直接调用。
-
-### 本地数据操作（SQLite）
-
-```dart
-import '../../../services/local/partner_service.dart';
-
-// 查询全部
-final partners = await PartnerService.getAll();
-
-// 按 ID 查询
-final partner = await PartnerService.getById(id);
-
-// 创建
-final newPartner = await PartnerService.create(partner);
-
-// 更新
-await PartnerService.update(partner);
-```
-
-其他本地服务用法相同：
-
-```dart
-import '../../../services/local/local_user_service.dart';
-import '../../../services/local/local_reminder_service.dart';
-import '../../../services/local/local_achievement_service.dart';
-
-// 用户
-final user = await LocalUserService.getCurrentUser();
-
-// 提醒配置
-final reminders = await LocalReminderService.getByPartnerId(partnerId);
-
-// 成就
-final achievements = await LocalAchievementService.getAll();
-```
-
-### AI 服务
-
-```dart
-import '../../../services/ai_service.dart';
-
-// 检查是否已配置 API Key
-final hasKey = await AiService.hasApiKey();
-
-// 发送聊天消息
-final reply = await AiService.chat(message);
-```
-
-### 天气服务
-
-```dart
-import '../../../services/weather_service.dart';
-
-// 按城市名获取当前天气
-final weather = await WeatherService.getCurrentWeatherByCity('深圳');
-```
-
-### 提醒调度
-
-```dart
-import '../../../services/reminder_scheduler.dart';
-
-// 重新调度所有已启用的提醒（添加/修改/删除提醒后调用）
-await ReminderScheduler.scheduleAll();
-```
-
-### 错误处理
-
-```dart
-try {
-  final partners = await PartnerService.getAll();
-  // ...
-} catch (e) {
-  // SQLite 异常或文件损坏（极少发生）
-  setState(() { _error = '读取本地数据失败'; });
-}
-```
-
----
-
-## 六、页面状态管理模式
-
-> **说明**: 页面使用 `StatefulWidget` + `setState` 管理状态，不使用 Riverpod 或其他状态管理框架。数据来自本地 SQLite 服务，无网络错误（DioException 等），仅需处理 SQLite 异常。
-
-每个页面应处理 3 种状态：加载中、错误、正常数据：
-
-```dart
-class _SomeScreenState extends State<SomeScreen> {
-  bool _loading = true;
-  String? _error;
-  List<SomeModel> _data = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAll();
-  }
-
-  Future<void> _loadAll() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      // 从本地 SQLite 服务加载数据
-      final items = await SomeLocalService.getAll();
-      setState(() { _data = items; _loading = false; });
-    } catch (e) {
-      setState(() { _error = '加载失败'; _loading = false; });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const TaLoading(message: '加载中...');
-    if (_error != null) return TaErrorState(message: _error!, onRetry: _loadAll);
-    if (_data.isEmpty) return const TaEmptyState(icon: ..., title: '暂无数据');
-
-    // 正常数据展示
-    return ListView.builder(...);
-  }
-}
-```
-
----
-
-## 七、动画规范
-
-```dart
-import 'package:flutter_animate/flutter_animate.dart';
-
-// 入场动画
-Widget(...).animate()
-  .fadeIn(duration: TaAnimation.normal)
-  .slideY(begin: 0.05, curve: TaAnimation.curve);
-
-// 延迟入场（列表项依次出现）
-Widget(...).animate()
-  .fadeIn(delay: (index * 100).ms);
-
-// 标准动画时长
-TaAnimation.fast    // 200ms
-TaAnimation.normal  // 300ms
-TaAnimation.slow    // 500ms
-```
-
----
-
-## 八、页面清单（全部已实现）
-
-| 页面 | 路由 | 文件 | 状态 |
-|------|------|------|------|
-| 引导页 | `/onboarding` | onboarding_screen.dart | ✅ |
-| AI 主屏 | Tab 1 | ai_home_screen.dart | ✅ |
-| 关心的人 | Tab 2 | home_screen.dart (_PartnersTab) | ✅ |
-| 我的 | Tab 3 | home_screen.dart (_ProfileTab) | ✅ |
-| 添加关心的人 | `/partners/add` | add_partner_screen.dart | ✅ |
-| 关心的人详情 | `/partners/:id` | partner_detail_screen.dart | ✅ |
-| 提醒配置 | `/reminders/config/:partnerId` | reminder_config_screen.dart | ✅ |
-| 提醒历史 | `/reminders/:id/logs` | reminder_history_screen.dart | ✅ |
-| 成就列表 | `/achievements` | achievements_screen.dart | ✅ |
-| AI 对话 | `/ai/chat` | ai_chat_screen.dart | ✅ |
-| API Key 管理 | `/settings/api-keys` | api_key_setup_screen.dart | ✅ |
-| 设置 | `/settings` | settings_screen.dart | ✅ |
-
-> **所有页面均已实现，路由表完整，无占位符。**
+品牌角色和现有图片资产当前暂缓调整；不要为了局部页面美化擅自替换吉祥物或重新生成整套素材。

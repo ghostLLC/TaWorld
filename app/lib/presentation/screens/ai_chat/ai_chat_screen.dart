@@ -9,7 +9,6 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../services/ai_service.dart';
 
-
 /// AI 对话页面
 class AiChatScreen extends StatefulWidget {
   const AiChatScreen({super.key});
@@ -44,10 +43,12 @@ class _AiChatScreenState extends State<AiChatScreen> {
       if (!mounted) return;
       setState(() {
         for (final row in history) {
-          _messages.add(_ChatMessage(
-            role: row['role'] as String,
-            content: row['content'] as String,
-          ));
+          _messages.add(
+            _ChatMessage(
+              role: row['role'] as String,
+              content: row['content'] as String,
+            ),
+          );
         }
       });
       _scrollToBottom();
@@ -83,10 +84,9 @@ class _AiChatScreenState extends State<AiChatScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _messages.add(_ChatMessage(
-          role: 'assistant',
-          content: '抱歉，网络好像出了点问题：$e',
-        ));
+        _messages.add(
+          _ChatMessage(role: 'assistant', content: '抱歉，网络好像出了点问题：$e'),
+        );
       });
     } finally {
       if (mounted) {
@@ -118,9 +118,9 @@ class _AiChatScreenState extends State<AiChatScreen> {
       await AiService.clearChatHistory();
       if (mounted) {
         setState(() => _messages.clear());
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('对话记录已清除')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('对话记录已清除')));
       }
     }
   }
@@ -208,7 +208,9 @@ class _AiChatScreenState extends State<AiChatScreen> {
                       _checkApiKey();
                     },
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: TaSpacing.sm),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: TaSpacing.sm,
+                      ),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
@@ -268,7 +270,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
               color: theme.colorScheme.surface,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: theme.shadowColor.withValues(alpha: 0.05),
                   blurRadius: 10,
                   offset: const Offset(0, -2),
                 ),
@@ -312,7 +314,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
                   ),
                   child: IconButton(
                     onPressed: _sending ? null : _sendMessage,
-                    icon: const Icon(Icons.send_rounded, color: Colors.white),
+                    icon: Icon(
+                      Icons.send_rounded,
+                      color: theme.colorScheme.onPrimary,
+                    ),
                   ),
                 ),
               ],
@@ -337,10 +342,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
                 gradient: TaGradients.primary(Theme.of(context).brightness),
                 borderRadius: TaRadius.borderLg,
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.smart_toy_rounded,
                 size: 40,
-                color: Colors.white,
+                color: theme.colorScheme.onPrimary,
               ),
             ).animate().scale(duration: 500.ms, curve: TaAnimation.bounce),
             const SizedBox(height: TaSpacing.md),
@@ -362,18 +367,16 @@ class _AiChatScreenState extends State<AiChatScreen> {
               spacing: TaSpacing.xs,
               runSpacing: TaSpacing.xs,
               alignment: WrapAlignment.center,
-              children: [
-                '怎么关心对方更好？',
-                '帮我写一句晚安语',
-                '天气不好怎么提醒？',
-              ]
-                  .map((q) => ActionChip(
-                        label: Text(q),
-                        onPressed: () {
-                          _controller.text = q;
-                          _sendMessage();
-                        },
-                      ))
+              children: ['怎么关心对方更好？', '帮我写一句晚安语', '天气不好怎么提醒？']
+                  .map(
+                    (q) => ActionChip(
+                      label: Text(q),
+                      onPressed: () {
+                        _controller.text = q;
+                        _sendMessage();
+                      },
+                    ),
+                  )
                   .toList(),
             ).animate().fadeIn(delay: 700.ms),
           ],
@@ -438,9 +441,6 @@ class _ChatBubble extends StatelessWidget {
           ),
         ),
       ),
-    ).animate().fadeIn(
-          duration: TaAnimation.fast,
-          curve: TaAnimation.curve,
-        );
+    ).animate().fadeIn(duration: TaAnimation.fast, curve: TaAnimation.curve);
   }
 }

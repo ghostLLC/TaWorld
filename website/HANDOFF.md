@@ -1,73 +1,8 @@
-# TaWorld 官网维护指引（AI 自动加载入口）
-
-维护本目录前，**必须先完整阅读 [HANDOFF.md](./HANDOFF.md)**——它是唯一的权威交接文档，包含：
-
-- 来龙去脉（v1→v6 每一版驱动它的用户反馈，决定了用户的审美取向）
-- 硬性规则（禁 emoji、零外部依赖、图标必须用 `mipmap/ic_launcher.png`、气泡统一宽度、星座图禁心形等，违反即事故）
-- 设计系统速查（夜色色板、八幕电影分幕调色表、组件与交互实现要点）
-- 三端部署流程（master / gh-pages sed 改写 / CloudBase MCP 命令）与发版 checklist
-- 测试清单（含 headless IO 伪影、Mimosa commit 钩子等踩坑记录）
-
-速记：本地预览 `python -m http.server 8123`；改版后必须跑 HANDOFF.md 第六节测试清单再上线。
-
-# TaWorld 产品官网
-
-单文件纯静态官网（`index.html`），**零外部依赖**：不引用 Google Fonts、不使用任何第三方 CDN，全部图片本地化并压缩为 WebP（合计约 150KB + OG 图 1.1MB），适合中国大陆境内快速打开。
-
-> 维护前必读：**[HANDOFF.md](HANDOFF.md)** —— 完整的来龙去脉、设计系统、部署流程、红线规则与踩坑记录。
-
-## 目录结构
-
-```
-website/
-├── index.html              # 官网单页（内联 CSS/JS）
-├── assets/img/             # 压缩后的图片（WebP）+ favicon + og-banner
-├── downloads/              # APK 下载（不入库，见 .gitignore）
-│   └── TaWorld-v0.1.1-arm64-v8a.apk
-├── .gitignore              # 忽略 APK 大文件
-└── README.md
-```
-
-## 本地预览
-
-```bash
-cd website
-python -m http.server 8123
-# 浏览器打开 http://localhost:8123
-```
-
-直接双击 `index.html` 也可以打开，但建议走本地 HTTP 服务以验证 APK 下载链接。
-
-## 部署
-
-> 完整且最新的三端部署流程见 **[HANDOFF.md 第五节](HANDOFF.md)**。以下为摘要。
-
-### 方式一：腾讯云 CloudBase 静态托管（推荐，大陆访问快）
-
-1. MCP `cloudbase` 工具已绑定环境 `cloud1-8grf0qgi8c6c0603`：
-   `manageApps(action="deployApp", serviceName="taworld", framework="static", installCmd="", buildCmd="", buildPath=".", filePath=<website 绝对路径>, ignore=["**/node_modules/**","**/.git/**","**/README.md"])`
-   —— APK 随部署目录一起上传（`downloads/` 相对路径直链），随后 `queryApps(getAppVersion)` 轮询到 SUCCESS。
-2. 默认域名 `https://taworld-cloud1-8grf0qgi8c6c0603.webapps.tcloudbase.com`，大陆直连；绑定自定义域名需 ICP 备案。
-
-### 方式二：任意静态服务器 / 对象存储
-
-把 `website/` 整个目录（含 downloads）上传到 nginx、COS、OSS 等即可，无需构建步骤。
-
-### 方式三：GitHub Pages（海外/备用）
-
-gh-pages 分支已配置为发布源；大陆访问 github.io 不稳定，仅作镜像。推送方式：worktree 检出 gh-pages → 拷贝 `index.html`+`assets/` → **sed 把 `downloads/...apk` 链接改写为 GitHub Release 附件地址**（仓库不放 56MB APK）→ push。
-
-## 更新版本时
-
-1. 把新 APK 复制为 `downloads/TaWorld-vX.Y.Z-arm64-v8a.apk`；
-2. 更新 `index.html` 中版本号、日期与更新日志（搜索 `v0.1.1`）；
-3. 重新部署。
-
 # TaWorld 官网 · 维护交接指南
 
 > 本文档写给下一位维护者（人或 AI）。请**完整阅读"硬性规则"与"来龙去脉"**再动手——这个网站的设计决策全部来自用户 (ghostLLC) 的逐轮反馈，理解它们才能保持一致性。
 >
-> 最后更新：2026-08-23 · 当前版本 v6 · 线上版本 CloudBase `taworld-009`
+> 最后更新：2026-10-28 · 当前版本 v6 · 线上版本 CloudBase `taworld-009`
 
 ---
 
@@ -112,7 +47,7 @@ TaWorld 是一款 Flutter Android 应用（本地优先的 AI 关怀助手，详
 3. **零外部依赖**：新增任何 `<link>`/`<script src>`/`@import` 指向外部域都是回归。字体只用系统栈（`--serif`/`--sans` 已定义）。
 4. **聊天气泡统一宽度**（用户定为 bug）：`.bubble .msg` 与 `.typing` 均 `width:min(430px,100%)`。
 5. **星座图禁用心形**（用户要求移除）：节点用金色几何图形，信息卡标题前是 CSS 菱形（`.g-tip b::before`）。
-6. **文案事实以根 `README.md` 为准**，不要采用 `competition/创意提案.md` 里过时/夸大的表述（如"DeepSeek V4 Pro 驱动"“24国300+城市”——实际默认 `deepseek-v4-flash`；城市定位不做具体数字声明）。语气：温暖、克制、有文学性，避免营销模板腔。
+6. **文案事实以根 `README.md` 为准**，不要采用 `competition/创意提案.md` 里过时/夸大的表述（如"DeepSeek V4 Pro 驱动"“24国300+城市”——实际默认 `deepseek-flash`；城市定位不做具体数字声明）。语气：温暖、克制、有文学性，避免营销模板腔。
 7. **`prefers-reduced-motion` 必须全量降级**：所有动画在 reduce 下退化为静态（打字机直接显示全部字符、视差/提灯/脉动不启动）。全局 `@media` 已兜底，新增 JS 动画要检查 `reduced` 变量。
 8. **插画 PNG 无透明通道**（白底），在深色卡片上必须包 `.plate` 托板呈现。
 9. 中文衬线依赖用户系统字体（Noto Serif SC → 宋体回退），**不要**为了统一字形引入 webfont。
@@ -197,7 +132,7 @@ cd D:/TaWorld && git add website/ && git commit -m "..." && git push origin mast
 git worktree add ../TaWorld-ghpages gh-pages
 cd D:/TaWorld-ghpages
 cp D:/TaWorld/website/index.html .
-sed -i 's|href="downloads/TaWorld-v0.1.1-arm64-v8a.apk"|href="https://github.com/ghostLLC/TaWorld/releases/download/v0.1.1/TaWorld-v0.1.1-arm64-v8a.apk"|g' index.html
+sed -i 's|href="downloads/TaWorld-v0.2.0-arm64-v8a.apk"|href="https://github.com/ghostLLC/TaWorld/releases/download/v0.2.0/TaWorld-v0.2.0-arm64-v8a.apk"|g' index.html
 git add -A && git commit -m "publish: ..." && git push origin gh-pages
 cd D:/TaWorld && git worktree remove ../TaWorld-ghpages --force
 
@@ -217,7 +152,7 @@ CloudBase 环境已绑定：`cloud1-8grf0qgi8c6c0603`（用户账号，MCP `clou
 ### 5.2 发新版本 checklist
 
 1. 新 APK 复制为 `website/downloads/TaWorld-vX.Y.Z-arm64-v8a.apk`（gitignore 已排除，不会入库）
-2. `index.html` 中搜索 `v0.1.1`，更新版本号/日期/体积/更新日志（changelog details 块）
+2. `index.html` 中搜索 `v0.2.0`，更新版本号/日期/体积/更新日志（changelog details 块）
 3. `gh release create vX.Y.Z "website/downloads/TaWorld-vX.Y.Z-arm64-v8a.apk" --title ... --notes ...`（gh 已登录 ghostLLC）
 4. sed 改写串换为新 Release 地址；三端同步（5.1）
 5. 根 `README.md` 的官网/下载链接行同步更新
@@ -237,9 +172,9 @@ CloudBase 环境已绑定：`cloud1-8grf0qgi8c6c0603`（用户账号，MCP `clou
 
 - **og-banner 仍为浅色旧版**（见 4.5），可重做为夜色版
 - **CloudBase 默认域名**免备案可用；绑定自定义域名需 ICP + `manageGateway bindCustomDomain`
-- APK 为开发签名（页面 FAQ/下载区已如实说明）；正式分发前应换正式签名并更新文案
+- APK 继续使用项目既有调试签名（页面 FAQ/下载区已如实说明），这是用户确认保留的决定；覆盖升级必须保持同一证书并递增 versionCode，不要擅自更换签名
 - `color-mix()`、`:focus-visible`、`steps()` 等现代 CSS 依赖（2026 主流浏览器均 OK；若要兼容旧浏览器需评估替换）
-- LICENSE：根 README 徽章写 MIT 但仓库无 LICENSE 文件，页面措辞已避开许可证声明
+- LICENSE：根仓库已提供 MIT `LICENSE`；官网若增加许可证文案，与该文件保持一致
 - 手机内演示屏是 APP 浅色模式（在夜色页面上刻意形成对比），不要"顺手统一"
 - 页脚 `foot-mark`、跑马灯、marquee 双语标签等装饰元素均 `aria-hidden`，改动时保持
 

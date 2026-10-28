@@ -90,7 +90,7 @@ abstract final class ImageUnderstandingService {
       throw const ImageUnderstandingException('图片为空或超过 32 MiB 限制');
     }
     return {
-      'model': AiModelCatalog.vision,
+      'model': AiModelCatalog.primary,
       'temperature': 0.2,
       'max_tokens': 1200,
       'messages': [

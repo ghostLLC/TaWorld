@@ -33,8 +33,9 @@ function Get-ProcessEnvironmentState {
     )
 
     $processEnvironment = [System.Environment]::GetEnvironmentVariables('Process')
-    $present = $processEnvironment.ContainsKey($Name)
-    $value = if ($present) { [string]$processEnvironment[$Name] } else { $null }
+    $key = $processEnvironment.Keys | Where-Object { $_ -ieq $Name } | Select-Object -First 1
+    $present = $null -ne $key
+    $value = if ($present) { [string]$processEnvironment[$key] } else { $null }
 
     return [pscustomobject]@{
         Present = $present

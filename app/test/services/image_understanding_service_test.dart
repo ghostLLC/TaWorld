@@ -32,7 +32,8 @@ void main() {
       mimeType: 'image/jpeg',
     );
 
-    expect(payload['model'], AiModelCatalog.vision);
+    expect(payload['model'], AiModelCatalog.primary);
+    expect(payload['model'], 'deepseek-flash');
     final messages = payload['messages']! as List;
     final content = (messages.single as Map)['content'] as List;
     expect((content.last as Map)['type'], 'image_url');

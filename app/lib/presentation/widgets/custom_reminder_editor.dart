@@ -1,9 +1,33 @@
 import 'package:flutter/material.dart';
+import 'package:timezone/timezone.dart' as tz;
 
-/// Edits an explicit device-local date or recurring wall-clock schedule.
+import '../../app/design_tokens.dart';
+import '../../data/models/partner.dart';
+import 'reminder_timezone_mode_selector.dart';
+
+class CustomReminderEditResult {
+  const CustomReminderEditResult({
+    required this.config,
+    required this.timezoneMode,
+  });
+
+  final Map<String, dynamic> config;
+  final String timezoneMode;
+}
+
+/// Edits an explicit date or recurring wall-clock schedule.
 class CustomReminderEditor extends StatefulWidget {
-  const CustomReminderEditor({super.key, required this.initial});
+  const CustomReminderEditor({
+    super.key,
+    required this.initial,
+    this.partner,
+    this.initialTimezoneMode = 'user',
+  });
+
   final Map<String, dynamic> initial;
+  final Partner? partner;
+  final String initialTimezoneMode;
+
   @override
   State<CustomReminderEditor> createState() => _CustomReminderEditorState();
 }
@@ -14,13 +38,20 @@ class _CustomReminderEditorState extends State<CustomReminderEditor> {
   late DateTime _date;
   late String _repeat;
   late Set<int> _weekdays;
+  late String _timezoneMode;
   String? _error;
+
   @override
   void initState() {
     super.initState();
     final value = widget.initial;
     _message = TextEditingController(text: value['message'] as String? ?? '');
-    final at = DateTime.tryParse('${value['scheduled_at']}')?.toLocal();
+    _timezoneMode = ReminderTimezoneModeSelector.normalize(
+      widget.initialTimezoneMode,
+      widget.partner,
+    );
+    final parsed = DateTime.tryParse('${value['scheduled_at']}');
+    final at = parsed == null ? null : _toDisplayTime(parsed);
     final parts = '${value['target_time'] ?? '09:00'}'.split(':');
     _time = at != null
         ? TimeOfDay.fromDateTime(at)
@@ -40,6 +71,33 @@ class _CustomReminderEditorState extends State<CustomReminderEditor> {
         {1, 2, 3, 4, 5};
   }
 
+  DateTime _toDisplayTime(DateTime value) {
+    if (_timezoneMode == 'partner' &&
+        ReminderTimezoneModeSelector.canUsePartner(widget.partner)) {
+      return tz.TZDateTime.from(
+        value,
+        tz.getLocation(widget.partner!.timezoneId!),
+      );
+    }
+    return value.toLocal();
+  }
+
+  DateTime _toUtc(DateTime value) {
+    if (_timezoneMode == 'partner' &&
+        ReminderTimezoneModeSelector.canUsePartner(widget.partner)) {
+      final location = tz.getLocation(widget.partner!.timezoneId!);
+      return tz.TZDateTime(
+        location,
+        value.year,
+        value.month,
+        value.day,
+        value.hour,
+        value.minute,
+      ).toUtc();
+    }
+    return value.toUtc();
+  }
+
   @override
   void dispose() {
     _message.dispose();
@@ -47,29 +105,32 @@ class _CustomReminderEditorState extends State<CustomReminderEditor> {
   }
 
   void _save() {
-    final at = DateTime(
-      _date.year,
-      _date.month,
-      _date.day,
-      _time.hour,
-      _time.minute,
+    final at = _toUtc(
+      DateTime(_date.year, _date.month, _date.day, _time.hour, _time.minute),
     );
     String? error;
     if (_message.text.trim().isEmpty) error = '请填写要提醒的事';
-    if (_repeat == 'once' && !at.isAfter(DateTime.now())) error = '请选择未来的日期和时间';
+    if (_repeat == 'once' && !at.isAfter(DateTime.now())) {
+      error = '请选择未来的日期和时间';
+    }
     if (_repeat == 'weekly' && _weekdays.isEmpty) error = '至少选择一个星期';
     if (error != null) {
       setState(() => _error = error);
       return;
     }
-    Navigator.of(context).pop(<String, dynamic>{
-      'message': _message.text.trim(),
-      'target_time':
-          '${_time.hour.toString().padLeft(2, '0')}:${_time.minute.toString().padLeft(2, '0')}',
-      'repeat_daily': _repeat != 'once',
-      if (_repeat == 'once') 'scheduled_at': at.toUtc().toIso8601String(),
-      if (_repeat == 'weekly') 'weekdays': _weekdays.toList()..sort(),
-    });
+    Navigator.of(context).pop(
+      CustomReminderEditResult(
+        config: {
+          'message': _message.text.trim(),
+          'target_time':
+              '${_time.hour.toString().padLeft(2, '0')}:${_time.minute.toString().padLeft(2, '0')}',
+          'repeat_daily': _repeat != 'once',
+          if (_repeat == 'once') 'scheduled_at': at.toUtc().toIso8601String(),
+          if (_repeat == 'weekly') 'weekdays': _weekdays.toList()..sort(),
+        },
+        timezoneMode: _timezoneMode,
+      ),
+    );
   }
 
   @override
@@ -118,9 +179,19 @@ class _CustomReminderEditorState extends State<CustomReminderEditor> {
                   if (date != null) setState(() => _date = date);
                 },
               ),
+            ReminderTimezoneModeSelector(
+              value: _timezoneMode,
+              partner: widget.partner,
+              onChanged: (mode) => setState(() => _timezoneMode = mode),
+            ),
+            const SizedBox(height: TaSpacing.sm),
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('时间（我的当地时间）'),
+              title: Text(
+                _timezoneMode == 'partner'
+                    ? '时间（${widget.partner?.nickname ?? 'Ta'}当地时间）'
+                    : '时间（我的当地时间）',
+              ),
               subtitle: Text(_time.format(context)),
               trailing: const Icon(Icons.schedule),
               onTap: () async {

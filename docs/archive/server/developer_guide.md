@@ -26,7 +26,7 @@
 TaWorld/
 ├── .gitignore
 ├── README.md
-├── CLAUDE.md                      # AI 开发者上下文指引
+├── AGENTS.md                      # AI 开发者上下文指引
 ├── docker-compose.yml             # Docker 编排（API + PG + Redis + MinIO）
 ├── docs/
 │   ├── architecture.md            # 完整技术架构方案（必读）

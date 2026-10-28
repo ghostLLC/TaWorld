@@ -54,10 +54,11 @@ class TaAchievementBadge extends StatelessWidget {
                   painter: _ProgressRingPainter(
                     progress: ratio,
                     color: unlocked
-                        ? TaLightColors.secondary
+                        ? theme.colorScheme.secondary
                         : theme.colorScheme.outline,
-                    backgroundColor:
-                        theme.colorScheme.outline.withValues(alpha: 0.2),
+                    backgroundColor: theme.colorScheme.outline.withValues(
+                      alpha: 0.2,
+                    ),
                   ),
                 ),
                 // 图标容器
@@ -66,22 +67,20 @@ class TaAchievementBadge extends StatelessWidget {
                   height: 56,
                   decoration: BoxDecoration(
                     color: unlocked
-                        ? TaLightColors.secondaryContainer
+                        ? theme.colorScheme.secondaryContainer
                         : theme.colorScheme.surfaceContainerHighest,
                     shape: BoxShape.circle,
                   ),
                   child: Center(
                     child: iconAsset != null
-                        ? Image.asset(
-                            iconAsset!,
-                            width: 28,
-                            height: 28,
-                          )
+                        ? Image.asset(iconAsset!, width: 28, height: 28)
                         : Text(
                             icon,
                             style: TextStyle(
                               fontSize: 28,
-                              color: unlocked ? null : Colors.grey,
+                              color: unlocked
+                                  ? null
+                                  : theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
                   ),
@@ -95,13 +94,15 @@ class TaAchievementBadge extends StatelessWidget {
                       width: 20,
                       height: 20,
                       decoration: BoxDecoration(
-                        gradient: TaGradients.gold(Theme.of(context).brightness),
+                        gradient: TaGradients.gold(
+                          Theme.of(context).brightness,
+                        ),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.check_rounded,
                         size: 14,
-                        color: Colors.white,
+                        color: theme.colorScheme.onSecondary,
                       ),
                     ),
                   ),
@@ -129,7 +130,7 @@ class TaAchievementBadge extends StatelessWidget {
             unlocked ? '已解锁' : '$progress/$target',
             style: theme.textTheme.labelSmall?.copyWith(
               color: unlocked
-                  ? TaLightColors.secondary
+                  ? theme.colorScheme.secondary
                   : theme.colorScheme.onSurfaceVariant,
               fontSize: 10,
             ),
@@ -185,5 +186,7 @@ class _ProgressRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ProgressRingPainter oldDelegate) =>
-      oldDelegate.progress != progress || oldDelegate.color != color;
+      oldDelegate.progress != progress ||
+      oldDelegate.color != color ||
+      oldDelegate.backgroundColor != backgroundColor;
 }

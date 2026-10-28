@@ -106,15 +106,15 @@ const _paletteCoral = TaColorPalette(
   preview: Color(0xFFE8998D),
   light: TaColorSet(
     primary: Color(0xFFE8998D),
-    onPrimary: Color(0xFFFFFFFF),
+    onPrimary: Color(0xFF101C28),
     primaryContainer: Color(0xFFFFE0DA),
     onPrimaryContainer: Color(0xFF5C2018),
     secondary: Color(0xFFD4A855),
-    onSecondary: Color(0xFFFFFFFF),
+    onSecondary: Color(0xFF101C28),
     secondaryContainer: Color(0xFFFFF0D4),
     onSecondaryContainer: Color(0xFF4A3500),
     tertiary: Color(0xFF7EB8CC),
-    onTertiary: Color(0xFFFFFFFF),
+    onTertiary: Color(0xFF101C28),
     tertiaryContainer: Color(0xFFD6EFF7),
     onTertiaryContainer: Color(0xFF1A3A45),
     background: Color(0xFFFFF8F5),
@@ -169,15 +169,15 @@ const _paletteLavender = TaColorPalette(
   preview: Color(0xFF9B8EC4),
   light: TaColorSet(
     primary: Color(0xFF9B8EC4),
-    onPrimary: Color(0xFFFFFFFF),
+    onPrimary: Color(0xFF101C28),
     primaryContainer: Color(0xFFEDE7F6),
     onPrimaryContainer: Color(0xFF2D1B69),
     secondary: Color(0xFF66BB9A),
-    onSecondary: Color(0xFFFFFFFF),
+    onSecondary: Color(0xFF101C28),
     secondaryContainer: Color(0xFFD5F0E5),
     onSecondaryContainer: Color(0xFF003D2B),
     tertiary: Color(0xFF80B4CC),
-    onTertiary: Color(0xFFFFFFFF),
+    onTertiary: Color(0xFF101C28),
     tertiaryContainer: Color(0xFFD8ECF5),
     onTertiaryContainer: Color(0xFF1A3A4A),
     background: Color(0xFFF8F5FC),
@@ -232,15 +232,15 @@ const _paletteOcean = TaColorPalette(
   preview: Color(0xFF5B98C4),
   light: TaColorSet(
     primary: Color(0xFF5B98C4),
-    onPrimary: Color(0xFFFFFFFF),
+    onPrimary: Color(0xFF101C28),
     primaryContainer: Color(0xFFD6EAF5),
     onPrimaryContainer: Color(0xFF0A3050),
     secondary: Color(0xFFD4A574),
-    onSecondary: Color(0xFFFFFFFF),
+    onSecondary: Color(0xFF101C28),
     secondaryContainer: Color(0xFFFFF0E0),
     onSecondaryContainer: Color(0xFF4A3010),
     tertiary: Color(0xFF7EC4A8),
-    onTertiary: Color(0xFFFFFFFF),
+    onTertiary: Color(0xFF101C28),
     tertiaryContainer: Color(0xFFD6F0E5),
     onTertiaryContainer: Color(0xFF1A4535),
     background: Color(0xFFF5F8FC),
@@ -295,15 +295,15 @@ const _paletteSakura = TaColorPalette(
   preview: Color(0xFFE88DAA),
   light: TaColorSet(
     primary: Color(0xFFE88DAA),
-    onPrimary: Color(0xFFFFFFFF),
+    onPrimary: Color(0xFF101C28),
     primaryContainer: Color(0xFFFFE0EA),
     onPrimaryContainer: Color(0xFF5C1830),
     secondary: Color(0xFF9B7EC4),
-    onSecondary: Color(0xFFFFFFFF),
+    onSecondary: Color(0xFF101C28),
     secondaryContainer: Color(0xFFF0E4F9),
     onSecondaryContainer: Color(0xFF2D1B69),
     tertiary: Color(0xFF7EB8A8),
-    onTertiary: Color(0xFFFFFFFF),
+    onTertiary: Color(0xFF101C28),
     tertiaryContainer: Color(0xFFD6F0E8),
     onTertiaryContainer: Color(0xFF1A4538),
     background: Color(0xFFFFF5F8),
@@ -358,15 +358,15 @@ const _paletteForest = TaColorPalette(
   preview: Color(0xFF7EAA88),
   light: TaColorSet(
     primary: Color(0xFF7EAA88),
-    onPrimary: Color(0xFFFFFFFF),
+    onPrimary: Color(0xFF101C28),
     primaryContainer: Color(0xFFD6F0DE),
     onPrimaryContainer: Color(0xFF1A4528),
     secondary: Color(0xFFC49B6E),
-    onSecondary: Color(0xFFFFFFFF),
+    onSecondary: Color(0xFF101C28),
     secondaryContainer: Color(0xFFF5E8D6),
     onSecondaryContainer: Color(0xFF4A3518),
     tertiary: Color(0xFF88A8C4),
-    onTertiary: Color(0xFFFFFFFF),
+    onTertiary: Color(0xFF101C28),
     tertiaryContainer: Color(0xFFD8E8F5),
     onTertiaryContainer: Color(0xFF1A3550),
     background: Color(0xFFF5F9F5),
@@ -432,6 +432,12 @@ void setActivePalette(String id) {
   if (kTaPalettes.any((p) => p.id == id)) {
     _activePaletteId = id;
   }
+}
+
+TaColorSet taColorsFor(Brightness brightness) {
+  return brightness == Brightness.dark
+      ? activePalette.dark
+      : activePalette.light;
 }
 
 // ============================================================
@@ -521,7 +527,7 @@ abstract final class TaSpacing {
 
   static const page = EdgeInsets.symmetric(horizontal: pagePadding);
   static const cardInner = EdgeInsets.all(md);
-  static const cardInnerLarge = EdgeInsets.all(md);
+  static const cardInnerLarge = EdgeInsets.all(lg);
   static const listItem = EdgeInsets.symmetric(
     horizontal: pagePadding,
     vertical: xs,
@@ -536,7 +542,7 @@ abstract final class TaRadius {
   static const double xs = 8;
   static const double sm = 12;
   static const double md = 16;
-  static const double lg = 20;
+  static const double lg = 24;
   static const double xl = 28;
   static const double full = 999;
 
@@ -590,6 +596,24 @@ abstract final class TaAnimation {
   static const curveIn = Curves.easeInCubic;
   static const curveOut = Curves.easeOutCubic;
   static const bounce = Curves.elasticOut;
+
+  static Duration stagger(
+    int index, {
+    int stepMilliseconds = 50,
+    int maxMilliseconds = 300,
+  }) {
+    if (index <= 0) return Duration.zero;
+    final milliseconds = index * stepMilliseconds;
+    return Duration(
+      milliseconds: milliseconds > maxMilliseconds
+          ? maxMilliseconds
+          : milliseconds,
+    );
+  }
+
+  static bool reduceMotion(BuildContext context) {
+    return MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+  }
 }
 
 // ============================================================

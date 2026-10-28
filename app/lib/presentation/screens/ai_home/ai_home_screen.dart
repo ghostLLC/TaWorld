@@ -33,7 +33,6 @@ import '../../../services/ai_memory_dreamer.dart';
 import '../../../services/local/local_user_service.dart';
 import '../../../services/local/partner_service.dart';
 import '../../../services/local/local_reminder_service.dart';
-import '../../../services/local/local_achievement_service.dart';
 import '../../../services/notification_service.dart';
 import '../../../services/background_execution_service.dart';
 import '../../../services/reminder_scheduler.dart';
@@ -136,7 +135,6 @@ class _AiHomeScreenState extends State<AiHomeScreen>
   String? _executingTool;
 
   Map<String, dynamic> _stats = {};
-  List<dynamic> _achievements = [];
 
   @override
   void initState() {
@@ -224,9 +222,6 @@ class _AiHomeScreenState extends State<AiHomeScreen>
     }
     try {
       _stats = await LocalUserService.getStats();
-    } catch (_) {}
-    try {
-      _achievements = await LocalAchievementService.getAllWithProgress();
     } catch (_) {}
     try {
       final history = await AiService.getChatHistory();
@@ -2518,56 +2513,42 @@ class _AiHomeScreenState extends State<AiHomeScreen>
                 ],
               ),
             ),
-          const SizedBox(width: TaSpacing.xs),
-          GestureDetector(
-            onTap: () => context.push(Routes.achievements),
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest,
-                borderRadius: TaRadius.borderFull,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.emoji_events_rounded,
-                    size: 18,
-                    color: theme.colorScheme.secondary,
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    '${_achievements.where((a) => a.unlocked == true).length}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // 清除消息：单击清空显示，长按清除历史（含总结存档）
-          if (_messages.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: TaSpacing.xs),
-              child: GestureDetector(
-                onTap: _clearMessagesDisplay,
-                onLongPress: _clearHistory,
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: TaRadius.borderFull,
-                  ),
-                  child: Icon(
-                    Icons.cleaning_services_rounded,
-                    size: 18,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+          PopupMenuButton<String>(
+            tooltip: '更多操作',
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (value) {
+              if (value == 'achievements') {
+                context.push(Routes.achievements);
+              } else if (value == 'clear_display') {
+                _clearMessagesDisplay();
+              } else if (value == 'clear_history') {
+                _clearHistory();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'achievements',
+                child: ListTile(
+                  leading: Icon(Icons.emoji_events_rounded),
+                  title: Text('查看成就'),
                 ),
               ),
-            ),
+              PopupMenuItem(
+                value: 'clear_display',
+                child: ListTile(
+                  leading: Icon(Icons.cleaning_services_rounded),
+                  title: Text('清空屏幕'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'clear_history',
+                child: ListTile(
+                  leading: Icon(Icons.delete_sweep_rounded),
+                  title: Text('清除对话记录'),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -2863,7 +2844,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         color: theme.colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: theme.shadowColor.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, -2),
           ),
@@ -2880,7 +2861,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
         children: [
           // 快捷芯片
           SizedBox(
-            height: 40,
+            height: 48,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: chips.length,
@@ -2953,7 +2934,7 @@ class _AiHomeScreenState extends State<AiHomeScreen>
                       : _sendMessage,
                   icon: Icon(
                     _sending ? Icons.stop_rounded : Icons.send_rounded,
-                    color: Colors.white,
+                    color: theme.colorScheme.onPrimary,
                   ),
                 ),
               ),
@@ -3256,7 +3237,7 @@ class _WeatherCard extends StatelessWidget {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.3),
+                        color: theme.colorScheme.surface.withValues(alpha: 0.3),
                         borderRadius: TaRadius.borderFull,
                       ),
                       child: Text(

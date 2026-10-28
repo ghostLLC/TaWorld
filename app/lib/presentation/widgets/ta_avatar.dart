@@ -20,16 +20,28 @@ class TaAvatar extends StatelessWidget {
   });
 
   /// 小号头像
-  const TaAvatar.small({super.key, this.imageUrl, this.name, this.showBorder = false})
-      : size = TaSizes.avatarSm;
+  const TaAvatar.small({
+    super.key,
+    this.imageUrl,
+    this.name,
+    this.showBorder = false,
+  }) : size = TaSizes.avatarSm;
 
   /// 大号头像
-  const TaAvatar.large({super.key, this.imageUrl, this.name, this.showBorder = false})
-      : size = TaSizes.avatarLg;
+  const TaAvatar.large({
+    super.key,
+    this.imageUrl,
+    this.name,
+    this.showBorder = false,
+  }) : size = TaSizes.avatarLg;
 
   /// 超大号头像（个人中心）
-  const TaAvatar.xl({super.key, this.imageUrl, this.name, this.showBorder = false})
-      : size = TaSizes.avatarXl;
+  const TaAvatar.xl({
+    super.key,
+    this.imageUrl,
+    this.name,
+    this.showBorder = false,
+  }) : size = TaSizes.avatarXl;
 
   final String? imageUrl;
   final double size;
@@ -49,7 +61,7 @@ class TaAvatar extends StatelessWidget {
         border: showBorder
             ? Border.all(color: theme.colorScheme.primary, width: 2)
             : null,
-        boxShadow: TaShadows.sm,
+        boxShadow: theme.brightness == Brightness.dark ? null : TaShadows.sm,
       ),
       child: ClipOval(
         child: imageUrl != null && imageUrl!.isNotEmpty
@@ -88,9 +100,7 @@ class _Placeholder extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        gradient: TaGradients.warm(theme.brightness),
-      ),
+      decoration: BoxDecoration(gradient: TaGradients.warm(theme.brightness)),
       child: Center(
         child: Text(
           initial,

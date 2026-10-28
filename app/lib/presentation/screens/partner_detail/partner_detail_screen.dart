@@ -277,7 +277,9 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            style: TextButton.styleFrom(foregroundColor: TaLightColors.error),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
             child: const Text('移出列表'),
           ),
         ],
@@ -658,7 +660,7 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
                     _StatItem(
                       icon: Icons.calendar_today_rounded,
                       value: '$days',
-                      label: '陪伴天数',
+                      label: '已记录天数',
                     ),
                     _StatItem(
                       icon: Icons.favorite_rounded,
@@ -713,13 +715,13 @@ class _PartnerDetailScreenState extends State<PartnerDetailScreen> {
                 onPressed: _saving ? null : _confirmDelete,
                 icon: Icon(
                   Icons.heart_broken_rounded,
-                  color: TaLightColors.error,
+                  color: theme.colorScheme.error,
                   size: TaSizes.iconSm,
                 ),
                 label: Text(
                   '移出列表',
                   style: TextStyle(
-                    color: TaLightColors.error,
+                    color: theme.colorScheme.error,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -774,7 +776,7 @@ class _TypeCard extends StatelessWidget {
         ),
         onTap: onTap,
         color: selected
-            ? TaLightColors.primaryContainer
+            ? theme.colorScheme.primaryContainer
             : theme.colorScheme.surface,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -785,7 +787,7 @@ class _TypeCard extends StatelessWidget {
               type.label,
               style: theme.textTheme.labelMedium?.copyWith(
                 color: selected
-                    ? TaLightColors.onPrimaryContainer
+                    ? theme.colorScheme.onPrimaryContainer
                     : theme.colorScheme.onSurfaceVariant,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),

@@ -5,6 +5,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../../../data/models/partner.dart';
 import '../../../data/models/reminder_config.dart';
 import '../../../services/weather_service.dart';
+import '../../../app/design_tokens.dart';
 import 'care_graph_scene.dart';
 import 'care_graph_board.dart';
 import 'care_graph_share_poster.dart';
@@ -338,10 +339,10 @@ class _CareGraphViewState extends State<CareGraphView> {
     return Material(
       key: ValueKey('care-graph-selected-${person.id}'),
       elevation: 6,
-      shadowColor: Colors.black.withValues(alpha: 0.12),
+      shadowColor: theme.shadowColor.withValues(alpha: 0.12),
       color: theme.colorScheme.surface,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: TaRadius.borderLg,
         side: BorderSide(color: theme.colorScheme.outlineVariant),
       ),
       child: Padding(

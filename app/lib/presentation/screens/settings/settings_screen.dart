@@ -549,7 +549,7 @@ class _AppearanceSettingsState extends State<_AppearanceSettings> {
                         child: isSelected
                             ? Icon(
                                 Icons.check_rounded,
-                                color: Colors.white,
+                                color: theme.colorScheme.onPrimary,
                                 size: 22,
                               )
                             : null,
@@ -1169,7 +1169,7 @@ class _AccountSettingsState extends State<_AccountSettings> {
         }
         return;
       }
-      if (mounted) context.go(Routes.home);
+      if (mounted) context.go(Routes.onboarding);
     }
   }
 

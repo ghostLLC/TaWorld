@@ -486,30 +486,32 @@ class _PartnersTabState extends State<_PartnersTab>
           final weatherLoading = _weatherLoadingIds.contains(partner.id);
           final days = PartnerService.daysSince(partner.createdAt);
 
-          return Padding(
-                padding: const EdgeInsets.only(bottom: TaSpacing.sm),
-                child: _PartnerCard(
-                  partner: partner,
-                  days: days,
-                  weather: weather,
-                  weatherLoading: weatherLoading,
-                  configs: configs,
-                  isExpanded: isExpanded,
-                  onToggleExpand: () => _toggleExpand(partner.id),
-                  onToggleConfig: _toggleConfig,
-                  onPartnerTap: () => _openPartnerProfile(partner),
-                  onConfigTap: (config) => context.push(
-                    Routes.reminderHistory.replaceAll(':id', config.id),
-                  ),
-                  onAddReminder: () => context.push(
-                    Routes.reminderConfig.replaceAll(':partnerId', partner.id),
-                  ),
-                  onEdit: () => _openPartnerProfile(partner),
-                ),
-              )
+          final card = Padding(
+            padding: const EdgeInsets.only(bottom: TaSpacing.sm),
+            child: _PartnerCard(
+              partner: partner,
+              days: days,
+              weather: weather,
+              weatherLoading: weatherLoading,
+              configs: configs,
+              isExpanded: isExpanded,
+              onToggleExpand: () => _toggleExpand(partner.id),
+              onToggleConfig: _toggleConfig,
+              onPartnerTap: () => _openPartnerProfile(partner),
+              onConfigTap: (config) => context.push(
+                Routes.reminderHistory.replaceAll(':id', config.id),
+              ),
+              onAddReminder: () => context.push(
+                Routes.reminderConfig.replaceAll(':partnerId', partner.id),
+              ),
+              onEdit: () => _openPartnerProfile(partner),
+            ),
+          );
+          if (TaAnimation.reduceMotion(context)) return card;
+          return card
               .animate()
               .fadeIn(
-                delay: Duration(milliseconds: 100 * index),
+                delay: TaAnimation.stagger(index, stepMilliseconds: 100),
                 duration: TaAnimation.normal,
               )
               .slideX(begin: 0.05, end: 0);
@@ -559,14 +561,8 @@ class _PartnerCard extends StatelessWidget {
   final VoidCallback onAddReminder;
   final VoidCallback onEdit;
 
-  /// 根据经度估算当地时间（每15° ≈ 1小时时区偏移）
   String _localTimeStr() {
-    final lng = partner.longitude;
-    if (lng == null) return '';
-    final utcNow = DateTime.now().toUtc();
-    final offsetHours = (lng / 15).round();
-    final local = utcNow.add(Duration(hours: offsetHours));
-    return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    return CareGraphPartnerMeta.localTime(partner, DateTime.now());
   }
 
   /// 天气描述 → emoji

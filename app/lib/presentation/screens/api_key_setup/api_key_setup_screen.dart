@@ -22,6 +22,7 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
   final _aiKeyController = TextEditingController();
   bool _aiConfigured = false;
   String? _aiTestResult;
+  bool _aiTestSucceeded = false;
   bool _aiTesting = false;
   bool _saving = false;
 
@@ -89,6 +90,7 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
     setState(() {
       _aiTesting = true;
       _aiTestResult = null;
+      _aiTestSucceeded = false;
     });
     try {
       final dio = Dio(
@@ -115,24 +117,29 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _aiTestResult = response.statusCode == 200
-            ? '主对话模型连接成功；图片模型需单独发送图片验证'
-            : '连接失败';
+        _aiTestSucceeded = response.statusCode == 200;
+        _aiTestResult = _aiTestSucceeded ? '主对话模型连接成功；图片理解能力需通过实际图片验证' : '连接失败';
       });
     } on DioException catch (error) {
       if (!mounted) return;
       final status = error.response?.statusCode;
-      setState(
-        () => _aiTestResult = status == 401 || status == 403
+      setState(() {
+        _aiTestSucceeded = false;
+        _aiTestResult = status == 401 || status == 403
             ? '密钥无效或无权限'
             : status == 429
             ? '额度不足或请求过多'
             : status == 404
             ? '当前账号不支持 ${AiModelCatalog.primary}'
-            : '网络请求未完成，请重试',
-      );
+            : '网络请求未完成，请重试';
+      });
     } catch (_) {
-      if (mounted) setState(() => _aiTestResult = '测试未完成，请稍后重试');
+      if (mounted) {
+        setState(() {
+          _aiTestSucceeded = false;
+          _aiTestResult = '测试未完成，请稍后重试';
+        });
+      }
     } finally {
       if (mounted) setState(() => _aiTesting = false);
     }
@@ -208,8 +215,8 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: _aiConfigured
-                                    ? TaLightColors.success
-                                    : Colors.grey,
+                                    ? taColorsFor(theme.brightness).success
+                                    : theme.colorScheme.onSurfaceVariant,
                               ),
                             ),
                             const SizedBox(width: 4),
@@ -227,6 +234,7 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                       label: 'API Key',
                       hint: 'sk-...',
                       prefixIcon: Icons.key_rounded,
+                      obscureText: true,
                     ),
                     const SizedBox(height: TaSpacing.sm),
                     Row(
@@ -249,8 +257,8 @@ class _ApiKeySetupScreenState extends State<ApiKeySetupScreen> {
                       Text(
                         _aiTestResult!,
                         style: TextStyle(
-                          color: _aiTestResult == '连接成功'
-                              ? TaLightColors.success
+                          color: _aiTestSucceeded
+                              ? taColorsFor(theme.brightness).success
                               : theme.colorScheme.error,
                           fontSize: 13,
                         ),

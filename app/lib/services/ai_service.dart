@@ -941,14 +941,12 @@ abstract final class AiService {
     return rows.reversed.toList(growable: false);
   }
 
-  /// 调用后台文本模型（用于记忆提取、摘要、Dreaming 整合）。
-  ///
-  /// 当前统一路由到主 Flash 模型。保留旧方法名兼容现有调用方。
+  /// 调用主多模态模型处理文本任务（用于记忆提取、摘要、Dreaming 整合）。
   ///
   /// [systemPrompt] 可选的 system message，用于缓存优化：
   /// 将不变指令放在 system 里，可变数据放在 [prompt] 里，
   /// DeepSeek 会自动缓存 system 部分的 KV 状态供后续调用复用。
-  static Future<String?> callProModel({
+  static Future<String?> callPrimaryModel({
     required String prompt,
     String? systemPrompt,
     double temperature = 0.3,
